@@ -34,7 +34,7 @@ async fn test_open_and_exec() {
     let wasm = sqlite.wasm();
 
     let ptr = wasm.alloc_ptr(1, true);
-    let ret = capi.sqlite3_open("test.db", ptr as *mut _);
+    let ret = capi.sqlite3_open("test_open_and_exec.db", ptr as *mut _);
     assert_eq!(capi.SQLITE_OK(), ret);
 
     let mut db: *mut ffi::Sqlite3DbHandle = std::ptr::null_mut();
@@ -81,7 +81,7 @@ async fn test_open_v2_and_exec_opfs() {
 
     let ptr = wasm.alloc_ptr(1, true);
     let ret = capi.sqlite3_open_v2(
-        "test.db",
+        "test_open_v2_and_exec_opfs.db",
         ptr as *mut _,
         capi.SQLITE_OPEN_READWRITE() | capi.SQLITE_OPEN_CREATE(),
         "opfs",
@@ -129,4 +129,25 @@ async fn test_open_v2_and_exec_opfs() {
         err_msg as *mut _,
     );
     assert_eq!(capi.SQLITE_OK(), ret);
+}
+
+#[wasm_bindgen_test]
+#[allow(unused)]
+async fn test_sqlite3_close_v2() {
+    let sqlite = SQLite::default().await.unwrap();
+    let capi = sqlite.capi();
+    let wasm = sqlite.wasm();
+
+    let ptr = wasm.alloc_ptr(1, true);
+    let ret = capi.sqlite3_open("test_sqlite3_close_v2.db", ptr as _);
+    assert_eq!(capi.SQLITE_OK(), ret);
+
+    let mut db: *mut ffi::Sqlite3DbHandle = std::ptr::null_mut();
+    wasm.copy_to_rust(ptr, &mut db);
+
+    let ret = capi.sqlite3_close_v2(db);
+    assert_eq!(capi.SQLITE_OK(), ret);
+
+    let ret = capi.sqlite3_close_v2(db);
+    assert_eq!(capi.SQLITE_MISUSE(), ret);
 }

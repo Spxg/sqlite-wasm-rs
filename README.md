@@ -7,6 +7,7 @@ Currently, this project is just a toy (and may be for a long time), and currentl
 * [`sqlite3_open`](https://www.sqlite.org/c3ref/open.html)
 * [`sqlite3_open_v2`](https://www.sqlite.org/c3ref/open.html)
 * [`sqlite3_exec`](https://www.sqlite.org/c3ref/exec.html)
+* [`sqlite3_close_v2`](https://www.sqlite.org/c3ref/close.html)
 * [`sqlite3_errmsg`](https://www.sqlite.org/c3ref/errcode.html)
 
 ## Installation

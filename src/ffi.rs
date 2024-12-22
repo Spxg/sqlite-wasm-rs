@@ -53,6 +53,8 @@ extern "C" {
     pub const fn SQLITE_OK(this: &CApi) -> i32;
     #[wasm_bindgen(method, getter)]
     pub const fn SQLITE_ERROR(this: &CApi) -> i32;
+    #[wasm_bindgen(method, getter)]
+    pub const fn SQLITE_MISUSE(this: &CApi) -> i32;
 
     #[wasm_bindgen(method, getter)]
     pub const fn SQLITE_OPEN_READONLY(this: &CApi) -> i32;
@@ -72,6 +74,9 @@ extern "C" {
         flags: i32,
         vfs: &str,
     ) -> i32;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_close_v2(capi: &CApi, db: *mut Sqlite3DbHandle) -> i32;
 
     #[wasm_bindgen(method)]
     pub fn sqlite3_exec(
