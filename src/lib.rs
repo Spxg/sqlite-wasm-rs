@@ -1,68 +1,36 @@
-#![warn(
-    explicit_outlives_requirements,
-    macro_use_extern_crate,
-    meta_variable_misuse,
-    missing_abi,
-    noop_method_call,
-    single_use_lifetimes,
-    trivial_casts,
-    trivial_numeric_casts,
-    unsafe_code,
-    unsafe_op_in_unsafe_fn,
-    unused_extern_crates,
-    unused_import_braces,
-    unused_lifetimes,
-    unused_qualifications,
-    variant_size_differences,
-    clippy::clone_on_ref_ptr,
-    clippy::cognitive_complexity,
-    clippy::create_dir,
-    clippy::dbg_macro,
-    clippy::debug_assert_with_mut_call,
-    clippy::empty_line_after_outer_attr,
-    clippy::fallible_impl_from,
-    clippy::filetype_is_file,
-    clippy::float_cmp_const,
-    clippy::get_unwrap,
-    clippy::if_then_some_else_none,
-    clippy::imprecise_flops,
-    clippy::let_underscore_must_use,
-    clippy::lossy_float_literal,
-    clippy::multiple_inherent_impl,
-    clippy::mutex_integer,
-    clippy::nonstandard_macro_braces,
-    clippy::panic_in_result_fn,
-    clippy::path_buf_push_overwrite,
-    clippy::pedantic,
-    clippy::print_stderr,
-    clippy::print_stdout,
-    clippy::rc_buffer,
-    clippy::rc_mutex,
-    clippy::rest_pat_in_fully_bound_structs,
-    clippy::string_lit_as_bytes,
-    clippy::string_to_string,
-    clippy::suboptimal_flops,
-    clippy::suspicious_operation_groupings,
-    clippy::todo,
-    clippy::trivial_regex,
-    clippy::unimplemented,
-    clippy::unnecessary_self_imports,
-    clippy::unneeded_field_pattern,
-    clippy::use_debug,
-    clippy::use_self,
-    clippy::useless_let_if_seq,
-    clippy::useless_transmute,
-    clippy::verbose_file_reads
-)]
-#![allow(clippy::non_ascii_literal)]
+#[allow(non_upper_case_globals)]
+#[allow(non_camel_case_types)]
+#[allow(non_snake_case)]
+pub mod libsqlite3_sys;
 
-pub mod ffi;
+#[allow(non_upper_case_globals)]
+#[allow(non_camel_case_types)]
+#[allow(non_snake_case)]
+#[allow(unused)]
+pub mod c;
 
-use ffi::{CApi, Wasm};
+pub mod wasm;
+
 use js_sys::{Object, WebAssembly::Memory};
 use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt::Display, result::Result};
+use tokio::sync::OnceCell;
+use wasm::{CApi, Wasm};
 use wasm_bindgen::JsValue;
+
+static SQLITE: OnceCell<SQLite> = OnceCell::const_new();
+
+pub async fn init_sqlite() -> Result<&'static SQLite, SQLiteError> {
+    SQLITE.get_or_try_init(|| SQLite::default()).await
+}
+
+pub async fn init_sqlite_with(opts: SQLiteOpts) -> Result<&'static SQLite, SQLiteError> {
+    SQLITE.get_or_try_init(|| SQLite::new(opts)).await
+}
+
+pub fn sqlite() -> Option<&'static SQLite> {
+    SQLITE.get()
+}
 
 const WASM: &[u8] = include_bytes!("jswasm/sqlite3.wasm");
 
@@ -120,9 +88,14 @@ pub struct SQLiteOpts {
 }
 
 pub struct SQLite {
-    ffi: ffi::SQLite,
+    ffi: wasm::SQLite,
     version: Version,
 }
+
+#[allow(unsafe_code)]
+unsafe impl Sync for SQLite {}
+#[allow(unsafe_code)]
+unsafe impl Send for SQLite {}
 
 impl SQLite {
     pub const DEFAULT_OPTIONS: SQLiteOpts = SQLiteOpts {
@@ -161,11 +134,11 @@ impl SQLite {
         };
 
         let opts = serde_wasm_bindgen::to_value(&opts).map_err(SQLiteError::Serde)?;
-        let module = ffi::SQLite::init(&Object::from(opts))
+        let module = wasm::SQLite::init(&Object::from(opts))
             .await
             .map_err(SQLiteError::Module)?;
 
-        let sqlite = ffi::SQLite::new(module);
+        let sqlite = wasm::SQLite::new(module);
 
         let version =
             serde_wasm_bindgen::from_value(sqlite.version()).map_err(SQLiteError::Serde)?;

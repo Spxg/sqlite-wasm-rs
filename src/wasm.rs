@@ -1,8 +1,8 @@
+use crate::libsqlite3_sys::{sqlite3, sqlite3_context, sqlite3_int64};
 use js_sys::{Object, Uint8Array};
-use std::ptr::NonNull;
 use wasm_bindgen::{
+    prelude::{wasm_bindgen, Closure},
     JsValue,
-    prelude::{Closure, wasm_bindgen},
 };
 
 // Workaround, make file copy to snippets
@@ -38,58 +38,83 @@ extern "C" {
     pub fn version(this: &SQLite) -> JsValue;
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct Sqlite3DbHandle {
-    _unused: [u8; 0],
-}
-
 /// Define: https://github.com/sqlite/sqlite-wasm/blob/main/index.d.ts
 #[wasm_bindgen]
 extern "C" {
     pub type CApi;
 
-    #[wasm_bindgen(method, getter)]
-    pub const fn SQLITE_OK(this: &CApi) -> i32;
-    #[wasm_bindgen(method, getter)]
-    pub const fn SQLITE_ERROR(this: &CApi) -> i32;
-    #[wasm_bindgen(method, getter)]
-    pub const fn SQLITE_MISUSE(this: &CApi) -> i32;
-
-    #[wasm_bindgen(method, getter)]
-    pub const fn SQLITE_OPEN_READONLY(this: &CApi) -> i32;
-    #[wasm_bindgen(method, getter)]
-    pub const fn SQLITE_OPEN_READWRITE(this: &CApi) -> i32;
-    #[wasm_bindgen(method, getter)]
-    pub const fn SQLITE_OPEN_CREATE(this: &CApi) -> i32;
-
     #[wasm_bindgen(method)]
-    pub fn sqlite3_open(capi: &CApi, filename: &str, db: *mut *mut Sqlite3DbHandle) -> i32;
+    pub fn sqlite3_open(capi: &CApi, filename: &str, ppDb: *mut *mut sqlite3) -> i32;
 
     #[wasm_bindgen(method)]
     pub fn sqlite3_open_v2(
         capi: &CApi,
         filename: &str,
-        db: *mut *mut Sqlite3DbHandle,
-        flags: i32,
-        vfs: &str,
-    ) -> i32;
+        ppDb: *mut *mut sqlite3,
+        flags: ::std::os::raw::c_int,
+        zVfs: &str,
+    ) -> ::std::os::raw::c_int;
 
     #[wasm_bindgen(method)]
-    pub fn sqlite3_close_v2(capi: &CApi, db: *mut Sqlite3DbHandle) -> i32;
+    pub fn sqlite3_close_v2(capi: &CApi, ppDb: *mut sqlite3) -> ::std::os::raw::c_int;
 
     #[wasm_bindgen(method)]
     pub fn sqlite3_exec(
         capi: &CApi,
-        db: *mut Sqlite3DbHandle,
+        arg1: *mut sqlite3,
         sql: &str,
-        callback: Option<&Closure<dyn FnMut(Vec<JsValue>, Vec<String>) -> i32>>,
-        arg2: *mut u8,
-        errmsg: *mut *mut u8,
-    ) -> i32;
+        callback: Option<&Closure<dyn FnMut(Vec<String>, Vec<String>) -> i32>>,
+        arg2: *mut ::std::os::raw::c_void,
+        errmsg: *mut *mut ::std::os::raw::c_char,
+    ) -> ::std::os::raw::c_int;
 
     #[wasm_bindgen(method)]
-    pub fn sqlite3_errmsg(capi: &CApi, sqlite3: *mut Sqlite3DbHandle) -> String;
+    pub fn sqlite3_changes(capi: &CApi, arg1: *mut sqlite3) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_errmsg(capi: &CApi, arg1: *mut sqlite3) -> String;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_serialize(
+        capi: &CApi,
+        db: *mut sqlite3,
+        zSchema: &str,
+        piSize: *mut sqlite3_int64,
+        mFlags: ::std::os::raw::c_uint,
+    ) -> *mut u8;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_free(capi: &CApi, arg1: *mut ::std::os::raw::c_void);
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_result_text(
+        capi: &CApi,
+        arg1: *mut sqlite3_context,
+        arg2: *const ::std::os::raw::c_char,
+        arg3: ::std::os::raw::c_int,
+        arg4: ::std::option::Option<&Closure<dyn Fn(*mut ::std::os::raw::c_void)>>,
+    );
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_result_blob(
+        capi: &CApi,
+        arg1: *mut sqlite3_context,
+        arg2: *const ::std::os::raw::c_void,
+        arg3: ::std::os::raw::c_int,
+        arg4: ::std::option::Option<&Closure<dyn Fn(*mut ::std::os::raw::c_void)>>,
+    );
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_result_int(capi: &CApi, arg1: *mut sqlite3_context, arg2: ::std::os::raw::c_int);
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_result_int64(capi: &CApi, arg1: *mut sqlite3_context, arg2: sqlite3_int64);
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_result_double(capi: &CApi, arg1: *mut sqlite3_context, arg2: f64);
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_result_null(capi: &CApi, arg1: *mut sqlite3_context);
 }
 
 /// Copy from https://github.com/xmtp/sqlite-web-rs/blob/main/src/ffi/wasm.rs.
@@ -134,7 +159,7 @@ extern "C" {
     pub fn alloc_ptr(this: &Wasm, how_many: u32, safe_ptr_size: bool) -> *mut u8;
 
     #[wasm_bindgen(method)]
-    pub fn dealloc(this: &Wasm, ptr: NonNull<u8>);
+    pub fn dealloc(this: &Wasm, ptr: *mut u8);
 
     /// View into the wasm memory reprsented as unsigned 8-bit integers
     #[wasm_bindgen(method)]
@@ -182,7 +207,7 @@ extern "C" {
 }
 
 impl Wasm {
-    pub fn copy_to_wasm(&self, from: &[u8], dst: *mut u8) {
+    pub fn poke(&self, from: &[u8], dst: *mut u8) {
         let heap = self.heap8u();
         let bytes: Uint8Array = from.into();
         let offset = dst as usize / size_of::<u8>();
@@ -191,7 +216,7 @@ impl Wasm {
         heap.set(&bytes, offset as u32);
     }
 
-    pub fn copy_to_rust<T>(&self, from: *mut u8, dst: &mut T) {
+    pub unsafe fn peek<T>(&self, from: *mut u8, dst: &mut T) {
         let heap = self.heap8u();
         let view = Uint8Array::new_with_byte_offset_and_length(
             &heap.buffer(),
@@ -202,10 +227,12 @@ impl Wasm {
                 size_of::<T>() as u32
             },
         );
-        // Safety: dst is &mut T
-        #[allow(unsafe_code)]
-        unsafe {
-            view.raw_copy_to_ptr(std::ptr::from_ref(dst) as *mut _);
-        }
+        view.raw_copy_to_ptr(std::ptr::from_ref(dst) as *mut _);
+    }
+
+    pub unsafe fn peek_buf(&self, src: *mut u8, len: u32, buf: &mut [u8]) {
+        let heap = self.heap8u();
+        let view = Uint8Array::new_with_byte_offset_and_length(&heap.buffer(), src as u32, len);
+        view.raw_copy_to_ptr(buf.as_mut_ptr())
     }
 }

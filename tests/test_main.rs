@@ -1,153 +1,81 @@
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_dedicated_worker);
 
-use sqlite_wasm_rs::{MemoryOpts, SQLite, SQLiteOpts, ffi};
-use wasm_bindgen::{JsValue, prelude::Closure};
+use sqlite_wasm_rs::c;
+use sqlite_wasm_rs::init_sqlite;
+use sqlite_wasm_rs::libsqlite3_sys::{SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_READWRITE};
+use std::ffi::CString;
 use wasm_bindgen_test::{console_log, wasm_bindgen_test};
 
-#[wasm_bindgen_test]
-#[allow(unused)]
-async fn test_wrong_memory_range() {
-    assert!(
-        SQLite::new(SQLiteOpts {
-            memory: MemoryOpts {
-                initial: 500,
-                maximum: 256,
-            },
-        })
-        .await
-        .is_err(),
-    );
+fn cstr(s: &str) -> CString {
+    CString::new(s).unwrap()
 }
 
 #[wasm_bindgen_test]
 #[allow(unused)]
-async fn test_sqlite_version() {
-    let sqlite = SQLite::default().await.unwrap();
-    console_log!("{:#?}", sqlite.version());
-}
+async fn test_open_v2_and_exec_opfs_c() {
+    init_sqlite().await;
 
-#[wasm_bindgen_test]
-#[allow(unused)]
-async fn test_open_and_exec() {
-    let sqlite = SQLite::default().await.unwrap();
-    let capi = sqlite.capi();
-    let wasm = sqlite.wasm();
-
-    let ptr = wasm.alloc_ptr(1, true);
-    let ret = capi.sqlite3_open("test_open_and_exec.db", ptr as *mut _);
-    assert_eq!(capi.SQLITE_OK(), ret);
-
-    let mut db: *mut ffi::Sqlite3DbHandle = std::ptr::null_mut();
-    wasm.copy_to_rust(ptr as _, &mut db);
-
-    let sql = "CREATE TABLE IF NOT EXISTS COMPANY(
-                        ID INT PRIMARY KEY     NOT NULL,
-                        NAME           TEXT    NOT NULL );";
-
-    let err_msg = wasm.alloc_ptr(1, true);
-    let ret = capi.sqlite3_exec(db, sql, None, std::ptr::null_mut(), err_msg as *mut _);
-    assert_eq!(capi.SQLITE_OK(), ret);
-
-    let sql = "INSERT INTO COMPANY (ID,NAME) VALUES (1, 'John Doe');";
-    let ret = capi.sqlite3_exec(db, sql, None, std::ptr::null_mut(), err_msg as *mut _);
-    assert_eq!(capi.SQLITE_OK(), ret);
-
-    let sql = "SELECT * FROM COMPANY;";
-    let f = |arg1: Vec<JsValue>, arg2: Vec<String>| -> i32 {
-        let mut iter = arg2.into_iter().zip(arg1);
-        assert_eq!(("ID".into(), JsValue::from("1")), iter.next().unwrap());
-        assert_eq!(
-            ("NAME".into(), JsValue::from("John Doe")),
-            iter.next().unwrap()
-        );
-        0
+    let filename = cstr("test_open_v2_and_exec_opfs_c.db");
+    let mut db = std::ptr::null_mut();
+    let ret = unsafe {
+        c::sqlite3_open_v2(
+            filename.as_ptr(),
+            &mut db as *mut _,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+            CString::new("opfs").unwrap().as_ptr(),
+        )
     };
-    let ret = capi.sqlite3_exec(
-        db,
-        sql,
-        Some(&Closure::new(f)),
-        std::ptr::null_mut(),
-        err_msg as *mut _,
-    );
-    assert_eq!(capi.SQLITE_OK(), ret);
-}
+    assert_eq!(SQLITE_OK, ret);
 
-#[wasm_bindgen_test]
-#[allow(unused)]
-async fn test_open_v2_and_exec_opfs() {
-    let sqlite = SQLite::default().await.unwrap();
-    let capi = sqlite.capi();
-    let wasm = sqlite.wasm();
-
-    let ptr = wasm.alloc_ptr(1, true);
-    let ret = capi.sqlite3_open_v2(
-        "test_open_v2_and_exec_opfs.db",
-        ptr as *mut _,
-        capi.SQLITE_OPEN_READWRITE() | capi.SQLITE_OPEN_CREATE(),
-        "opfs",
-    );
-    assert_eq!(capi.SQLITE_OK(), ret);
-
-    let mut db: *mut ffi::Sqlite3DbHandle = std::ptr::null_mut();
-    wasm.copy_to_rust(ptr as _, &mut db);
-
-    let err_msg = wasm.alloc_ptr(1, true);
-
+    let errmsg = std::ptr::null_mut();
     // drop first
-    let sql = "DROP TABLE COMPANY;";
-    let ret = capi.sqlite3_exec(db, sql, None, std::ptr::null_mut(), err_msg as *mut _);
-    if (capi.SQLITE_OK() == ret) {
+    let sql = cstr("DROP TABLE COMPANY;");
+    let ret = unsafe { c::sqlite3_exec(db, sql.as_ptr(), None, std::ptr::null_mut(), errmsg) };
+    if (SQLITE_OK == ret) {
         console_log!("test_open_v2_and_exec_opfs: table exist before test, dropped");
     }
 
-    let sql = "CREATE TABLE IF NOT EXISTS COMPANY(
+    let sql = cstr(
+        "CREATE TABLE IF NOT EXISTS COMPANY(
                         ID INT PRIMARY KEY     NOT NULL,
-                        NAME           TEXT    NOT NULL );";
-
-    let ret = capi.sqlite3_exec(db, sql, None, std::ptr::null_mut(), err_msg as *mut _);
-    assert_eq!(capi.SQLITE_OK(), ret);
-
-    let sql = "INSERT INTO COMPANY (ID,NAME) VALUES (1, 'John Doe');";
-    let ret = capi.sqlite3_exec(db, sql, None, std::ptr::null_mut(), err_msg as *mut _);
-    assert_eq!(capi.SQLITE_OK(), ret);
-
-    let sql = "SELECT * FROM COMPANY;";
-    let f = |arg1: Vec<JsValue>, arg2: Vec<String>| -> i32 {
-        let mut iter = arg2.into_iter().zip(arg1);
-        assert_eq!(("ID".into(), JsValue::from("1")), iter.next().unwrap());
-        assert_eq!(
-            ("NAME".into(), JsValue::from("John Doe")),
-            iter.next().unwrap()
-        );
-        0
-    };
-    let ret = capi.sqlite3_exec(
-        db,
-        sql,
-        Some(&Closure::new(f)),
-        std::ptr::null_mut(),
-        err_msg as *mut _,
+                        NAME           TEXT    NOT NULL );",
     );
-    assert_eq!(capi.SQLITE_OK(), ret);
-}
 
-#[wasm_bindgen_test]
-#[allow(unused)]
-async fn test_sqlite3_close_v2() {
-    let sqlite = SQLite::default().await.unwrap();
-    let capi = sqlite.capi();
-    let wasm = sqlite.wasm();
+    let ret = unsafe { c::sqlite3_exec(db, sql.as_ptr(), None, std::ptr::null_mut(), errmsg) };
+    assert_eq!(SQLITE_OK, ret);
 
-    let ptr = wasm.alloc_ptr(1, true);
-    let ret = capi.sqlite3_open("test_sqlite3_close_v2.db", ptr as _);
-    assert_eq!(capi.SQLITE_OK(), ret);
+    let sql = cstr("INSERT INTO COMPANY (ID,NAME) VALUES (1, 'John Doe');");
+    let ret = unsafe { c::sqlite3_exec(db, sql.as_ptr(), None, std::ptr::null_mut(), errmsg) };
+    assert_eq!(SQLITE_OK, ret);
 
-    let mut db: *mut ffi::Sqlite3DbHandle = std::ptr::null_mut();
-    wasm.copy_to_rust(ptr, &mut db);
+    let sql = cstr("SELECT * FROM COMPANY;");
+    unsafe extern "C" fn f(
+        arg1: *mut ::std::os::raw::c_void,
+        arg2: ::std::os::raw::c_int,
+        arg3: *mut *mut ::std::os::raw::c_char,
+        arg4: *mut *mut ::std::os::raw::c_char,
+    ) -> ::std::os::raw::c_int {
+        assert_eq!(2, arg2);
+        let values = Vec::from_raw_parts(arg3, arg2 as usize, arg2 as usize);
+        let names = Vec::from_raw_parts(arg4, arg2 as usize, arg2 as usize);
+        let mut iter = values
+            .iter()
+            .cloned()
+            .map(|s| CString::from_raw(s))
+            .zip(names.iter().cloned().map(|s| CString::from_raw(s)));
 
-    let ret = capi.sqlite3_close_v2(db);
-    assert_eq!(capi.SQLITE_OK(), ret);
+        let next = iter.next().unwrap();
+        assert_eq!((cstr("1"), cstr("ID")), next);
+        std::mem::forget(next);
 
-    let ret = capi.sqlite3_close_v2(db);
-    assert_eq!(capi.SQLITE_MISUSE(), ret);
+        let next = iter.next().unwrap();
+        assert_eq!((cstr("John Doe"), cstr("NAME")), next);
+        std::mem::forget(next);
+
+        std::mem::forget(values);
+        std::mem::forget(names);
+        0
+    }
+    let ret = unsafe { c::sqlite3_exec(db, sql.as_ptr(), Some(f), std::ptr::null_mut(), errmsg) };
+    assert_eq!(SQLITE_OK, ret);
 }
