@@ -87,6 +87,20 @@ extern "C" {
     pub fn sqlite3_free(capi: &CApi, arg1: *mut ::std::os::raw::c_void);
 
     #[wasm_bindgen(method)]
+    pub fn sqlite3_create_function_v2(
+        capi: &CApi,
+        db: *mut sqlite3,
+        zFunctionName: &str,
+        nArg: ::std::os::raw::c_int,
+        eTextRep: ::std::os::raw::c_int,
+        pApp: *mut ::std::os::raw::c_void,
+        xFunc: Option<&Closure<dyn FnMut(*mut sqlite3_context, Vec<JsValue>) -> JsValue>>,
+        xStep: Option<&Closure<dyn FnMut(*mut sqlite3_context, Vec<JsValue>)>>,
+        xFinal: Option<&Closure<dyn FnMut(*mut sqlite3_context) -> JsValue>>,
+        xDestroy: Option<&Closure<dyn FnMut()>>,
+    ) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
     pub fn sqlite3_result_text(
         capi: &CApi,
         arg1: *mut sqlite3_context,

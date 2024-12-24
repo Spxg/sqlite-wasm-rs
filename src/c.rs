@@ -84,10 +84,6 @@ pub unsafe fn sqlite3_exec(
     arg2: *mut ::std::os::raw::c_void,
     errmsg: *mut *mut ::std::os::raw::c_char,
 ) -> ::std::os::raw::c_int {
-    if !arg2.is_null() {
-        panic!("sqlite3 wasm not support data ptr");
-    }
-
     let callback = callback.map(|f| {
         Closure::new(move |values: Vec<String>, names: Vec<String>| -> i32 {
             let mut values = values
@@ -99,7 +95,7 @@ pub unsafe fn sqlite3_exec(
                 .map(|s| CString::new(s).unwrap().into_raw())
                 .collect::<Vec<_>>();
             let ret = f(
-                std::ptr::null_mut(),
+                arg2,
                 values.len() as ::std::os::raw::c_int,
                 values.as_mut_ptr(),
                 names.as_mut_ptr(),
@@ -197,6 +193,45 @@ pub unsafe fn sqlite3_free(arg1: *mut ::std::os::raw::c_void) {
             drop(Vec::<u8>::from_raw_parts(arg1 as _, len, cap));
         }
     }
+}
+
+pub unsafe fn sqlite3_create_function_v2(
+    db: *mut sqlite3,
+    zFunctionName: *const ::std::os::raw::c_char,
+    nArg: ::std::os::raw::c_int,
+    eTextRep: ::std::os::raw::c_int,
+    pApp: *mut ::std::os::raw::c_void,
+    xFunc: ::std::option::Option<
+        unsafe extern "C" fn(
+            arg1: *mut sqlite3_context,
+            arg2: ::std::os::raw::c_int,
+            arg3: *mut *mut sqlite3_value,
+        ),
+    >,
+    xStep: ::std::option::Option<
+        unsafe extern "C" fn(
+            arg1: *mut sqlite3_context,
+            arg2: ::std::os::raw::c_int,
+            arg3: *mut *mut sqlite3_value,
+        ),
+    >,
+    xFinal: ::std::option::Option<unsafe extern "C" fn(arg1: *mut sqlite3_context)>,
+    xDestroy: ::std::option::Option<unsafe extern "C" fn(arg1: *mut ::std::os::raw::c_void)>,
+) -> ::std::os::raw::c_int {
+    let sqlite3 = sqlite();
+    let capi = sqlite3.capi();
+    let wasm = sqlite3.wasm();
+    capi.sqlite3_create_function_v2(
+        db,
+        cstr!(zFunctionName),
+        nArg,
+        eTextRep,
+        pApp,
+        None,
+        None,
+        None,
+        None,
+    )
 }
 
 pub unsafe fn sqlite3_result_text(
