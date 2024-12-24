@@ -27,7 +27,7 @@ macro_rules! cstr {
     };
 }
 
-enum AllocType {
+enum AllocatedT {
     // (len, cap)
     VecU8((usize, usize)),
 }
@@ -41,9 +41,9 @@ unsafe impl Sync for Ptr {}
 /// just be key
 unsafe impl Send for Ptr {}
 
-static ALLOCATED: OnceCell<Mutex<HashMap<Ptr, AllocType>>> = OnceCell::new();
+static ALLOCATED: OnceCell<Mutex<HashMap<Ptr, AllocatedT>>> = OnceCell::new();
 
-fn allocated() -> &'static Mutex<HashMap<Ptr, AllocType>> {
+fn allocated() -> &'static Mutex<HashMap<Ptr, AllocatedT>> {
     ALLOCATED.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -160,7 +160,7 @@ pub unsafe fn sqlite3_serialize(
 
         allocated()
             .lock()
-            .insert(Ptr(ret as _), AllocType::VecU8((len, cap)));
+            .insert(Ptr(ret as _), AllocatedT::VecU8((len, cap)));
 
         ret
     }
@@ -189,7 +189,7 @@ pub unsafe fn sqlite3_free(arg1: *mut ::std::os::raw::c_void) {
         .remove(&Ptr(arg1))
         .expect("free not sqlite3 ptr")
     {
-        AllocType::VecU8((len, cap)) => {
+        AllocatedT::VecU8((len, cap)) => {
             drop(Vec::<u8>::from_raw_parts(arg1 as _, len, cap));
         }
     }
