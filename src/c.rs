@@ -306,6 +306,12 @@ pub unsafe fn sqlite3_create_function_v2(
                         *value = wasm.peek_ptr(arg3.offset(offset) as _) as _;
                     }
                     f(arg1, arg2, values.as_mut_ptr());
+                    for value in values {
+                        SQLITE3_VALUES_ALLOCATED
+                            .lock()
+                            .unwrap()
+                            .remove(&Ptr(value as _));
+                    }
                 },
             )
         })
@@ -323,6 +329,12 @@ pub unsafe fn sqlite3_create_function_v2(
                         *value = wasm.peek_ptr(arg3.offset(offset) as _) as _;
                     }
                     f(arg1, arg2, values.as_mut_ptr());
+                    for value in values {
+                        SQLITE3_VALUES_ALLOCATED
+                            .lock()
+                            .unwrap()
+                            .remove(&Ptr(value as _));
+                    }
                 },
             )
         })
