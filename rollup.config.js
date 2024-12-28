@@ -17,7 +17,7 @@ export default defineConfig([
       copy({
         targets: [
           {
-            src: "./node_modules/@sqlite.org/sqlite-wasm/sqlite-wasm/jswasm/sqlite3.wasm",
+            src: "./sqlite-wasm/sqlite-wasm/jswasm/sqlite3.wasm",
             dest: "src/jswasm",
           },
         ],
@@ -26,7 +26,7 @@ export default defineConfig([
   },
   {
     input:
-      "./node_modules/@sqlite.org/sqlite-wasm/sqlite-wasm/jswasm/sqlite3-opfs-async-proxy.js",
+      "./sqlite-wasm/sqlite-wasm/jswasm/sqlite3-opfs-async-proxy.js",
     output: {
       file: "src/jswasm/sqlite3-opfs-async-proxy.js",
       format: "es",
