@@ -66,7 +66,7 @@ extern "C" {
         capi: &CApi,
         arg1: *mut sqlite3,
         sql: JsValue,
-        callback: ::std::option::Option<&Closure<dyn FnMut(Vec<JsValue>, Vec<String>) -> i32>>,
+        callback: ::std::option::Option<&Closure<dyn FnMut(Vec<String>, Vec<String>) -> i32>>,
         arg2: *mut ::std::os::raw::c_void,
         errmsg: *mut *mut ::std::os::raw::c_char,
     ) -> ::std::os::raw::c_int;
@@ -97,9 +97,17 @@ extern "C" {
         nArg: ::std::os::raw::c_int,
         eTextRep: ::std::os::raw::c_int,
         pApp: *mut ::std::os::raw::c_void,
-        xFunc: ::std::option::Option<&Closure<dyn FnMut(*mut sqlite3_context, JsValue) -> JsValue>>,
-        xStep: ::std::option::Option<&Closure<dyn FnMut(*mut sqlite3_context, JsValue)>>,
-        xFinal: ::std::option::Option<&Closure<dyn FnMut(*mut sqlite3_context) -> JsValue>>,
+        xFunc: ::std::option::Option<
+            &Closure<
+                dyn FnMut(*mut sqlite3_context, ::std::os::raw::c_int, *mut *mut sqlite3_value),
+            >,
+        >,
+        xStep: ::std::option::Option<
+            &Closure<
+                dyn FnMut(*mut sqlite3_context, ::std::os::raw::c_int, *mut *mut sqlite3_value),
+            >,
+        >,
+        xFinal: ::std::option::Option<&Closure<dyn FnMut(*mut sqlite3_context)>>,
         xDestroy: ::std::option::Option<&Closure<dyn FnMut()>>,
     ) -> ::std::os::raw::c_int;
 
@@ -317,7 +325,7 @@ extern "C" {
     pub type Wasm;
 
     #[wasm_bindgen(method, js_name = "peekPtr")]
-    pub fn peek_ptr(this: &Wasm, stmt: &JsValue) -> JsValue;
+    pub fn peek_ptr(this: &Wasm, stmt: *mut u8) -> *mut u8;
     /// The "pstack" (pseudo-stack) API is a special-purpose allocator
     /// intended solely for use with allocating small amounts of memory such
     /// as that needed for output pointers.

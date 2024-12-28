@@ -13,16 +13,13 @@ use crate::{
     SQLite,
 };
 use core::panic;
-use js_sys::{Array, Uint8Array};
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 use std::{
-    alloc::Layout,
     collections::HashMap,
     ffi::{CStr, CString},
 };
 use wasm_bindgen::{prelude::Closure, JsValue};
-use wasm_bindgen_test::console_log;
 
 macro_rules! cstr {
     ($ptr:ident) => {
@@ -35,8 +32,7 @@ macro_rules! cstr {
 }
 
 enum AllocatedT {
-    AggregateContext((*mut u8, Layout)),
-    // (len, cap)
+    // (ptr, len, cap)
     VecU8((*mut u8, usize, usize)),
     CStr(*mut i8),
 }
@@ -45,9 +41,6 @@ impl Drop for AllocatedT {
     fn drop(&mut self) {
         unsafe {
             match self {
-                AllocatedT::AggregateContext((ptr, layout)) => {
-                    std::alloc::dealloc(*ptr, *layout);
-                }
                 AllocatedT::VecU8((ptr, len, cap)) => {
                     drop(Vec::<u8>::from_raw_parts(*ptr, *len, *cap));
                 }
@@ -74,28 +67,18 @@ unsafe impl Sync for AllocatedT {}
 /// just be value
 unsafe impl Send for AllocatedT {}
 
-#[derive(Clone)]
-struct JsValueX(JsValue);
-
-unsafe impl Sync for JsValueX {}
-
-unsafe impl Send for JsValueX {}
-
 static ALLOCATED: Lazy<Mutex<HashMap<Ptr, AllocatedT>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 static STMT_ALLOCATED: Lazy<Mutex<HashMap<Ptr, HashMap<i32, AllocatedT>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-static CONTEXT_ALLOCATED: Lazy<Mutex<HashMap<Ptr, AllocatedT>>> =
+static AGGREGATE_ALLOCATED: Lazy<Mutex<HashMap<Ptr, AllocatedT>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 static STMT_SQLITE3_VALUES_ALLOCATED: Lazy<Mutex<HashMap<Ptr, Vec<Ptr>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 static SQLITE3_VALUES_ALLOCATED: Lazy<Mutex<HashMap<Ptr, AllocatedT>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
-
-static SQLITE3_VALUES: Lazy<Mutex<HashMap<Ptr, JsValueX>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 fn sqlite() -> &'static SQLite {
@@ -120,15 +103,13 @@ pub unsafe fn sqlite3_open_v2(
     flags: ::std::os::raw::c_int,
     zVfs: *const ::std::os::raw::c_char,
 ) -> ::std::os::raw::c_int {
-    console_log!("sqlite3_open_v2");
-
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
     let wasm = sqlite3.wasm();
 
     let wasm_pp_db = wasm.alloc_ptr(1, true);
-    let ret = capi.sqlite3_open_v2(cstr!(filename), wasm_pp_db as *mut _, flags, cstr!(zVfs));
 
+    let ret = capi.sqlite3_open_v2(cstr!(filename), wasm_pp_db as *mut _, flags, cstr!(zVfs));
     wasm.peek(wasm_pp_db as _, &mut *ppDb);
     wasm.dealloc(wasm_pp_db);
 
@@ -149,13 +130,11 @@ pub unsafe fn sqlite3_exec(
     arg2: *mut ::std::os::raw::c_void,
     errmsg: *mut *mut ::std::os::raw::c_char,
 ) -> ::std::os::raw::c_int {
-    console_log!("sqlite3_exec");
-
     let callback = callback.map(|f| {
-        Closure::new(move |values: Vec<JsValue>, names: Vec<String>| -> i32 {
+        Closure::new(move |values: Vec<String>, names: Vec<String>| -> i32 {
             let mut values = values
                 .into_iter()
-                .map(|s| CString::new(s.as_string().unwrap()).unwrap().into_raw())
+                .map(|s| CString::new(s).unwrap().into_raw())
                 .collect::<Vec<_>>();
             let mut names = names
                 .into_iter()
@@ -182,8 +161,6 @@ pub unsafe fn sqlite3_exec(
     let wasm = sqlite3.wasm();
 
     let wasm_errmsg = wasm.alloc_ptr(1, true);
-    let s = cstr!(sql);
-    console_log!("exec: {s:?}");
 
     let ret = capi.sqlite3_exec(
         arg1,
@@ -200,12 +177,10 @@ pub unsafe fn sqlite3_exec(
 }
 
 pub unsafe fn sqlite3_close(arg1: *mut sqlite3) -> ::std::os::raw::c_int {
-    console_log!("sqlite3_close");
     sqlite().capi().sqlite3_close_v2(arg1)
 }
 
 pub unsafe fn sqlite3_changes(arg1: *mut sqlite3) -> ::std::os::raw::c_int {
-    console_log!("sqlite3_changes");
     sqlite().capi().sqlite3_changes(arg1)
 }
 
@@ -217,8 +192,6 @@ pub unsafe fn sqlite3_deserialize(
     szBuf: sqlite3_int64,
     mFlags: ::std::os::raw::c_uint,
 ) -> ::std::os::raw::c_int {
-    console_log!("sqlite3_deserialize");
-
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
     let wasm = sqlite3.wasm();
@@ -226,13 +199,18 @@ pub unsafe fn sqlite3_deserialize(
     if pData.is_null() {
         capi.sqlite3_deserialize(db, cstr!(zSchema), pData, szDb, szBuf, mFlags)
     } else {
-        let wasm_p_data = wasm.alloc(szBuf as u32);
+        let wasm_p_data = if szBuf == 0 {
+            wasm.alloc_ptr(1, true)
+        } else {
+            wasm.alloc(szBuf as u32)
+        };
         let slice = std::slice::from_raw_parts(pData as _, szBuf as usize);
         wasm.poke(slice, wasm_p_data);
 
         let ret =
             capi.sqlite3_deserialize(db, cstr!(zSchema), wasm_p_data as _, szDb, szBuf, mFlags);
-        wasm.dealloc(wasm_p_data);
+
+        // duplicated memeory
 
         ret
     }
@@ -244,8 +222,6 @@ pub unsafe fn sqlite3_serialize(
     piSize: *mut sqlite3_int64,
     mFlags: ::std::os::raw::c_uint,
 ) -> *mut ::std::os::raw::c_uchar {
-    console_log!("sqlite3_serialize");
-
     unsafe fn serialized(
         ptr: *mut u8,
         len: usize,
@@ -278,17 +254,14 @@ pub unsafe fn sqlite3_serialize(
         let size = wasm.alloc(std::mem::size_of::<sqlite3_int64>() as u32);
         let ptr = capi.sqlite3_serialize(db, cstr!(zSchema), size as *mut _, mFlags);
 
-        let mut len = 0i64;
-        wasm.peek(size, &mut len);
+        wasm.peek(size, &mut *piSize);
 
         wasm.dealloc(size);
-        serialized(ptr, len as usize, &capi, &wasm)
+        serialized(ptr, *piSize as usize, &capi, &wasm)
     }
 }
 
 pub unsafe fn sqlite3_free(arg1: *mut ::std::os::raw::c_void) {
-    console_log!("sqlite3_free");
-
     // FIX ME: memory leak if Rust and Wasm have same allocated ptr
     if ALLOCATED.lock().unwrap().remove(&Ptr(arg1)).is_none() {
         sqlite().capi().sqlite3_free(arg1);
@@ -318,101 +291,53 @@ pub unsafe fn sqlite3_create_function_v2(
     xFinal: ::std::option::Option<unsafe extern "C" fn(arg1: *mut sqlite3_context)>,
     xDestroy: ::std::option::Option<unsafe extern "C" fn(arg1: *mut ::std::os::raw::c_void)>,
 ) -> ::std::os::raw::c_int {
-    console_log!("sqlite3_create_function_v2");
-
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
 
     let wasm = sqlite3.wasm();
-    let xFunc = xFunc.map(|f| {
-        Closure::new(
-            move |ctx: *mut sqlite3_context, values: JsValue| -> JsValue {
-                let values = if values.is_array() {
-                    Array::from(&values).into_iter().collect()
-                } else {
-                    vec![values]
-                };
-                let mut sqlite3_values = Vec::with_capacity(values.len());
-                for value in values {
-                    let ptr = wasm.alloc_ptr(1, true);
-                    sqlite3_values.push(ptr as *mut sqlite3_value);
-                    SQLITE3_VALUES
-                        .lock()
-                        .unwrap()
-                        .insert(Ptr(ptr as _), JsValueX(value));
-                }
-
-                f(
-                    ctx,
-                    sqlite3_values.len() as i32,
-                    sqlite3_values.as_mut_ptr(),
-                );
-
-                // remove sqlite3_aggregate_context allocted memory
-                CONTEXT_ALLOCATED.lock().unwrap().remove(&Ptr(ctx as _));
-                // remove allocted sqlite3_values
-                let mut locked1 = SQLITE3_VALUES.lock().unwrap();
-                let ret = locked1
-                    .remove(&Ptr(ctx as _))
-                    .map_or_else(|| JsValue::null(), |x| x.0);
-
-                let mut locked2 = SQLITE3_VALUES_ALLOCATED.lock().unwrap();
-                for ptr in sqlite3_values {
-                    locked1.remove(&Ptr(ptr as _));
-                    locked2.remove(&Ptr(ptr as _));
-                    wasm.dealloc(ptr as _);
-                }
-                ret
-            },
-        )
-    });
+    let xFunc = xFunc
+        .map(|f| {
+            Closure::new(
+                move |arg1: *mut sqlite3_context,
+                      arg2: ::std::os::raw::c_int,
+                      arg3: *mut *mut sqlite3_value| {
+                    let mut values = vec![std::ptr::null_mut(); arg2 as usize];
+                    for (offset, value) in (0..).zip(values.iter_mut()) {
+                        *value = wasm.peek_ptr(arg3.offset(offset) as _) as _;
+                    }
+                    f(arg1, arg2, values.as_mut_ptr());
+                },
+            )
+        })
+        .map(|x| x);
 
     let wasm = sqlite3.wasm();
-    let xStep = xStep.map(|f| {
-        Closure::new(move |ctx: *mut sqlite3_context, values: JsValue| {
-            let values = if values.is_array() {
-                Array::from(&values).into_iter().collect()
-            } else {
-                vec![values]
-            };
-            let mut sqlite3_values = Vec::with_capacity(values.len());
-            for value in values {
-                let ptr = wasm.alloc_ptr(1, true);
-                sqlite3_values.push(ptr as *mut sqlite3_value);
-                SQLITE3_VALUES
-                    .lock()
-                    .unwrap()
-                    .insert(Ptr(ptr as _), JsValueX(value));
-            }
-            f(
-                ctx,
-                sqlite3_values.len() as i32,
-                sqlite3_values.as_mut_ptr(),
-            );
-            // remove allocted sqlite3_values
-            let mut locked1 = SQLITE3_VALUES.lock().unwrap();
-            let mut locked2 = SQLITE3_VALUES_ALLOCATED.lock().unwrap();
-            for ptr in sqlite3_values {
-                locked1.remove(&Ptr(ptr as _));
-                locked2.remove(&Ptr(ptr as _));
-                wasm.dealloc(ptr as _);
-            }
+    let xStep = xStep
+        .map(|f| {
+            Closure::new(
+                move |arg1: *mut sqlite3_context,
+                      arg2: ::std::os::raw::c_int,
+                      arg3: *mut *mut sqlite3_value| {
+                    let mut values = vec![std::ptr::null_mut(); arg2 as usize];
+                    for (offset, value) in (0..).zip(values.iter_mut()) {
+                        *value = wasm.peek_ptr(arg3.offset(offset) as _) as _;
+                    }
+                    f(arg1, arg2, values.as_mut_ptr());
+                },
+            )
         })
-    });
+        .map(|x| x);
 
     let xFinal = xFinal.map(|f| {
-        Closure::new(move |ctx: *mut sqlite3_context| -> JsValue {
-            console_log!("xfinal start");
+        Closure::new(move |ctx: *mut sqlite3_context| {
+            let aggreagate = sqlite3_aggregate_context(ctx, 0);
             f(ctx);
-            // remove sqlite3_aggregate_context allocted memory
-            CONTEXT_ALLOCATED.lock().unwrap().remove(&Ptr(ctx as _));
-            let x = SQLITE3_VALUES
-                .lock()
-                .unwrap()
-                .remove(&Ptr(ctx as _))
-                .map_or_else(|| JsValue::null(), |x| x.0);
-            console_log!("xfinal end");
-            x
+            if !aggreagate.is_null() {
+                AGGREGATE_ALLOCATED
+                    .lock()
+                    .unwrap()
+                    .remove(&Ptr(aggreagate as _));
+            }
         })
     });
 
@@ -448,8 +373,6 @@ pub unsafe fn sqlite3_result_text(
     arg3: ::std::os::raw::c_int,
     arg4: ::std::option::Option<unsafe extern "C" fn(arg1: *mut ::std::os::raw::c_void)>,
 ) {
-    console_log!("sqlite3_result_text");
-
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
 
@@ -460,12 +383,6 @@ pub unsafe fn sqlite3_result_text(
     } else {
         let slice = std::slice::from_raw_parts(arg2 as *const u8, arg3 as usize);
         let s = core::str::from_utf8(slice).expect("result is not utf8");
-
-        SQLITE3_VALUES
-            .lock()
-            .unwrap()
-            .insert(Ptr(arg1 as _), JsValueX(JsValue::from_str(s)));
-
         capi.sqlite3_result_text(arg1, JsValue::from(s), arg3, dtor);
     }
 }
@@ -476,8 +393,6 @@ pub unsafe fn sqlite3_result_blob(
     arg3: ::std::os::raw::c_int,
     arg4: ::std::option::Option<unsafe extern "C" fn(arg1: *mut ::std::os::raw::c_void)>,
 ) {
-    console_log!("sqlite3_result_blob");
-
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
     let wasm = sqlite3.wasm();
@@ -490,12 +405,6 @@ pub unsafe fn sqlite3_result_blob(
         let slice = std::slice::from_raw_parts(arg2 as *const u8, arg3 as usize);
         let wasm_ptr = wasm.alloc(arg3 as u32);
         wasm.poke(slice, wasm_ptr);
-
-        SQLITE3_VALUES
-            .lock()
-            .unwrap()
-            .insert(Ptr(arg1 as _), JsValueX(JsValue::from(slice.to_vec())));
-
         capi.sqlite3_result_blob(arg1, wasm_ptr as *const _, arg3, dtor);
 
         // FIX ME: memory leak if set SQLITE_STATIC
@@ -506,51 +415,25 @@ pub unsafe fn sqlite3_result_blob(
 }
 
 pub unsafe fn sqlite3_result_int(arg1: *mut sqlite3_context, arg2: ::std::os::raw::c_int) {
-    console_log!("sqlite3_result_int");
-
     sqlite().capi().sqlite3_result_int(arg1, arg2);
-    SQLITE3_VALUES
-        .lock()
-        .unwrap()
-        .insert(Ptr(arg1 as _), JsValueX(JsValue::from(arg2)));
 }
 
 pub unsafe fn sqlite3_result_int64(arg1: *mut sqlite3_context, arg2: sqlite3_int64) {
-    console_log!("sqlite3_result_int64");
-
     sqlite().capi().sqlite3_result_int64(arg1, arg2);
-    SQLITE3_VALUES
-        .lock()
-        .unwrap()
-        .insert(Ptr(arg1 as _), JsValueX(JsValue::from(arg2)));
 }
 
 pub unsafe fn sqlite3_result_double(arg1: *mut sqlite3_context, arg2: f64) {
-    console_log!("sqlite3_result_double");
-
     sqlite().capi().sqlite3_result_double(arg1, arg2);
-    SQLITE3_VALUES
-        .lock()
-        .unwrap()
-        .insert(Ptr(arg1 as _), JsValueX(JsValue::from(arg2)));
 }
 
 pub unsafe fn sqlite3_result_null(arg1: *mut sqlite3_context) {
-    console_log!("sqlite3_result_null");
-
     sqlite().capi().sqlite3_result_null(arg1);
-    SQLITE3_VALUES
-        .lock()
-        .unwrap()
-        .insert(Ptr(arg1 as _), JsValueX(JsValue::null()));
 }
 
 pub unsafe fn sqlite3_column_value(
     arg1: *mut sqlite3_stmt,
     iCol: ::std::os::raw::c_int,
 ) -> *mut sqlite3_value {
-    console_log!("sqlite3_column_value");
-
     let ret = sqlite().capi().sqlite3_column_value(arg1, iCol);
     STMT_SQLITE3_VALUES_ALLOCATED
         .lock()
@@ -562,8 +445,6 @@ pub unsafe fn sqlite3_column_value(
 }
 
 pub unsafe fn sqlite3_column_count(pStmt: *mut sqlite3_stmt) -> ::std::os::raw::c_int {
-    console_log!("sqlite3_column_count");
-
     sqlite().capi().sqlite3_column_count(pStmt)
 }
 
@@ -571,14 +452,12 @@ pub unsafe fn sqlite3_column_name(
     arg1: *mut sqlite3_stmt,
     N: ::std::os::raw::c_int,
 ) -> *const ::std::os::raw::c_char {
-    console_log!("sqlite3_column_name");
     let s = sqlite().capi().sqlite3_column_name(arg1, N);
     // The returned string pointer is valid until either the prepared statement
     // is destroyed by sqlite3_finalize() or until the statement is automatically
     // reprepared by the first call to sqlite3_step() for a particular run or until
     // the next call to sqlite3_column_name() or sqlite3_column_name16() on the same column.
 
-    console_log!("sqlite3_column_name: {s:?}");
     let cstr = CString::new(s).unwrap();
     let ret = cstr.into_raw();
     STMT_ALLOCATED
@@ -594,7 +473,6 @@ pub unsafe fn sqlite3_bind_null(
     arg1: *mut sqlite3_stmt,
     arg2: ::std::os::raw::c_int,
 ) -> ::std::os::raw::c_int {
-    console_log!("sqlite3_bind_null");
     sqlite().capi().sqlite3_bind_null(arg1, arg2);
     SQLITE_OK
 }
@@ -606,7 +484,6 @@ pub unsafe fn sqlite3_bind_blob(
     n: ::std::os::raw::c_int,
     arg4: ::std::option::Option<unsafe extern "C" fn(arg1: *mut ::std::os::raw::c_void)>,
 ) -> ::std::os::raw::c_int {
-    console_log!("sqlite3_bind_blob");
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
     let wasm = sqlite3.wasm();
@@ -642,8 +519,6 @@ pub unsafe fn sqlite3_bind_text(
     arg4: ::std::os::raw::c_int,
     arg5: ::std::option::Option<unsafe extern "C" fn(arg1: *mut ::std::os::raw::c_void)>,
 ) -> ::std::os::raw::c_int {
-    console_log!("sqlite3_bind_text");
-
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
     let wasm = sqlite3.wasm();
@@ -674,58 +549,30 @@ pub unsafe fn sqlite3_bind_text(
 
 // only duplicate sqlite3_value will call
 pub unsafe fn sqlite3_value_free(arg1: *mut sqlite3_value) {
-    console_log!("sqlite3_value_free");
-
     SQLITE3_VALUES_ALLOCATED
         .lock()
         .unwrap()
         .remove(&Ptr(arg1 as _));
-    if SQLITE3_VALUES
-        .lock()
-        .unwrap()
-        .remove(&Ptr(arg1 as _))
-        .is_none()
-    {
-        sqlite().capi().sqlite3_value_free(arg1);
-    }
+    sqlite().capi().sqlite3_value_free(arg1);
 }
 
 pub unsafe fn sqlite3_value_bytes(arg1: *mut sqlite3_value) -> ::std::os::raw::c_int {
-    console_log!("sqlite3_value_bytes");
-
-    if let Some(val) = SQLITE3_VALUES.lock().unwrap().get(&Ptr(arg1 as _)) {
-        let js = &val.0;
-        return if js.is_array() {
-            Array::from(&val.0).length() as _
-        } else if js.is_string() {
-            js.as_string().unwrap().len() as _
-        } else {
-            panic!("value type not covered, it's a bug")
-        };
-    }
     sqlite().capi().sqlite3_value_bytes(arg1)
 }
 
 pub unsafe fn sqlite3_value_text(arg1: *mut sqlite3_value) -> *const ::std::os::raw::c_uchar {
-    console_log!("sqlite3_value_text");
-
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
     let wasm = sqlite3.wasm();
 
-    let mut data = if let Some(val) = SQLITE3_VALUES.lock().unwrap().get(&Ptr(arg1 as _)) {
-        val.0.as_string().unwrap()
-    } else {
-        // sqlite3_value_text returns cstr, which is very confusing to me.
-        // There is no such problem on the native platform.
-        // So here sqlite3_value_blob is used instead.
-        let ptr = capi.sqlite3_value_blob(arg1);
-        let len = capi.sqlite3_value_bytes(arg1);
-        let mut ret = vec![0; len as usize];
-        wasm.peek_buf(ptr as _, len as u32, ret.as_mut_slice());
-        String::from_utf8_unchecked(ret)
-    };
-    console_log!("sqlite3_value_text {arg1:?} {data:?}");
+    // sqlite3_value_text returns cstr, which is very confusing to me.
+    // There is no such problem on the native platform.
+    // So here sqlite3_value_blob is used instead.
+    let ptr = capi.sqlite3_value_blob(arg1);
+    let len = capi.sqlite3_value_bytes(arg1);
+    let mut ret = vec![0; len as usize];
+    wasm.peek_buf(ptr as _, len as u32, ret.as_mut_slice());
+    let mut data = String::from_utf8_unchecked(ret);
 
     let (ret, len, cap) = (data.as_mut_ptr(), data.len(), data.capacity());
     std::mem::forget(data);
@@ -738,21 +585,14 @@ pub unsafe fn sqlite3_value_text(arg1: *mut sqlite3_value) -> *const ::std::os::
 }
 
 pub unsafe fn sqlite3_value_blob(arg1: *mut sqlite3_value) -> *const ::std::os::raw::c_void {
-    console_log!("sqlite3_value_blob");
-
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
     let wasm = sqlite3.wasm();
 
-    let mut data = if let Some(val) = SQLITE3_VALUES.lock().unwrap().get(&Ptr(arg1 as _)) {
-        Uint8Array::from(val.0.clone()).to_vec()
-    } else {
-        let ptr = capi.sqlite3_value_blob(arg1);
-        let len = capi.sqlite3_value_bytes(arg1);
-        let mut ret = vec![0; len as usize];
-        wasm.peek_buf(ptr as _, len as u32, ret.as_mut_slice());
-        ret
-    };
+    let ptr = capi.sqlite3_value_blob(arg1);
+    let len = capi.sqlite3_value_bytes(arg1);
+    let mut data = vec![0; len as usize];
+    wasm.peek_buf(ptr as _, len as u32, data.as_mut_slice());
 
     let (ret, len, cap) = (data.as_mut_ptr(), data.len(), data.capacity());
     std::mem::forget(data);
@@ -764,73 +604,23 @@ pub unsafe fn sqlite3_value_blob(arg1: *mut sqlite3_value) -> *const ::std::os::
 }
 
 pub unsafe fn sqlite3_value_int(arg1: *mut sqlite3_value) -> ::std::os::raw::c_int {
-    console_log!("sqlite3_value_int");
-    if let Some(val) = SQLITE3_VALUES.lock().unwrap().get(&Ptr(arg1 as _)) {
-        return val.0.as_f64().unwrap_or(0.0) as _;
-    }
-    let x = sqlite().capi().sqlite3_value_int(arg1);
-    console_log!("sqlite3_value_int {x:?}");
-    x
+    sqlite().capi().sqlite3_value_int(arg1)
 }
 
 pub unsafe fn sqlite3_value_int64(arg1: *mut sqlite3_value) -> sqlite3_int64 {
-    console_log!("sqlite3_value_int64");
-    if let Some(val) = SQLITE3_VALUES.lock().unwrap().get(&Ptr(arg1 as _)) {
-        return val.0.as_f64().unwrap_or(0.0) as _;
-    }
     sqlite().capi().sqlite3_value_int64(arg1)
 }
 
 pub unsafe fn sqlite3_value_double(arg1: *mut sqlite3_value) -> f64 {
-    console_log!("sqlite3_value_double");
-    if let Some(val) = SQLITE3_VALUES.lock().unwrap().get(&Ptr(arg1 as _)) {
-        return val.0.as_f64().unwrap_or(0.0) as _;
-    }
     sqlite().capi().sqlite3_value_double(arg1)
 }
 
 pub unsafe fn sqlite3_value_type(arg1: *mut sqlite3_value) -> ::std::os::raw::c_int {
-    console_log!("sqlite3_value_type");
-    if let Some(val) = SQLITE3_VALUES.lock().unwrap().get(&Ptr(arg1 as _)) {
-        let js = &val.0;
-        return if js.is_null() {
-            SQLITE_NULL
-        } else if js.is_array() {
-            SQLITE_BLOB
-        } else if js.is_string() {
-            SQLITE_TEXT
-        } else if js.is_bigint() {
-            let value = js.as_f64().unwrap();
-            if value == value.floor() {
-                SQLITE_INTEGER
-            } else {
-                SQLITE_FLOAT
-            }
-        } else {
-            panic!("value type not covered, it's a bug")
-        };
-    }
-    let x = sqlite().capi().sqlite3_value_type(arg1);
-    console_log!("sqlite3_value_type {:?} {:?}", arg1, x);
-    x
+    sqlite().capi().sqlite3_value_type(arg1)
 }
 
 pub unsafe fn sqlite3_value_dup(arg1: *const sqlite3_value) -> *mut sqlite3_value {
-    console_log!("sqlite3_value_dup");
-
-    let sqlite3 = sqlite();
-    let capi = sqlite3.capi();
-    let wasm = sqlite3.wasm();
-
-    let mut locked = SQLITE3_VALUES.lock().unwrap();
-    let x_value = locked.get(&Ptr(arg1 as _)).cloned();
-    if let Some(val) = x_value {
-        let ptr = wasm.alloc_ptr(1, true);
-        locked.insert(Ptr(ptr as _), val);
-        return ptr as _;
-    };
-
-    capi.sqlite3_value_dup(arg1)
+    sqlite().capi().sqlite3_value_dup(arg1)
 }
 
 pub unsafe fn sqlite3_bind_double(
@@ -838,8 +628,6 @@ pub unsafe fn sqlite3_bind_double(
     arg2: ::std::os::raw::c_int,
     arg3: f64,
 ) -> ::std::os::raw::c_int {
-    console_log!("sqlite3_bind_double");
-
     sqlite().capi().sqlite3_bind_double(arg1, arg2, arg3)
 }
 
@@ -848,8 +636,6 @@ pub unsafe fn sqlite3_bind_int(
     arg2: ::std::os::raw::c_int,
     arg3: ::std::os::raw::c_int,
 ) -> ::std::os::raw::c_int {
-    console_log!("sqlite3_bind_int");
-
     sqlite().capi().sqlite3_bind_int(arg1, arg2, arg3)
 }
 
@@ -858,7 +644,6 @@ pub unsafe fn sqlite3_bind_int64(
     arg2: ::std::os::raw::c_int,
     arg3: sqlite3_int64,
 ) -> ::std::os::raw::c_int {
-    console_log!("sqlite3_bind_int64");
     sqlite().capi().sqlite3_bind_int64(arg1, arg2, arg3)
 }
 
@@ -878,7 +663,6 @@ pub unsafe fn sqlite3_create_collation_v2(
     >,
     xDestroy: ::std::option::Option<unsafe extern "C" fn(arg1: *mut ::std::os::raw::c_void)>,
 ) -> ::std::os::raw::c_int {
-    console_log!("sqlite3_create_collation_v2");
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
     let wasm = sqlite3.wasm();
@@ -928,12 +712,10 @@ pub unsafe fn sqlite3_create_collation_v2(
 }
 
 pub unsafe fn sqlite3_extended_errcode(db: *mut sqlite3) -> ::std::os::raw::c_int {
-    console_log!("sqlite3_extended_errcode");
     sqlite().capi().sqlite3_extended_errcode(db)
 }
 
 pub unsafe fn sqlite3_finalize(pStmt: *mut sqlite3_stmt) -> ::std::os::raw::c_int {
-    console_log!("sqlite3_finalize");
     STMT_ALLOCATED.lock().unwrap().remove(&Ptr(pStmt as _));
 
     let mut locked = SQLITE3_VALUES_ALLOCATED.lock().unwrap();
@@ -954,7 +736,6 @@ pub unsafe fn sqlite3_step(arg1: *mut sqlite3_stmt) -> ::std::os::raw::c_int {
 }
 
 pub unsafe fn sqlite3_errmsg(arg1: *mut sqlite3) -> *const ::std::os::raw::c_char {
-    console_log!("sqlite3_errmsg");
     static ERR_MSG: Lazy<Mutex<Option<AllocatedT>>> = Lazy::new(|| Mutex::new(None));
     let ret = sqlite().capi().sqlite3_errmsg(arg1);
     let cstr = CString::new(ret).unwrap();
@@ -964,7 +745,6 @@ pub unsafe fn sqlite3_errmsg(arg1: *mut sqlite3) -> *const ::std::os::raw::c_cha
 }
 
 pub unsafe fn sqlite3_db_handle(arg1: *mut sqlite3_stmt) -> *mut sqlite3 {
-    console_log!("sqlite3_db_handle");
     sqlite().capi().sqlite3_db_handle(arg1)
 }
 
@@ -980,7 +760,6 @@ pub unsafe fn sqlite3_prepare_v3(
     ppStmt: *mut *mut sqlite3_stmt,
     pzTail: *mut *const ::std::os::raw::c_char,
 ) -> ::std::os::raw::c_int {
-    console_log!("sqlite3_prepare_v3");
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
     let wasm = sqlite3.wasm();
@@ -988,12 +767,15 @@ pub unsafe fn sqlite3_prepare_v3(
     let wasm_z_sql = if zSql.is_null() {
         std::ptr::null_mut::<u8>()
     } else {
-        console_log!("sqlite3_prepare_v2: {:?}", cstr!(zSql));
-        let wasm_z_sql = wasm.alloc(nByte as u32);
-        wasm.poke(
-            std::slice::from_raw_parts(zSql as _, nByte as usize),
-            wasm_z_sql,
-        );
+        let (wasm_z_sql, len) = match nByte.cmp(&0) {
+            std::cmp::Ordering::Less => {
+                let len = CString::from_raw(zSql as *mut _).to_str().unwrap().len();
+                (wasm.alloc(len as u32), len)
+            }
+            std::cmp::Ordering::Equal => (wasm.alloc_ptr(1, true), 0),
+            std::cmp::Ordering::Greater => (wasm.alloc(nByte as u32), nByte as usize),
+        };
+        wasm.poke(std::slice::from_raw_parts(zSql as _, len), wasm_z_sql);
         wasm_z_sql
     };
 
@@ -1018,12 +800,10 @@ pub unsafe fn sqlite3_prepare_v3(
 }
 
 pub unsafe fn sqlite3_context_db_handle(arg1: *mut sqlite3_context) -> *mut sqlite3 {
-    console_log!("sqlite3_context_db_handle");
     sqlite().capi().sqlite3_context_db_handle(arg1)
 }
 
 pub unsafe fn sqlite3_user_data(arg1: *mut sqlite3_context) -> *mut ::std::os::raw::c_void {
-    console_log!("sqlite3_user_data");
     sqlite().capi().sqlite3_user_data(arg1)
 }
 
@@ -1031,20 +811,32 @@ pub unsafe fn sqlite3_aggregate_context(
     arg1: *mut sqlite3_context,
     nBytes: ::std::os::raw::c_int,
 ) -> *mut ::std::os::raw::c_void {
-    console_log!("sqlite3_aggregate_context");
-    if nBytes < 0 {
-        return std::ptr::null_mut();
+    let sqlite3 = sqlite();
+    let capi = sqlite3.capi();
+    let wasm = sqlite3.wasm();
+
+    let ptr = capi.sqlite3_aggregate_context(arg1, nBytes);
+    if ptr.is_null() {
+        return std::ptr::null_mut::<::std::os::raw::c_void>();
     }
-    let mut locked = CONTEXT_ALLOCATED.lock().unwrap();
-    if let Some(AllocatedT::AggregateContext(ptr)) = locked.get(&(Ptr(arg1 as _))) {
-        return ptr.0 as _;
+
+    if let Some(AllocatedT::VecU8((ptr, _, _))) =
+        AGGREGATE_ALLOCATED.lock().unwrap().get(&Ptr(ptr as _))
+    {
+        return *ptr as _;
     }
-    let (ptr, layout) = match Layout::array::<u8>(nBytes as usize) {
-        Ok(layout) => (std::alloc::alloc(layout), layout),
-        Err(_) => return std::ptr::null_mut(),
-    };
-    locked.insert(Ptr(arg1 as _), AllocatedT::AggregateContext((ptr, layout)));
-    ptr as _
+
+    let mut data = vec![0; nBytes as usize];
+    wasm.peek_buf(ptr as _, nBytes as _, data.as_mut_slice());
+    let (ret, len, cap) = (data.as_mut_ptr(), data.len(), data.capacity());
+    std::mem::forget(data);
+
+    AGGREGATE_ALLOCATED
+        .lock()
+        .unwrap()
+        .insert(Ptr(ptr as _), AllocatedT::VecU8((ret, len, cap)));
+
+    ret as _
 }
 
 pub unsafe fn sqlite3_result_error(
@@ -1052,7 +844,6 @@ pub unsafe fn sqlite3_result_error(
     arg2: *const ::std::os::raw::c_char,
     arg3: ::std::os::raw::c_int,
 ) {
-    console_log!("sqlite3_result_error");
     sqlite()
         .capi()
         .sqlite3_result_error(arg1, cstr!(arg2), arg3);

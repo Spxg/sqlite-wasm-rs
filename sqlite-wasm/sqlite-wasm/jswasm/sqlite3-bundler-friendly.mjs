@@ -9397,6 +9397,19 @@ var sqlite3InitModule = (() => {
           };
 
           const __cfProxy = Object.assign(Object.create(null), {
+            xInverseAndStepX: {
+              signature: 'v(pip)',
+              contextKey,
+              callProxy: (callback) => {
+                return (pCtx, argc, pArgv) => {
+                    try {
+                      callback(pCtx, argc, pArgv);
+                    } catch(e) {
+                      console.error('UDF xStep method threw:', e);
+                    }
+                };
+              },
+            },
             xInverseAndStep: {
               signature: 'v(pip)',
               contextKey,
@@ -9410,6 +9423,19 @@ var sqlite3InitModule = (() => {
                 };
               },
             },
+            xFinalAndValueX: {
+              signature: 'v(p)',
+              contextKey,
+              callProxy: (callback) => {
+                return (pCtx) => {
+                  try {
+                    callback(pCtx);
+                  } catch (e) {
+                    console.error('UDF xFinal method threw:', e);
+                  }
+                };
+              },
+            },
             xFinalAndValue: {
               signature: 'v(p)',
               contextKey,
@@ -9419,6 +9445,19 @@ var sqlite3InitModule = (() => {
                     capi.sqlite3_result_js(pCtx, callback(pCtx));
                   } catch (e) {
                     capi.sqlite3_result_error_js(pCtx, e);
+                  }
+                };
+              },
+            },
+            xFuncX: {
+              signature: 'v(pip)',
+              contextKey,
+              callProxy: (callback) => {
+                return (pCtx, argc, pArgv) => {
+                  try {
+                    callback(pCtx, argc, pArgv);
+                  } catch (e) {
+                    console.error('UDF xFunc method threw:', e);
                   }
                 };
               },
@@ -9466,15 +9505,15 @@ var sqlite3InitModule = (() => {
               '*',
               new wasm.xWrap.FuncPtrAdapter({
                 name: 'xFunc',
-                ...__cfProxy.xFunc,
+                ...__cfProxy.xFuncX,
               }),
               new wasm.xWrap.FuncPtrAdapter({
                 name: 'xStep',
-                ...__cfProxy.xInverseAndStep,
+                ...__cfProxy.xInverseAndStepX,
               }),
               new wasm.xWrap.FuncPtrAdapter({
                 name: 'xFinal',
-                ...__cfProxy.xFinalAndValue,
+                ...__cfProxy.xFinalAndValueX,
               }),
               new wasm.xWrap.FuncPtrAdapter({
                 name: 'xDestroy',
