@@ -1,7 +1,9 @@
+#![doc = include_str!("../README.md")]
+
 #[allow(non_upper_case_globals)]
 #[allow(non_camel_case_types)]
 #[allow(non_snake_case)]
-pub mod libsqlite3_sys;
+pub mod libsqlite3;
 
 #[allow(non_upper_case_globals)]
 #[allow(non_camel_case_types)]
@@ -10,6 +12,9 @@ pub mod c;
 
 pub mod wasm;
 
+mod fragile;
+
+use fragile::FragileComfirmed;
 use js_sys::{Object, WebAssembly::Memory};
 use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt::Display, result::Result};
@@ -17,40 +22,53 @@ use tokio::sync::OnceCell;
 use wasm::{CApi, Wasm};
 use wasm_bindgen::JsValue;
 
+/// Sqlite only needs to be initialized once
 static SQLITE: OnceCell<SQLite> = OnceCell::const_new();
 
+/// Initialize sqlite and opfs vfs
 pub async fn init_sqlite() -> Result<&'static SQLite, SQLiteError> {
-    SQLITE.get_or_try_init(|| SQLite::default()).await
+    SQLITE.get_or_try_init(SQLite::default).await
 }
 
-pub async fn init_sqlite_with(opts: SQLiteOpts) -> Result<&'static SQLite, SQLiteError> {
+/// Initialize sqlite and opfs vfs with options
+pub async fn init_sqlite_with_opts(opts: SQLiteOpts) -> Result<&'static SQLite, SQLiteError> {
     SQLITE.get_or_try_init(|| SQLite::new(opts)).await
 }
 
+/// Get the current sqlite global instance
 pub fn sqlite() -> Option<&'static SQLite> {
     SQLITE.get()
 }
 
+/// "Inline" sqlite wasm binary
 const WASM: &[u8] = include_bytes!("jswasm/sqlite3.wasm");
 
+/// Initialize sqlite parameters
+///
+/// Currently, only memory can be configured
 #[derive(Serialize)]
 pub struct InitOpts {
+    /// sqlite wasm binary
     #[serde(rename = "wasmBinary")]
     pub wasm_binary: &'static [u8],
+    /// memory options
     #[serde(with = "serde_wasm_bindgen::preserve", rename = "wasmMemory")]
     pub wasm_memory: Memory,
+    /// opfs proxy uri
     #[serde(rename = "proxyUri")]
     pub proxy_uri: String,
 }
 
+/// Wasm memory parameters
 #[derive(Serialize)]
 pub struct MemoryOpts {
-    /// The initial size of the WebAssembly Memory, in units of WebAssembly pages.
+    /// The initial size of the WebAssembly Memory
     pub initial: usize,
-    /// The maximum size the WebAssembly Memory is allowed to grow to, in units of WebAssembly pages.
+    /// The maximum size the WebAssembly Memory is allowed to grow to
     pub maximum: usize,
 }
 
+/// SQLite version info
 #[derive(Deserialize, Clone, Debug)]
 pub struct Version {
     #[serde(rename = "libVersion")]
@@ -63,10 +81,14 @@ pub struct Version {
     pub download_version: u32,
 }
 
+/// Possible errors in initializing sqlite
 #[derive(Debug)]
 pub enum SQLiteError {
+    /// the wrong range is configured
     Memory(JsValue),
+    /// error in initializing module
     Module(JsValue),
+    /// serialization and deserialization errors
     Serde(serde_wasm_bindgen::Error),
 }
 
@@ -82,21 +104,24 @@ impl Display for SQLiteError {
 
 impl Error for SQLiteError {}
 
+/// Initialize sqlite parameters
+///
+/// Currently, only memory can be configured
 pub struct SQLiteOpts {
     pub memory: MemoryOpts,
 }
 
+/// Wrapped sqlite instance
+///
+/// Itis not sure about the multi-thread support of sqlite-wasm,
+/// so use `Fragile` to limit it to one thread.
 pub struct SQLite {
-    ffi: wasm::SQLite,
+    ffi: FragileComfirmed<wasm::SQLite>,
     version: Version,
 }
 
-#[allow(unsafe_code)]
-unsafe impl Sync for SQLite {}
-#[allow(unsafe_code)]
-unsafe impl Send for SQLite {}
-
 impl SQLite {
+    /// The default configuration, passed in when `sqlite::default()`
     pub const DEFAULT_OPTIONS: SQLiteOpts = SQLiteOpts {
         memory: MemoryOpts {
             initial: 256,
@@ -143,23 +168,26 @@ impl SQLite {
             serde_wasm_bindgen::from_value(sqlite.version()).map_err(SQLiteError::Serde)?;
 
         let sqlite = Self {
-            ffi: sqlite,
+            ffi: FragileComfirmed::new(sqlite),
             version,
         };
 
         Ok(sqlite)
     }
 
+    /// SQLite version
     #[must_use]
     pub fn version(&self) -> &Version {
         &self.version
     }
 
+    /// SQLite CAPI
     #[must_use]
     pub fn capi(&self) -> CApi {
         self.ffi.handle().capi()
     }
 
+    /// SQLite memeory manager
     #[must_use]
     pub fn wasm(&self) -> Wasm {
         self.ffi.handle().wasm()

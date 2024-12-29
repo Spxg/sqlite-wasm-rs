@@ -5,7 +5,7 @@ import terser from "@rollup/plugin-terser";
 
 export default defineConfig([
   {
-    input: "sqlite3.js",
+    input: "sqlite_sdk.js",
     output: {
       file: "src/jswasm/sqlite3.js",
       format: "es",

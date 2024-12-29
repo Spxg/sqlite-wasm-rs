@@ -2,7 +2,7 @@ wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_dedicated_worker);
 
 use sqlite_wasm_rs::c;
 use sqlite_wasm_rs::init_sqlite;
-use sqlite_wasm_rs::libsqlite3_sys::{SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_READWRITE};
+use sqlite_wasm_rs::libsqlite3::{SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_READWRITE};
 use std::ffi::CString;
 use wasm_bindgen_test::{console_log, wasm_bindgen_test};
 
