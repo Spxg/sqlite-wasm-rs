@@ -7,8 +7,8 @@ readme = "README.md"
 license = "MIT"
 repository = "https://github.com/Spxg/sqlite-wasm-rs"
 description = "Wrap sqlite-wasm, and expect to provide a usable C-like API."
-categories = ["development-tools::ffi", "wasm", "sqlite"]
-keywords = ["sqlite", "javascript", "wasm", "webassembly"]
+categories = ["development-tools::ffi", "wasm", "database"]
+keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "javascript"]
 
 [dependencies]
 fragile = "2.0.0"
