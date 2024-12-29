@@ -29,20 +29,20 @@ async fn open_db() -> anyhow::Result<()> {
   
     let mut db = std::ptr::null_mut();
     let filename = CString::new("mydb").unwrap();
+    // Persistent Storage is supported, use opfs vfs.
+    // This support is only available when sqlite is loaded from a 
+    // Worker thread, whether it's loaded in its own dedicated worker 
+    // or in a worker together with client code. 
+    //
+    // See <https://sqlite.org/wasm/doc/trunk/persistence.md#opfs>
+    let vfs = CString::new("opfs").unwrap();
     let ret = unsafe {
         ffi::sqlite3_open_v2(
             filename.as_ptr(),
             &mut db as *mut _,
             ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
-          	// Persistent Storage is supported, use opfs vfs.
-          	// This support is only available when sqlite is loaded from a 
-            // Worker thread, whether it's loaded in its own dedicated worker 
-            // or in a worker together with client code. 
-            //
-            // See <https://sqlite.org/wasm/doc/trunk/persistence.md#opfs>
-          	//
             // Using std::ptr::null() is a memory DB
-            CString::new("opfs").unwrap().as_ptr(),
+            vfs.as_ptr(),
         )
     };
     assert_eq!(ffi::SQLITE_OK, ret);

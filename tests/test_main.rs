@@ -17,12 +17,14 @@ async fn test_open_v2_and_exec_opfs_c() {
 
     let filename = cstr("test_open_v2_and_exec_opfs_c.db");
     let mut db = std::ptr::null_mut();
+
+    let vfs = CString::new("opfs").unwrap();
     let ret = unsafe {
         c::sqlite3_open_v2(
             filename.as_ptr(),
             &mut db as *mut _,
             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-            CString::new("opfs").unwrap().as_ptr(),
+            vfs.as_ptr(),
         )
     };
     assert_eq!(SQLITE_OK, ret);
