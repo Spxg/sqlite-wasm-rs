@@ -1,11 +1,11 @@
 # SQLite Wasm Rust
 
-Wrap the official [`sqlite-wasm`](https://github.com/sqlite/sqlite-wasm), and expect to provide a usable C-like API. 
+Wrap the official [`sqlite-wasm`](https://github.com/sqlite/sqlite-wasm), and expect to provide a usable C-like API.
 
 And currently  the following APIs are implemented and tested:
 
 | 1                                                            | 2                                                            | 3                                                            | 4                                                            | 5                                                            | 6                                                            |
-| ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ | :----------------------------------------------------------- |
+| ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |
 | [`sqlite3_open_v2`](https://www.sqlite.org/c3ref/open.html)  | [`sqlite3_exec`](https://www.sqlite.org/c3ref/exec.html)     | [`sqlite3_close`](https://www.sqlite.org/c3ref/close.html)   | [`sqlite3_close_v2`](https://www.sqlite.org/c3ref/close.html) | [`sqlite3_changes`](https://www.sqlite.org/c3ref/changes.html) | [`sqlite3_deserialize`](https://www.sqlite.org/c3ref/deserialize.html) |
 | [`sqlite3_serialize`](https://www.sqlite.org/c3ref/serialize.html) | [`sqlite3_free`](https://www.sqlite.org/c3ref/free.html)     | [`sqlite3_create_function_v2`](https://www.sqlite.org/c3ref/create_function.html) | [`sqlite3_result_text`](https://www.sqlite.org/c3ref/result_blob.html) | [`sqlite3_result_blob`](https://www.sqlite.org/c3ref/result_blob.html) | [`sqlite3_result_int`](https://www.sqlite.org/c3ref/result_blob.html) |
 | [`sqlite3_result_int64`](https://www.sqlite.org/c3ref/result_blob.html) | [`sqlite3_result_double`](https://www.sqlite.org/c3ref/result_blob.html) | [`sqlite3_result_null`](https://www.sqlite.org/c3ref/result_blob.html) | [`sqlite3_column_value`](https://www.sqlite.org/c3ref/column_blob.html) | [`sqlite3_column_count`](https://www.sqlite.org/c3ref/column_count.html) | [`sqlite3_column_name`](https://www.sqlite.org/c3ref/column_name.html) |
@@ -22,17 +22,18 @@ use sqlite_wasm_rs::c as ffi;
 use std::ffi::CString;
 
 async fn open_db() -> anyhow::Result<()> {
-    // Before using CAPI, you must initialize the database. 
-    // Initializing the database is a one-time operation during 
+    // Before using CAPI, you must initialize sqlite.
+    //
+    // Initializing the database is a one-time operation during
     // the life of the program.
     ffi::init_sqlite().await?;
-  
+
     let mut db = std::ptr::null_mut();
     let filename = CString::new("mydb").unwrap();
     // Persistent Storage is supported, use opfs vfs.
-    // This support is only available when sqlite is loaded from a 
-    // Worker thread, whether it's loaded in its own dedicated worker 
-    // or in a worker together with client code. 
+    // This support is only available when sqlite is loaded from a
+    // Worker thread, whether it's loaded in its own dedicated worker
+    // or in a worker together with client code.
     //
     // See <https://sqlite.org/wasm/doc/trunk/persistence.md#opfs>
     let vfs = CString::new("opfs").unwrap();
