@@ -7,6 +7,7 @@ use crate::{
     libsqlite3::{sqlite3, sqlite3_context, sqlite3_int64},
 };
 use js_sys::{Object, Uint8Array};
+use std::mem::size_of;
 use wasm_bindgen::{
     prelude::{wasm_bindgen, Closure},
     JsValue,
