@@ -1093,7 +1093,7 @@ pub unsafe fn sqlite3_prepare_v3(
             // safety: nBytes is -1, so it is a cstr
             let len = cstr
                 .to_str()
-                .expect("sql must be cstr because nBytes = 1")
+                .expect("sql must be cstr because nBytes == -1")
                 .len();
             (wasm.alloc(len), len)
         } else {
