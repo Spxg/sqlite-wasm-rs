@@ -12,6 +12,7 @@ use std::{
 };
 use std::{panic, slice, str};
 use wasm_bindgen::{prelude::Closure, JsValue};
+use wasm_bindgen_test::console_log;
 
 /// Use JsValue to express a null pointer or string.
 /// Because the sqlite-wasm pointer is a number, use 0x0
@@ -145,6 +146,7 @@ fn vec_into_raw_parts<T>(v: Vec<T>) -> (*mut T, usize, usize) {
 /// and support opfs vfs on wasm platform.
 ///
 /// See <https://www.sqlite.org/c3ref/open.html>
+///
 /// See <https://sqlite.org/wasm/doc/trunk/persistence.md>
 pub unsafe fn sqlite3_open_v2(
     filename: *const ::std::os::raw::c_char,
@@ -1199,4 +1201,264 @@ pub unsafe fn sqlite3_result_error(
     sqlite()
         .capi()
         .sqlite3_result_error(ctx, cstr!(msg), msgLen);
+}
+
+/// Compiles a prepared statement.
+///
+/// See <https://www.sqlite.org/c3ref/prepare.html>
+pub unsafe fn sqlite3_prepare_v2(
+    db: *mut sqlite3,
+    sql: *const ::std::os::raw::c_char,
+    nByte: ::std::os::raw::c_int,
+    ppStmt: *mut *mut sqlite3_stmt,
+    pzTail: *mut *const ::std::os::raw::c_char,
+) -> ::std::os::raw::c_int {
+    let sqlite3 = sqlite();
+    let capi = sqlite3.capi();
+    let wasm = sqlite3.wasm();
+
+    // I don't know how to handle this, so I'll leave it to sqlite3
+    let wasm_z_sql = if sql.is_null() || nByte < -1 {
+        std::ptr::null_mut::<u8>()
+    } else {
+        let (wasm_z_sql, len) = if nByte == -1 {
+            // cstr length
+            let cstr = CStr::from_ptr(sql.cast_mut());
+            // safety: nBytes is -1, so it is a cstr
+            let len = cstr
+                .to_str()
+                .expect("sql must be cstr because nBytes == -1")
+                .len();
+            (wasm.alloc(len), len)
+        } else {
+            (wasm.alloc(nByte.max(1) as usize), nByte as usize)
+        };
+        wasm.poke(slice::from_raw_parts(sql.cast(), len), wasm_z_sql);
+        wasm_z_sql
+    };
+
+    // using output-pointer arguments from JS
+    let wasm_pp_stmt = wasm.alloc(size_of::<*mut sqlite3_stmt>());
+    let wasm_pz_tail = wasm.alloc(size_of::<*const ::std::os::raw::c_char>());
+    let ret = capi.sqlite3_prepare_v2(
+        db,
+        wasm_z_sql as _,
+        nByte,
+        wasm_pp_stmt.cast(),
+        wasm_pz_tail.cast(),
+    );
+    wasm.peek(wasm_pp_stmt, &mut *ppStmt);
+    wasm.peek(wasm_pz_tail, &mut *pzTail);
+
+    // the prepared statement that is returned
+    // (the sqlite3_stmt object) contains a copy of the original SQL text
+    wasm.dealloc(wasm_z_sql);
+    wasm.dealloc(wasm_pp_stmt);
+    wasm.dealloc(wasm_pz_tail);
+
+    ret
+}
+
+/// Open an `SQLite` database file as specified by the `filename` argument
+///
+/// See <https://www.sqlite.org/c3ref/open.html>
+pub unsafe fn sqlite3_open(
+    filename: *const ::std::os::raw::c_char,
+    ppDb: *mut *mut sqlite3,
+) -> ::std::os::raw::c_int {
+    let sqlite3 = sqlite();
+    let capi = sqlite3.capi();
+    let wasm = sqlite3.wasm();
+
+    // using output-pointer arguments from JS
+    let wasm_pp_db = wasm.alloc(size_of::<*mut sqlite3>());
+
+    let ret = capi.sqlite3_open(cstr!(filename), wasm_pp_db.cast());
+
+    wasm.peek(wasm_pp_db.cast(), &mut *ppDb);
+    // dealloc the ptr, because we already have the db handle
+    wasm.dealloc(wasm_pp_db);
+
+    ret
+}
+
+/// Causes the `idx`-th parameter in prepared statement `stmt` to have an SQL
+/// value of `NULL`, but to also be associated with the pointer `ptr` of type
+/// `type`. `dtor` is either a `NULL pointer` or a pointer to a destructor
+/// function for `ptr`. SQLite will invoke the destructor `dtor` with a single
+/// argument of `ptr` when it is finished using `ptr`. The `type` parameter
+/// should be a static string, preferably a string literal.
+///
+/// See <https://www.sqlite.org/c3ref/bind_blob.html>
+pub unsafe fn sqlite3_bind_pointer(
+    stmt: *mut sqlite3_stmt,
+    idx: ::std::os::raw::c_int,
+    ptr: *mut ::std::os::raw::c_void,
+    r#type: *const ::std::os::raw::c_char,
+    dtor: ::std::option::Option<unsafe extern "C" fn(arg1: *mut ::std::os::raw::c_void)>,
+) -> ::std::os::raw::c_int {
+    sqlite().capi().sqlite3_bind_pointer(
+        stmt,
+        idx,
+        ptr, // sqlite will not consume
+        cstr!(r#type),
+        dtori32(dtor),
+    )
+}
+
+/// This function causes any pending database operation to abort and return at
+/// its earliest opportunity. This routine is typically called in response to
+/// a user action such as pressing "Cancel" or Ctrl-C where the user wants a
+/// long query operation to halt immediately.
+///
+/// See <https://www.sqlite.org/c3ref/bind_blob.html>
+pub unsafe fn sqlite3_interrupt(db: *mut sqlite3) {
+    sqlite().capi().sqlite3_interrupt(db);
+}
+
+/// Used to make global configuration changes to `SQLite` in order to tune SQLite
+/// to the specific needs of the application. The default configuration is
+/// recommended for most applications and so this routine is usually not
+/// necessary. It is provided to support rare applications with unusual needs.
+///
+/// See <https://www.sqlite.org/c3ref/config.html>
+///
+/// Currently only one parameter is supported. Add more if needed.
+pub unsafe fn sqlite3_config(
+    op: ::std::os::raw::c_int,
+    arg: ::std::os::raw::c_int,
+) -> ::std::os::raw::c_int {
+    sqlite().capi().sqlite3_config(op, arg)
+}
+
+/// Used to retrieve runtime status information about the performance of
+/// `SQLite`, and optionally to reset various highwater marks.
+///
+/// See <https://www.sqlite.org/c3ref/status.html>
+pub unsafe fn sqlite3_status(
+    op: ::std::os::raw::c_int,
+    pCurrent: *mut ::std::os::raw::c_int,
+    pHighwater: *mut ::std::os::raw::c_int,
+    resetFlag: ::std::os::raw::c_int,
+) -> ::std::os::raw::c_int {
+    let sqlite3 = sqlite();
+    let capi = sqlite3.capi();
+    let wasm = sqlite3.wasm();
+
+    // using output-pointer arguments from JS
+    let wasm_current = wasm.alloc(size_of::<::std::os::raw::c_int>());
+    let wasm_highwater = wasm.alloc(size_of::<::std::os::raw::c_int>());
+
+    let ret = capi.sqlite3_status(op, wasm_current.cast(), wasm_highwater.cast(), resetFlag);
+
+    wasm.peek(wasm_current, &mut *pCurrent);
+    wasm.peek(wasm_highwater, &mut *pHighwater);
+
+    wasm.dealloc(wasm_current);
+    wasm.dealloc(wasm_highwater);
+
+    ret
+}
+
+/// Used to retrieve runtime status information about the performance of
+/// `SQLite`, and optionally to reset various highwater marks.
+///
+/// See <https://www.sqlite.org/c3ref/status.html>
+pub unsafe fn sqlite3_status64(
+    op: ::std::os::raw::c_int,
+    pCurrent: *mut sqlite3_int64,
+    pHighwater: *mut sqlite3_int64,
+    resetFlag: ::std::os::raw::c_int,
+) -> ::std::os::raw::c_int {
+    let sqlite3 = sqlite();
+    let capi = sqlite3.capi();
+    let wasm = sqlite3.wasm();
+
+    // using output-pointer arguments from JS
+    let wasm_current = wasm.alloc(size_of::<sqlite3_int64>());
+    let wasm_highwater = wasm.alloc(size_of::<sqlite3_int64>());
+
+    let ret = capi.sqlite3_status64(op, wasm_current.cast(), wasm_highwater.cast(), resetFlag);
+
+    wasm.peek(wasm_current, &mut *pCurrent);
+    wasm.peek(wasm_highwater, &mut *pHighwater);
+
+    wasm.dealloc(wasm_current);
+    wasm.dealloc(wasm_highwater);
+
+    ret
+}
+
+/// Return the amount of memory currently checked out.
+///
+/// See <https://www.sqlite.org/c3ref/memory_highwater.html>
+///
+/// See <https://github.com/sqlite/sqlite/blob/4112a63b8fa8357133f2c8e089dcd9193fc2926b/src/malloc.c>
+pub unsafe fn sqlite3_memory_used() -> sqlite3_int64 {
+    let mut res: sqlite3_int64 = 0;
+    let mut mx: sqlite3_int64 = 0;
+
+    sqlite3_status64(
+        SQLITE_STATUS_MEMORY_USED,
+        &mut res as *mut _,
+        &mut mx as *mut _,
+        0,
+    );
+
+    res
+}
+
+/// Return the maximum amount of memory that has ever been
+/// checked out since either the beginning of this process
+/// or since the most recent reset.
+///
+/// See <https://www.sqlite.org/c3ref/memory_highwater.html>
+///
+/// See <https://github.com/sqlite/sqlite/blob/4112a63b8fa8357133f2c8e089dcd9193fc2926b/src/malloc.c>
+pub unsafe fn sqlite3_memory_highwater(resetFlag: ::std::os::raw::c_int) -> sqlite3_int64 {
+    let mut res: sqlite3_int64 = 0;
+    let mut mx: sqlite3_int64 = 0;
+
+    sqlite3_status64(
+        SQLITE_STATUS_MEMORY_USED,
+        &mut res as *mut _,
+        &mut mx as *mut _,
+        resetFlag,
+    );
+
+    mx
+}
+
+/// Get the length in bytes of a `BLOB` or `TEXT` column in the current result row.
+///
+/// See https://www.sqlite.org/c3ref/column_blob.html
+pub unsafe fn sqlite3_column_type(
+    stmt: *mut sqlite3_stmt,
+    colIdx: ::std::os::raw::c_int,
+) -> ::std::os::raw::c_int {
+    sqlite().capi().sqlite3_column_type(stmt, colIdx)
+}
+
+pub unsafe fn sqlite3_column_database_name(
+    stmt: *mut sqlite3_stmt,
+    colIdx: ::std::os::raw::c_int,
+) -> *const ::std::os::raw::c_char {
+    let s = sqlite().capi().sqlite3_column_database_name(stmt, colIdx);
+    // # Safety
+    //
+    // The returned string pointer is valid until either the prepared statement
+    // is destroyed by sqlite3_finalize() or until the statement is automatically
+    // reprepared by the first call to sqlite3_step() for a particular run or until
+    // the next call to sqlite3_column_name() or sqlite3_column_name16() on the same column.
+    let cstr = CString::new(s).expect("sqlite says this is a utf8 text");
+    let ret = cstr.into_raw();
+
+    // We have established a mapping relationship between stmt and (col, text).
+    // When sqlite3_finalize is called, all memory will be freed or
+    // replaced by the same column.
+    stmt_allocated()
+        .entry(Ptr(stmt.cast()))
+        .or_default()
+        .insert(colIdx, AllocatedT::CString(ret));
+    ret
 }

@@ -162,6 +162,13 @@ extern "C" {
     ) -> String;
 
     #[wasm_bindgen(method)]
+    pub fn sqlite3_column_database_name(
+        capi: &CApi,
+        stmt: *mut sqlite3_stmt,
+        colIdx: ::std::os::raw::c_int,
+    ) -> String;
+
+    #[wasm_bindgen(method)]
     pub fn sqlite3_bind_null(capi: &CApi, stmt: *mut sqlite3_stmt, idx: ::std::os::raw::c_int);
 
     #[wasm_bindgen(method)]
@@ -324,6 +331,69 @@ extern "C" {
         msg: JsValue,
         msgLen: ::std::os::raw::c_int,
     );
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_prepare_v2(
+        capi: &CApi,
+        db: *mut sqlite3,
+        sql: *const ::std::os::raw::c_char,
+        nByte: ::std::os::raw::c_int,
+        ppStmt: *mut *mut sqlite3_stmt,
+        pzTail: *mut *const ::std::os::raw::c_char,
+    ) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_open(
+        capi: &CApi,
+        filename: JsValue,
+        ppDb: *mut *mut sqlite3,
+    ) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_bind_pointer(
+        capi: &CApi,
+        stmt: *mut sqlite3_stmt,
+        idx: ::std::os::raw::c_int,
+        ptr: *mut ::std::os::raw::c_void,
+        r#type: JsValue,
+        dtor: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_interrupt(capi: &CApi, db: *mut sqlite3);
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_config(
+        capi: &CApi,
+        op: ::std::os::raw::c_int,
+        arg: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_status(
+        capi: &CApi,
+        op: ::std::os::raw::c_int,
+        pCurrent: *mut ::std::os::raw::c_int,
+        pHighwater: *mut ::std::os::raw::c_int,
+        resetFlag: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_status64(
+        capi: &CApi,
+        op: ::std::os::raw::c_int,
+        pCurrent: *mut sqlite3_int64,
+        pHighwater: *mut sqlite3_int64,
+        resetFlag: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_column_type(
+        capi: &CApi,
+        stmt: *mut sqlite3_stmt,
+        colIdx: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int;
+
 }
 
 /// Just like in C, WASM offers a memory "heap," and transfering values
@@ -346,6 +416,10 @@ extern "C" {
     /// View into the wasm memory reprsented as unsigned 8-bit integers
     #[wasm_bindgen(method)]
     pub fn heap8u(this: &Wasm) -> Uint8Array;
+
+    #[wasm_bindgen(method, js_name = "xWrap", variadic)]
+    pub fn x_warp(this: &Wasm, function: &str, inputs: Vec<JsValue>) -> JsValue;
+
 }
 
 impl Wasm {
