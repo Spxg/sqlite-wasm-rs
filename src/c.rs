@@ -163,18 +163,19 @@ fn sqlite() -> &'static SQLite {
 }
 
 /// Convert the dtor function pointer to i32
-fn dtori32(
+unsafe fn dtori32(
     arg: ::std::option::Option<unsafe extern "C" fn(arg1: *mut ::std::os::raw::c_void)>,
 ) -> i32 {
-    if arg == SQLITE_TRANSIENT() {
-        -1
-    } else if arg == SQLITE_STATIC() {
-        0
-    } else {
+    let dtor = std::mem::transmute::<
+        ::std::option::Option<unsafe extern "C" fn(arg1: *mut ::std::os::raw::c_void)>,
+        isize,
+    >(arg);
+    if !matches!(dtor, -1 | 0) {
         // The dtor closure of sqilte-wasm does not provide a data pointer,
         // so it is currently not customizable.
         panic!("costom dtor not supported now");
     }
+    dtor as i32
 }
 
 /// Make Vec<T> leak memory
