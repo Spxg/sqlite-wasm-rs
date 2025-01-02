@@ -25,6 +25,45 @@ macro_rules! cstr {
     };
 }
 
+/// Wraps an `OutputPtr` structure
+///
+/// Output-pointer arguments are commonplace in C.
+/// On the contrary, they do not exist at all in JavaScript.
+struct OutputPtr<'a, T> {
+    // sqlite ptr
+    sqlite: *mut u8,
+    // rust ptr
+    rust: *mut T,
+    wasm: &'a Wasm,
+}
+
+impl<'a, T> OutputPtr<'a, T> {
+    fn new(wasm: &'a Wasm, rust: *mut T) -> Self {
+        Self {
+            sqlite: if rust.is_null() {
+                std::ptr::null_mut()
+            } else {
+                wasm.alloc(size_of::<T>())
+            },
+            rust,
+            wasm,
+        }
+    }
+}
+
+/// Peek and dealloc sqlite memory
+impl<'a, T> Drop for OutputPtr<'a, T> {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.sqlite.is_null() {
+                assert!(!self.rust.is_null());
+                self.wasm.peek(self.sqlite, &mut *self.rust);
+                self.wasm.dealloc(self.sqlite);
+            }
+        }
+    }
+}
+
 /// Some leaked memory during function calls
 enum AllocatedT {
     // (ptr, len, cap)
@@ -157,15 +196,8 @@ pub unsafe fn sqlite3_open_v2(
     let wasm = sqlite3.wasm();
 
     // using output-pointer arguments from JS
-    let wasm_pp_db = wasm.alloc(size_of::<*mut sqlite3>());
-
-    let ret = capi.sqlite3_open_v2(cstr!(filename), wasm_pp_db.cast(), flags, cstr!(vfs));
-
-    wasm.peek(wasm_pp_db.cast(), &mut *ppDb);
-    // dealloc the ptr, because we already have the db handle
-    wasm.dealloc(wasm_pp_db);
-
-    ret
+    let ptr = OutputPtr::new(&wasm, ppDb);
+    capi.sqlite3_open_v2(cstr!(filename), ptr.sqlite.cast(), flags, cstr!(vfs))
 }
 
 /// A convenience wrapper around `sqlite3_prepare_v2()`, `sqlite3_step()`, and
@@ -230,20 +262,9 @@ pub unsafe fn sqlite3_exec(
     let wasm = sqlite3.wasm();
 
     // using output-pointer arguments from JS
-    let wasm_errmsg = wasm.alloc(size_of::<*mut ::std::os::raw::c_char>());
+    let ptr = OutputPtr::new(&wasm, pzErrMsg);
 
-    let ret = capi.sqlite3_exec(
-        db,
-        cstr!(sql),
-        callback.as_ref(),
-        pCbArg,
-        wasm_errmsg.cast(),
-    );
-
-    wasm.peek(wasm_errmsg.cast(), &mut *pzErrMsg);
-    wasm.dealloc(wasm_errmsg);
-
-    ret
+    capi.sqlite3_exec(db, cstr!(sql), callback.as_ref(), pCbArg, ptr.sqlite.cast())
 }
 
 /// Destructor for the `sqlite3` object.
@@ -360,11 +381,9 @@ pub unsafe fn sqlite3_serialize(
         capi.sqlite3_serialize(db, cstr!(schema), piSize, flags)
     } else {
         // using output-pointer arguments from JS
-        let size = wasm.alloc(size_of::<sqlite3_int64>());
-        let ptr = capi.sqlite3_serialize(db, cstr!(schema), size.cast(), flags);
-
-        wasm.peek(size, &mut *piSize);
-        wasm.dealloc(size);
+        let size = OutputPtr::new(&wasm, piSize);
+        let ptr = capi.sqlite3_serialize(db, cstr!(schema), size.sqlite.cast(), flags);
+        drop(size);
 
         let ret = serialized(ptr, *piSize as usize, &wasm);
 
@@ -1104,24 +1123,20 @@ pub unsafe fn sqlite3_prepare_v3(
     };
 
     // using output-pointer arguments from JS
-    let wasm_pp_stmt = wasm.alloc(size_of::<*mut sqlite3_stmt>());
-    let wasm_pz_tail = wasm.alloc(size_of::<*const ::std::os::raw::c_char>());
+    let pp_stmt = OutputPtr::new(&wasm, ppStmt);
+    let pz_tail = OutputPtr::new(&wasm, pzTail);
     let ret = capi.sqlite3_prepare_v3(
         db,
         wasm_z_sql as _,
         nByte,
         prepFlags,
-        wasm_pp_stmt.cast(),
-        wasm_pz_tail.cast(),
+        pp_stmt.sqlite.cast(),
+        pz_tail.sqlite.cast(),
     );
-    wasm.peek(wasm_pp_stmt, &mut *ppStmt);
-    wasm.peek(wasm_pz_tail, &mut *pzTail);
 
     // the prepared statement that is returned
     // (the sqlite3_stmt object) contains a copy of the original SQL text
     wasm.dealloc(wasm_z_sql);
-    wasm.dealloc(wasm_pp_stmt);
-    wasm.dealloc(wasm_pz_tail);
 
     ret
 }

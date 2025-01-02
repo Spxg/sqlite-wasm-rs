@@ -361,17 +361,18 @@ impl Wasm {
     /// Read T size buffer from wasm pointer
     pub unsafe fn peek<T>(&self, from: *mut u8, dst: &mut T) {
         let heap = self.heap8u();
-        let view = Uint8Array::new_with_byte_offset_and_length(&heap.buffer(), from as u32, {
-            size_of::<T>() as u32
-        });
+        let from = from as u32;
+        let end = from + size_of::<T>() as u32;
+        let view = heap.subarray(from, end);
         view.raw_copy_to_ptr(std::ptr::from_ref(dst) as *mut _);
     }
 
     /// Read specified size buffer from wasm pointer
-    pub unsafe fn peek_buf(&self, src: *mut u8, len: usize, buf: &mut [u8]) {
+    pub unsafe fn peek_buf(&self, from: *mut u8, len: usize, dest: &mut [u8]) {
         let heap = self.heap8u();
-        let view =
-            Uint8Array::new_with_byte_offset_and_length(&heap.buffer(), src as u32, len as u32);
-        view.raw_copy_to_ptr(buf.as_mut_ptr())
+        let from = from as u32;
+        let end = from + len as u32;
+        let view = heap.subarray(from, end);
+        view.raw_copy_to_ptr(dest.as_mut_ptr());
     }
 }
