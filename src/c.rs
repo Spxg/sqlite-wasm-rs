@@ -25,6 +25,11 @@ macro_rules! cstr {
     };
 }
 
+/// Convert a `String` to a `CString`
+fn cstring(s: String) -> CString {
+    CString::new(s).expect("included an internal 0 byte")
+}
+
 /// Wraps an `OutputPtr` structure
 ///
 /// Output-pointer arguments are commonplace in C.
@@ -224,19 +229,11 @@ pub unsafe fn sqlite3_exec(
             move |values: Vec<String>, names: Vec<String>| -> ::std::os::raw::c_int {
                 let mut values = values
                     .into_iter()
-                    .map(|s| {
-                        CString::new(s)
-                            .expect("included an internal 0 byte")
-                            .into_raw()
-                    })
+                    .map(|s| cstring(s).into_raw())
                     .collect::<Vec<_>>();
                 let mut names = names
                     .into_iter()
-                    .map(|s| {
-                        CString::new(s)
-                            .expect("included an internal 0 byte")
-                            .into_raw()
-                    })
+                    .map(|s| cstring(s).into_raw())
                     .collect::<Vec<_>>();
                 let ret = f(
                     pCbArg,
@@ -673,8 +670,7 @@ pub unsafe fn sqlite3_column_name(
     // is destroyed by sqlite3_finalize() or until the statement is automatically
     // reprepared by the first call to sqlite3_step() for a particular run or until
     // the next call to sqlite3_column_name() or sqlite3_column_name16() on the same column.
-    let cstr = CString::new(s).expect("sqlite says this is a utf8 text");
-    let ret = cstr.into_raw();
+    let ret = cstring(s).into_raw();
 
     // We have established a mapping relationship between stmt and (col, text).
     // When sqlite3_finalize is called, all memory will be freed or
@@ -1055,8 +1051,7 @@ pub unsafe fn sqlite3_errmsg(db: *mut sqlite3) -> *const ::std::os::raw::c_char 
     //
     // The sqlite3_errmsg() and sqlite3_errmsg16() return English-language text
     // that describes the error, as either UTF-8 or UTF-16 respectively
-    let cstr = CString::new(ret).expect("sqlite says this is a utf8 text");
-    let raw = cstr.into_raw();
+    let raw = cstring(ret).into_raw();
 
     // Replace value and free previous allocated value
     ERRMSG
