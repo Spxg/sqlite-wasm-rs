@@ -1129,6 +1129,17 @@ pub unsafe fn sqlite3_prepare_v3(
         pp_stmt.sqlite.cast(),
         pz_tail.sqlite.cast(),
     );
+    drop(pz_tail);
+
+    if !pzTail.is_null() && !(*pzTail).is_null() {
+        // pzTail will point to the unused part of the statement.
+        // Due to the difference between rust and sqlite ptr,
+        // we can use the offset here to calculate the rust pointer.
+        //
+        // `c_char` size is always 1
+        *pzTail =
+            sql.add((*pzTail as usize - wasm_z_sql as usize) / size_of::<::std::os::raw::c_char>());
+    }
 
     // the prepared statement that is returned
     // (the sqlite3_stmt object) contains a copy of the original SQL text
