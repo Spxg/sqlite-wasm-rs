@@ -1,8 +1,11 @@
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_dedicated_worker);
 
-use sqlite_wasm_rs::c;
+use core::slice;
+use sqlite_wasm_rs::c::sqlite3_stmt;
+use sqlite_wasm_rs::c::{self, SQLITE_DONE};
 use sqlite_wasm_rs::init_sqlite;
 use sqlite_wasm_rs::libsqlite3::{SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_READWRITE};
+use std::ffi::CStr;
 use std::ffi::CString;
 use wasm_bindgen_test::{console_log, wasm_bindgen_test};
 
@@ -12,8 +15,79 @@ fn cstr(s: &str) -> CString {
 
 #[wasm_bindgen_test]
 #[allow(unused)]
+async fn test_sqlite_prepare_v3_tail() {
+    init_sqlite().await.unwrap();
+    let filename = cstr(":memory:");
+    let mut db = std::ptr::null_mut();
+
+    let vfs = CString::new("opfs").unwrap();
+    let ret = unsafe {
+        c::sqlite3_open_v2(
+            filename.as_ptr(),
+            &mut db as *mut _,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+            vfs.as_ptr(),
+        )
+    };
+    assert_eq!(ret, SQLITE_OK);
+
+    let sql = "
+        CREATE TABLE test(id INTEGER PRIMARY KEY, name TEXT);
+        INSERT INTO test VALUES(1, 'Alice');
+        INSERT INTO test VALUES(2, 'Bob');
+        INSERT INTO test VALUES(3, 'Charlie');
+        SELECT * FROM test;
+        DELETE FROM test WHERE id = 2;
+        SELECT * FROM test;
+        DROP TABLE test;
+    ";
+
+    let sql = cstr(sql.trim());
+    let mut remaining_sql = sql.as_ptr();
+
+    unsafe {
+        while !remaining_sql.is_null() {
+            let remain = CStr::from_ptr(remaining_sql);
+            if remain.is_empty() {
+                break;
+            }
+            let mut stmt: *mut sqlite3_stmt = std::ptr::null_mut();
+            let mut pz_tail = std::ptr::null();
+
+            let ret =
+                c::sqlite3_prepare_v3(db, remaining_sql, -1, 0, &mut stmt as _, &mut pz_tail as _);
+            assert_eq!(ret, SQLITE_OK);
+
+            let mut rc = c::sqlite3_step(stmt);
+
+            while rc == c::SQLITE_ROW {
+                for col in 0..c::sqlite3_column_count(stmt) {
+                    let value = c::sqlite3_column_value(stmt, col);
+                    let text = c::sqlite3_value_text(value);
+                    let len = c::sqlite3_value_bytes(value);
+                    let slice = slice::from_raw_parts(text, len as usize);
+                    let text = std::str::from_utf8(slice).unwrap();
+                    console_log!("Column {}: {:?}", col, text);
+                }
+                rc = c::sqlite3_step(stmt);
+            }
+
+            if rc == SQLITE_DONE {
+                console_log!("SQL executed successfully.");
+                c::sqlite3_finalize(stmt);
+                remaining_sql = pz_tail;
+            }
+        }
+    }
+    unsafe {
+        c::sqlite3_close_v2(db);
+    }
+}
+
+#[wasm_bindgen_test]
+#[allow(unused)]
 async fn test_open_v2_and_exec_opfs_c() {
-    init_sqlite().await;
+    init_sqlite().await.unwrap();
 
     let filename = cstr("test_open_v2_and_exec_opfs_c.db");
     let mut db = std::ptr::null_mut();
