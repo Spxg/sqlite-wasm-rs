@@ -261,8 +261,21 @@ pub unsafe fn sqlite3_exec(
 
     // using output-pointer arguments from JS
     let ptr = OutputPtr::new(&wasm, pzErrMsg);
+    let ret = capi.sqlite3_exec(db, cstr!(sql), callback.as_ref(), pCbArg, ptr.sqlite.cast());
+    drop(ptr);
 
-    capi.sqlite3_exec(db, cstr!(sql), callback.as_ref(), pCbArg, ptr.sqlite.cast())
+    // convert to rust's cstr
+    if !pzErrMsg.is_null() && !(*pzErrMsg).is_null() {
+        // convert to string
+        let errmsg = wasm.cstr_to_js((*pzErrMsg).cast());
+        // free sqlite errmsg
+        capi.sqlite3_free((*pzErrMsg).cast());
+        let raw = cstring(errmsg).into_raw();
+        *pzErrMsg = raw;
+        allocated().insert(Ptr(raw.cast()), AllocatedT::CString(raw));
+    }
+
+    ret
 }
 
 /// Destructor for the `sqlite3` object.

@@ -1,8 +1,8 @@
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_dedicated_worker);
 
 use core::slice;
-use sqlite_wasm_rs::c::sqlite3_stmt;
 use sqlite_wasm_rs::c::{self, SQLITE_DONE};
+use sqlite_wasm_rs::c::{sqlite3_stmt, SQLITE_ERROR};
 use sqlite_wasm_rs::init_sqlite;
 use sqlite_wasm_rs::libsqlite3::{SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_READWRITE};
 use std::ffi::CStr;
@@ -11,6 +11,42 @@ use wasm_bindgen_test::{console_log, wasm_bindgen_test};
 
 fn cstr(s: &str) -> CString {
     CString::new(s).unwrap()
+}
+
+#[wasm_bindgen_test]
+#[allow(unused)]
+async fn test_exec_errmsg() {
+    init_sqlite().await.unwrap();
+
+    let filename = cstr(":memory:");
+    let mut db = std::ptr::null_mut();
+    let ret = unsafe {
+        c::sqlite3_open_v2(
+            filename.as_ptr(),
+            &mut db as *mut _,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+            std::ptr::null(),
+        )
+    };
+    assert_eq!(SQLITE_OK, ret);
+
+    let mut errmsg: *mut ::std::os::raw::c_char = std::ptr::null_mut();
+    let sql = cstr("SELECT * FROM non_existent_table");
+    let ret = unsafe {
+        c::sqlite3_exec(
+            db,
+            sql.as_ptr(),
+            None,
+            std::ptr::null_mut(),
+            &mut errmsg as *mut _,
+        )
+    };
+    assert_eq!(SQLITE_ERROR, ret);
+    let msg = unsafe { CStr::from_ptr(errmsg) };
+    console_log!("{msg:?}");
+    unsafe {
+        c::sqlite3_free((errmsg).cast());
+    }
 }
 
 #[wasm_bindgen_test]
@@ -103,10 +139,18 @@ async fn test_open_v2_and_exec_opfs_c() {
     };
     assert_eq!(SQLITE_OK, ret);
 
-    let errmsg = std::ptr::null_mut();
+    let mut errmsg: *mut ::std::os::raw::c_char = std::ptr::null_mut();
     // drop first
     let sql = cstr("DROP TABLE COMPANY;");
-    let ret = unsafe { c::sqlite3_exec(db, sql.as_ptr(), None, std::ptr::null_mut(), errmsg) };
+    let ret = unsafe {
+        c::sqlite3_exec(
+            db,
+            sql.as_ptr(),
+            None,
+            std::ptr::null_mut(),
+            &mut errmsg as *mut _,
+        )
+    };
     if (SQLITE_OK == ret) {
         console_log!("test_open_v2_and_exec_opfs: table exist before test, dropped");
     }
@@ -117,11 +161,27 @@ async fn test_open_v2_and_exec_opfs_c() {
                         NAME           TEXT    NOT NULL );",
     );
 
-    let ret = unsafe { c::sqlite3_exec(db, sql.as_ptr(), None, std::ptr::null_mut(), errmsg) };
+    let ret = unsafe {
+        c::sqlite3_exec(
+            db,
+            sql.as_ptr(),
+            None,
+            std::ptr::null_mut(),
+            &mut errmsg as *mut _,
+        )
+    };
     assert_eq!(SQLITE_OK, ret);
 
     let sql = cstr("INSERT INTO COMPANY (ID,NAME) VALUES (1, 'John Doe');");
-    let ret = unsafe { c::sqlite3_exec(db, sql.as_ptr(), None, std::ptr::null_mut(), errmsg) };
+    let ret = unsafe {
+        c::sqlite3_exec(
+            db,
+            sql.as_ptr(),
+            None,
+            std::ptr::null_mut(),
+            &mut errmsg as *mut _,
+        )
+    };
     assert_eq!(SQLITE_OK, ret);
 
     let sql = cstr("SELECT * FROM COMPANY;");
@@ -152,6 +212,14 @@ async fn test_open_v2_and_exec_opfs_c() {
         std::mem::forget(names);
         0
     }
-    let ret = unsafe { c::sqlite3_exec(db, sql.as_ptr(), Some(f), std::ptr::null_mut(), errmsg) };
+    let ret = unsafe {
+        c::sqlite3_exec(
+            db,
+            sql.as_ptr(),
+            Some(f),
+            std::ptr::null_mut(),
+            &mut errmsg as *mut _,
+        )
+    };
     assert_eq!(SQLITE_OK, ret);
 }
