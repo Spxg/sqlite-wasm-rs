@@ -353,6 +353,11 @@ extern "C" {
     /// but it should never be cached for later use.
     #[wasm_bindgen(method)]
     pub fn heap8u(this: &Wasm) -> Uint8Array;
+
+    /// Expects its argument to be a pointer into the WASM heap memory which
+    /// refers to a NUL-terminated C-style string encoded as UTF-8.
+    #[wasm_bindgen(method, js_name = "cstrToJs")]
+    pub fn cstr_to_js(this: &Wasm, ptr: *const ::std::os::raw::c_char) -> String;
 }
 
 impl Wasm {
