@@ -141,7 +141,7 @@ fn stmt_sqlite3_values_allocated() -> MutexGuard<'static, HashMap<Ptr, Vec<Ptr>>
         Lazy::new(|| Mutex::new(HashMap::new()));
     STMT_SQLITE3_VALUES_ALLOCATED
         .lock()
-        .expect("acquire stmt sqlite3 valeus allocated lock failed")
+        .expect("acquire stmt sqlite3 values allocated lock failed")
 }
 
 /// Maintain a list of `sqlite3_value` allocated memory
@@ -151,7 +151,7 @@ fn sqlite3_values_allocated() -> MutexGuard<'static, HashMap<Ptr, AllocatedT>> {
         Lazy::new(|| Mutex::new(HashMap::new()));
     SQLITE3_VALUES_ALLOCATED
         .lock()
-        .expect("acquire sqlite3 valeus allocated lock failed")
+        .expect("acquire sqlite3 values allocated lock failed")
 }
 
 /// Get a static reference to sqlite.
