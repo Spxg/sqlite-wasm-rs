@@ -28,6 +28,18 @@ export class SQLite {
     });
   }
 
+  pokeBuf(mem, src, dst, len) {
+    const rust = new Uint8Array(mem.buffer, src, len);
+    const sqlite = this.sqlite3.wasm.heap8u().subarray(dst, dst + len);
+    sqlite.set(rust, 0);
+  }
+
+  peekBuf(mem, src, dst, len) {
+    const rust = new Uint8Array(mem.buffer, dst, len);
+    const sqlite = this.sqlite3.wasm.heap8u().subarray(src, src + len);
+    rust.set(sqlite, 0);
+  }
+
   version() {
     return this.sqlite3.version;
   }

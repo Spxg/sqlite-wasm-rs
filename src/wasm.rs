@@ -6,8 +6,7 @@ use crate::{
     c::{sqlite3_stmt, sqlite3_value},
     libsqlite3::{sqlite3, sqlite3_context, sqlite3_int64},
 };
-use js_sys::{Object, Uint8Array};
-use std::mem::size_of;
+use js_sys::{Object, WebAssembly};
 use wasm_bindgen::{
     prelude::{wasm_bindgen, Closure},
     JsValue,
@@ -44,6 +43,25 @@ extern "C" {
 
     #[wasm_bindgen(method)]
     pub fn version(this: &SQLite) -> JsValue;
+
+    #[wasm_bindgen(method, js_name = "pokeBuf")]
+    pub fn poke_buf(
+        this: &SQLite,
+        memory: &WebAssembly::Memory,
+        src: *const u8,
+        dst: *mut u8,
+        len: u32,
+    );
+
+    #[wasm_bindgen(method, js_name = "peekBuf")]
+    pub fn peek_buf(
+        this: &SQLite,
+        memory: &WebAssembly::Memory,
+        src: *const u8,
+        dst: *mut u8,
+        len: u32,
+    );
+
 }
 
 /// https://github.com/sqlite/sqlite-wasm/blob/main/index.d.ts
@@ -344,62 +362,8 @@ extern "C" {
     #[wasm_bindgen(method)]
     pub fn dealloc(this: &Wasm, ptr: *mut u8);
 
-    /// View into the wasm memory reprsented as unsigned 8-bit integers
-    ///
-    /// It is important never to hold on to objects returned from methods
-    /// like heap8u() long-term, as they may be invalidated if the heap grows.
-    /// It is acceptable to hold the reference for a brief series of calls, so
-    /// long as those calls are guaranteed not to allocate memory on the WASM heap,
-    /// but it should never be cached for later use.
-    #[wasm_bindgen(method)]
-    pub fn heap8u(this: &Wasm) -> Uint8Array;
-
     /// Expects its argument to be a pointer into the WASM heap memory which
     /// refers to a NUL-terminated C-style string encoded as UTF-8.
     #[wasm_bindgen(method, js_name = "cstrToJs")]
     pub fn cstr_to_js(this: &Wasm, ptr: *const ::std::os::raw::c_char) -> String;
-}
-
-impl Wasm {
-    /// Write buffer to wasm pointer
-    pub fn poke(&self, from: &[u8], dst: *mut u8) {
-        let heap = self.heap8u();
-        let offset = dst as usize / size_of::<u8>();
-
-        // Never use `&[u8]` to convert to `Uint8Array`
-        // because the `Uint8Array` will be detached when the memory grows.
-        for (idx, &val) in from.into_iter().enumerate() {
-            heap.set_index((offset + idx) as u32, val);
-        }
-    }
-
-    /// Read T size buffer from wasm pointer
-    pub unsafe fn peek<T>(&self, from: *mut u8, dst: &mut T) {
-        let heap = self.heap8u();
-        let from = from as u32;
-        let end = from + size_of::<T>() as u32;
-        let view = heap.subarray(from, end);
-
-        // Never use `raw_copy_to_ptr` etc. functions,
-        // because the `Uint8Array` will be detached when the memory grows.
-        let dst = std::ptr::from_ref(dst) as *mut u8;
-        view.for_each(&mut |val, idx, _| {
-            std::ptr::write(dst.add(idx as usize), val);
-        });
-    }
-
-    /// Read specified size buffer from wasm pointer
-    pub unsafe fn peek_buf(&self, from: *mut u8, len: usize, dst: &mut [u8]) {
-        let heap = self.heap8u();
-        let from = from as u32;
-        let end = from + len as u32;
-        let view = heap.subarray(from, end);
-
-        // Never use `raw_copy_to_ptr` etc. functions,
-        // because the `Uint8Array` will be detached when the memory grows.
-        let dst = dst.as_mut_ptr();
-        view.for_each(&mut |val, idx, _| {
-            std::ptr::write(dst.add(idx as usize), val);
-        });
-    }
 }
