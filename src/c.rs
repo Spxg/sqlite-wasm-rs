@@ -2,7 +2,7 @@
 
 pub use crate::init_sqlite;
 pub use crate::libsqlite3::*;
-use crate::{wasm::Wasm, SQLite};
+use crate::SQLite;
 use once_cell::sync::Lazy;
 use std::mem::{size_of, ManuallyDrop};
 use std::sync::{Mutex, MutexGuard};
@@ -39,19 +39,19 @@ struct OutputPtr<'a, T> {
     sqlite: *mut u8,
     // rust ptr
     rust: *mut T,
-    wasm: &'a Wasm,
+    mmu: &'a SQLite,
 }
 
 impl<'a, T> OutputPtr<'a, T> {
-    fn new(wasm: &'a Wasm, rust: *mut T) -> Self {
+    fn new(sqlite: &'a SQLite, rust: *mut T) -> Self {
         Self {
             sqlite: if rust.is_null() {
                 std::ptr::null_mut()
             } else {
-                wasm.alloc(size_of::<T>())
+                sqlite.wasm().alloc(size_of::<T>())
             },
             rust,
-            wasm,
+            mmu: sqlite,
         }
     }
 }
@@ -62,8 +62,8 @@ impl<'a, T> Drop for OutputPtr<'a, T> {
         unsafe {
             if !self.sqlite.is_null() {
                 assert!(!self.rust.is_null());
-                self.wasm.peek(self.sqlite, &mut *self.rust);
-                self.wasm.dealloc(self.sqlite);
+                self.mmu.peek(self.sqlite, &mut *self.rust);
+                self.mmu.wasm().dealloc(self.sqlite);
             }
         }
     }
@@ -199,10 +199,9 @@ pub unsafe fn sqlite3_open_v2(
 ) -> ::std::os::raw::c_int {
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
-    let wasm = sqlite3.wasm();
 
     // using output-pointer arguments from JS
-    let ptr = OutputPtr::new(&wasm, ppDb);
+    let ptr = OutputPtr::new(sqlite3, ppDb);
     capi.sqlite3_open_v2(cstr!(filename), ptr.sqlite.cast(), flags, cstr!(vfs))
 }
 
@@ -260,7 +259,7 @@ pub unsafe fn sqlite3_exec(
     let wasm = sqlite3.wasm();
 
     // using output-pointer arguments from JS
-    let ptr = OutputPtr::new(&wasm, pzErrMsg);
+    let ptr = OutputPtr::new(sqlite3, pzErrMsg);
     let ret = capi.sqlite3_exec(db, cstr!(sql), callback.as_ref(), pCbArg, ptr.sqlite.cast());
     drop(ptr);
 
@@ -337,7 +336,7 @@ pub unsafe fn sqlite3_deserialize(
         let wasm_p_data = wasm.alloc(bufferSize.max(1) as usize);
 
         let slice = slice::from_raw_parts(data.cast_const(), bufferSize as usize);
-        wasm.poke(slice, wasm_p_data);
+        sqlite3.poke_buf(slice, wasm_p_data);
 
         // wasm ptr cannot be freed because it is a memory DB in SQLITE_DESERIALIZE_READONLY
         // and SQLITE_DESERIALIZE_FREEONCLOSE will automatically free it
@@ -371,9 +370,9 @@ pub unsafe fn sqlite3_serialize(
     piSize: *mut sqlite3_int64,
     flags: ::std::os::raw::c_uint,
 ) -> *mut ::std::os::raw::c_uchar {
-    unsafe fn serialized(ptr: *mut u8, len: usize, wasm: &Wasm) -> *mut std::os::raw::c_uchar {
+    unsafe fn serialized(ptr: *mut u8, len: usize, sqlite: &SQLite) -> *mut std::os::raw::c_uchar {
         let mut data = vec![0; len];
-        wasm.peek_buf(ptr, len as usize, data.as_mut_slice());
+        sqlite.peek_buf(ptr, data.as_mut_slice());
 
         let (ret, len, cap) = vec_into_raw_parts(data);
 
@@ -385,18 +384,17 @@ pub unsafe fn sqlite3_serialize(
 
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
-    let wasm = sqlite3.wasm();
 
     // I don't know how to handle this, so I'll leave it to sqlite3
     if piSize.is_null() {
         capi.sqlite3_serialize(db, cstr!(schema), piSize, flags)
     } else {
         // using output-pointer arguments from JS
-        let size = OutputPtr::new(&wasm, piSize);
+        let size = OutputPtr::new(sqlite3, piSize);
         let ptr = capi.sqlite3_serialize(db, cstr!(schema), size.sqlite.cast(), flags);
         drop(size);
 
-        let ret = serialized(ptr, *piSize as usize, &wasm);
+        let ret = serialized(ptr, *piSize as usize, sqlite3);
 
         // After the call, if the SQLITE_SERIALIZE_NOCOPY bit had been set,
         // the returned buffer content will remain accessible and unchanged until either the next write operation
@@ -452,7 +450,6 @@ pub unsafe fn sqlite3_create_function_v2(
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
 
-    let wasm = sqlite3.wasm();
     let xFunc = xFunc.map(|f| {
         Closure::new(
             move |arg1: *mut sqlite3_context,
@@ -461,7 +458,7 @@ pub unsafe fn sqlite3_create_function_v2(
                 let mut values = vec![std::ptr::null_mut(); arg2 as usize];
                 for (offset, value) in (0..).zip(values.iter_mut()) {
                     // peek pointer to get *mut sqlite3_value
-                    wasm.peek(arg3.offset(offset).cast(), &mut *value);
+                    sqlite().peek(arg3.offset(offset).cast(), &mut *value);
                 }
                 f(arg1, arg2, values.as_mut_ptr());
                 // After xFunc is executed, the memory obtained by sqlite3_value,
@@ -473,7 +470,6 @@ pub unsafe fn sqlite3_create_function_v2(
         )
     });
 
-    let wasm = sqlite3.wasm();
     let xStep = xStep.map(|f| {
         Closure::new(
             move |arg1: *mut sqlite3_context,
@@ -481,7 +477,7 @@ pub unsafe fn sqlite3_create_function_v2(
                   arg3: *mut *mut sqlite3_value| {
                 let mut values = vec![std::ptr::null_mut(); arg2 as usize];
                 for (offset, value) in (0..).zip(values.iter_mut()) {
-                    wasm.peek(arg3.offset(offset).cast(), &mut *value);
+                    sqlite().peek(arg3.offset(offset).cast(), &mut *value);
                 }
                 f(arg1, arg2, values.as_mut_ptr());
                 // After xStep is executed, the memory obtained by sqlite3_value in this step,
@@ -597,7 +593,7 @@ pub unsafe fn sqlite3_result_blob(
         let slice = slice::from_raw_parts(blob.cast::<u8>(), blobLen as usize);
         let wasm_ptr = wasm.alloc(blobLen.max(1) as usize);
 
-        wasm.poke(slice, wasm_ptr);
+        sqlite3.poke_buf(slice, wasm_ptr);
 
         capi.sqlite3_result_blob(ctx, wasm_ptr as _, blobLen, dtor);
 
@@ -731,7 +727,7 @@ pub unsafe fn sqlite3_bind_blob(
         let slice = slice::from_raw_parts(blob.cast::<u8>(), n as usize);
         let wasm_ptr = wasm.alloc(n.max(1) as usize);
 
-        wasm.poke(slice, wasm_ptr);
+        sqlite3.poke_buf(slice, wasm_ptr);
 
         let ret = capi.sqlite3_bind_blob(stmt, idx, wasm_ptr as *const _, n, dtor);
 
@@ -770,7 +766,7 @@ pub unsafe fn sqlite3_bind_text(
     } else {
         let slice = slice::from_raw_parts(text.cast::<u8>(), n as usize);
         let wasm_ptr = wasm.alloc(n.max(1) as usize);
-        wasm.poke(slice, wasm_ptr);
+        sqlite3.poke_buf(slice, wasm_ptr);
 
         let ret = capi.sqlite3_bind_text(stmt, idx, wasm_ptr as _, n, dtor);
 
@@ -816,7 +812,6 @@ pub unsafe fn sqlite3_value_text(
 ) -> *const ::std::os::raw::c_uchar {
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
-    let wasm = sqlite3.wasm();
 
     // Call sqlite3_value_text returns cstr, which is very confusing to me.
     // There is no such problem on the native platform.
@@ -825,7 +820,7 @@ pub unsafe fn sqlite3_value_text(
     let ptr = capi.sqlite3_value_blob(sqliteValue);
     let len = capi.sqlite3_value_bytes(sqliteValue);
     let mut data = vec![0; len as usize];
-    wasm.peek_buf(ptr as _, len as usize, data.as_mut_slice());
+    sqlite3.peek_buf(ptr as _, data.as_mut_slice());
     let (ret, len, cap) = vec_into_raw_parts(data);
 
     // We record the memory allocated for sqlite3_value so that
@@ -844,12 +839,11 @@ pub unsafe fn sqlite3_value_text(
 pub unsafe fn sqlite3_value_blob(sqliteValue: *mut sqlite3_value) -> *const ::std::os::raw::c_void {
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
-    let wasm = sqlite3.wasm();
 
     let ptr = capi.sqlite3_value_blob(sqliteValue);
     let len = capi.sqlite3_value_bytes(sqliteValue);
     let mut data = vec![0; len as usize];
-    wasm.peek_buf(ptr as _, len as usize, data.as_mut_slice());
+    sqlite3.peek_buf(ptr as _, data.as_mut_slice());
     let (ret, len, cap) = vec_into_raw_parts(data);
 
     // We record the memory allocated for sqlite3_value so that
@@ -953,7 +947,6 @@ pub unsafe fn sqlite3_create_collation_v2(
 ) -> ::std::os::raw::c_int {
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
-    let wasm = sqlite3.wasm();
 
     let xCompare = xCompare.map(|f| {
         Closure::new(
@@ -963,11 +956,11 @@ pub unsafe fn sqlite3_create_collation_v2(
                   arg4: ::std::os::raw::c_int,
                   arg5: *const ::std::os::raw::c_void| {
                 let mut str1 = vec![0u8; arg2 as usize];
-                wasm.peek_buf(arg3 as _, arg2 as usize, str1.as_mut_slice());
+                sqlite().peek_buf(arg3 as _, str1.as_mut_slice());
                 let str1 = str::from_utf8(&str1).expect("expect utf8 text");
 
                 let mut str2 = vec![0u8; arg4 as usize];
-                wasm.peek_buf(arg5 as _, arg4 as usize, str2.as_mut_slice());
+                sqlite().peek_buf(arg5 as _, str2.as_mut_slice());
                 let str2 = str::from_utf8(&str2).expect("expect utf8 text");
 
                 f(arg1, arg2, str1.as_ptr().cast(), arg4, str2.as_ptr().cast())
@@ -1127,13 +1120,13 @@ pub unsafe fn sqlite3_prepare_v3(
         } else {
             (wasm.alloc(nByte.max(1) as usize), nByte as usize)
         };
-        wasm.poke(slice::from_raw_parts(sql.cast(), len), wasm_z_sql);
+        sqlite3.poke_buf(slice::from_raw_parts(sql.cast(), len), wasm_z_sql);
         wasm_z_sql
     };
 
     // using output-pointer arguments from JS
-    let pp_stmt = OutputPtr::new(&wasm, ppStmt);
-    let pz_tail = OutputPtr::new(&wasm, pzTail);
+    let pp_stmt = OutputPtr::new(sqlite3, ppStmt);
+    let pz_tail = OutputPtr::new(sqlite3, pzTail);
     let ret = capi.sqlite3_prepare_v3(
         db,
         wasm_z_sql as _,
@@ -1194,7 +1187,6 @@ pub unsafe fn sqlite3_aggregate_context(
     //
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
-    let wasm = sqlite3.wasm();
 
     let ptr = capi.sqlite3_aggregate_context(ctx, nBytes);
     if ptr.is_null() {
@@ -1207,7 +1199,7 @@ pub unsafe fn sqlite3_aggregate_context(
     }
 
     let mut data = vec![0; nBytes as usize];
-    wasm.peek_buf(ptr.cast(), nBytes as _, data.as_mut_slice());
+    sqlite3.peek_buf(ptr.cast(), data.as_mut_slice());
     let (ret, len, cap) = vec_into_raw_parts(data);
 
     // Why use the ptr returned by sqlite3_aggregate_context as the key

@@ -15,12 +15,15 @@ pub mod wasm;
 mod fragile;
 
 use fragile::FragileComfirmed;
-use js_sys::{Object, WebAssembly::Memory};
+use js_sys::{
+    Object,
+    WebAssembly::{self, Memory},
+};
 use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt::Display, result::Result};
 use tokio::sync::OnceCell;
 use wasm::{CApi, Wasm};
-use wasm_bindgen::JsValue;
+use wasm_bindgen::{JsCast, JsValue};
 
 /// Sqlite only needs to be initialized once
 static SQLITE: OnceCell<SQLite> = OnceCell::const_new();
@@ -191,5 +194,31 @@ impl SQLite {
     #[must_use]
     pub fn wasm(&self) -> Wasm {
         self.ffi.handle().wasm()
+    }
+}
+
+/// Peek and Poke on the JS side
+///
+/// See <https://github.com/rustwasm/wasm-bindgen/issues/4395>
+///
+/// See <https://github.com/rustwasm/wasm-bindgen/issues/4392>
+impl SQLite {
+    unsafe fn poke_buf(&self, src: &[u8], dst: *mut u8) {
+        let buf = wasm_bindgen::memory();
+        let mem = buf.unchecked_ref::<WebAssembly::Memory>();
+        self.ffi.poke_buf(mem, src.as_ptr(), dst, src.len() as u32)
+    }
+
+    unsafe fn peek<T>(&self, from: *mut u8, dst: &mut T) {
+        let dst = std::ptr::from_ref(dst) as *mut u8;
+        let slice = unsafe { std::slice::from_raw_parts_mut(dst, size_of::<T>()) };
+        self.peek_buf(from, slice);
+    }
+
+    unsafe fn peek_buf(&self, src: *const u8, dst: &mut [u8]) {
+        let buf = wasm_bindgen::memory();
+        let mem = buf.unchecked_ref::<WebAssembly::Memory>();
+        self.ffi
+            .peek_buf(mem, src, dst.as_mut_ptr(), dst.len() as u32)
     }
 }
