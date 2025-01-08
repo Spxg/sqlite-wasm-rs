@@ -492,7 +492,7 @@ pub unsafe fn sqlite3_create_function_v2(
     let xFinal = xFinal.map(|f| {
         Closure::new(move |ctx: *mut sqlite3_context| {
             // If xStep has not allocated memory, this is null
-            let aggreagate = sqlite3_aggregate_context(ctx, 0);
+            let aggreagate = sqlite().capi().sqlite3_aggregate_context(ctx, 0);
             f(ctx);
 
             // If it is not null, free the memory of aggregate_context (actually rust's memory),
