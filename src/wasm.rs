@@ -6,7 +6,7 @@ use crate::{
     c::{sqlite3_stmt, sqlite3_value},
     libsqlite3::{sqlite3, sqlite3_context, sqlite3_int64},
 };
-use js_sys::{Object, WebAssembly};
+use js_sys::{Error, Object, WebAssembly};
 use wasm_bindgen::{
     prelude::{wasm_bindgen, Closure},
     JsValue,
@@ -27,7 +27,7 @@ extern "C" {
     pub type SQLiteHandle;
 
     #[wasm_bindgen(static_method_of = SQLite, catch)]
-    pub async fn init(module: &Object) -> Result<JsValue, JsValue>;
+    pub async fn init(module: &Object) -> Result<JsValue, Error>;
 
     #[wasm_bindgen(constructor)]
     pub fn new(module: JsValue) -> SQLite;
@@ -62,6 +62,65 @@ extern "C" {
         len: u32,
     );
 
+    #[wasm_bindgen(method, js_name = "installOpfsSAHPoolVfs", catch)]
+    pub async fn install_opfs_sahpool(
+        this: &SQLiteHandle,
+        cfg: Option<&Object>,
+    ) -> Result<OpfsSAHPoolUtil, Error>;
+}
+
+#[wasm_bindgen]
+extern "C" {
+    pub type OpfsSAHPoolUtil;
+
+    /// Adds n entries to the current pool.
+    #[wasm_bindgen(method, js_name = "addCapacity")]
+    pub async fn add_capacity(this: &OpfsSAHPoolUtil, capacity: u32);
+
+    /// Removes up to n entries from the pool, with the caveat that
+    /// it can only remove currently-unused entries.
+    #[wasm_bindgen(method, js_name = "reduceCapacity")]
+    pub async fn reduce_capacity(this: &OpfsSAHPoolUtil, capacity: u32);
+
+    /// Returns the number of files currently contained in the SAH pool.
+    #[wasm_bindgen(method, js_name = "getCapacity")]
+    pub fn get_capacity(this: &OpfsSAHPoolUtil) -> u32;
+
+    /// Returns the number of files from the pool currently allocated to VFS slots.
+    #[wasm_bindgen(method, js_name = "getFileCount")]
+    pub fn get_file_count(this: &OpfsSAHPoolUtil) -> u32;
+
+    /// Returns an array of the names of the files currently allocated to VFS slots.
+    #[wasm_bindgen(method, js_name = "getFileNames")]
+    pub fn get_file_names(this: &OpfsSAHPoolUtil) -> Vec<String>;
+
+    /// Removes up to n entries from the pool, with the caveat that it can only
+    /// remove currently-unused entries.
+    #[wasm_bindgen(method, js_name = "reserveMinimumCapacity")]
+    pub async fn reserve_minimum_capacity(this: &OpfsSAHPoolUtil, capacity: u32);
+
+    /// Synchronously reads the contents of the given file into a Uint8Array and returns it.
+    #[wasm_bindgen(method, js_name = "exportFile", catch)]
+    pub fn export_file(this: &OpfsSAHPoolUtil, file: &str) -> Result<Vec<u8>, Error>;
+
+    /// Imports the contents of an SQLite database, provided as a byte array or ArrayBuffer,
+    /// under the given name, overwriting any existing content.
+    #[wasm_bindgen(method, js_name = "importDb", catch)]
+    pub fn import_db(this: &OpfsSAHPoolUtil, name: &str, bytes: Vec<u8>) -> Result<(), Error>;
+
+    /// Clears all client-defined state of all SAHs and makes all of them available
+    /// for re-use by the pool.
+    #[wasm_bindgen(method, js_name = "wipeFiles")]
+    pub async fn wipe_files(this: &OpfsSAHPoolUtil);
+
+    /// If a virtual file exists with the given name, disassociates it
+    /// from the pool and returns true, else returns false without side effects.
+    #[wasm_bindgen(method, js_name = "unlink")]
+    pub fn unlink(this: &OpfsSAHPoolUtil, filename: &str);
+
+    /// Unregisters the VFS and removes its directory from OPFS (which means all client content is destroyed).
+    #[wasm_bindgen(method, js_name = "removeVfs")]
+    pub async fn remove_vfs(this: &OpfsSAHPoolUtil);
 }
 
 /// https://github.com/sqlite/sqlite-wasm/blob/main/index.d.ts
