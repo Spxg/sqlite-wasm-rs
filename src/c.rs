@@ -57,7 +57,7 @@ impl<'a, T> OutputPtr<'a, T> {
 }
 
 /// Peek and dealloc sqlite memory
-impl<'a, T> Drop for OutputPtr<'a, T> {
+impl<T> Drop for OutputPtr<'_, T> {
     fn drop(&mut self) {
         unsafe {
             if !self.sqlite.is_null() {
@@ -887,7 +887,6 @@ pub unsafe fn sqlite3_value_type(sqliteValue: *mut sqlite3_value) -> ::std::os::
 /// pointer value, then the result is a NULL value.
 ///
 /// See <https://www.sqlite.org/c3ref/value_dup.html>
-#[must_use]
 pub unsafe fn sqlite3_value_dup(sqliteValue: *const sqlite3_value) -> *mut sqlite3_value {
     sqlite().capi().sqlite3_value_dup(sqliteValue)
 }
