@@ -19,8 +19,8 @@ use js_sys::{Object, WebAssembly};
 use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt::Display, result::Result};
 use tokio::sync::OnceCell;
-use wasm::{CApi, Wasm};
-use wasm_bindgen::{JsCast, JsValue};
+use wasm::{CApi, OpfsSAHPoolUtil, Wasm};
+use wasm_bindgen::JsCast;
 
 /// Sqlite only needs to be initialized once
 static SQLITE: OnceCell<SQLite> = OnceCell::const_new();
@@ -64,20 +64,49 @@ pub struct Version {
     pub download_version: u32,
 }
 
+/// See <https://sqlite.org/wasm/doc/trunk/persistence.md#vfs-opfs-sahpool>
+#[derive(Serialize, Clone, Debug)]
+pub struct OpfsSAHPoolCfg {
+    // If truthy, contents and filename mapping are removed from each SAH
+    // as it is acquired during initalization of the VFS, leaving the VFS's
+    // storage in a pristine state. Use this only for databases which need not
+    // survive a page reload.
+    #[serde(rename = "clearOnInit")]
+    pub clear_on_init: bool,
+    // Specifies the default capacity of the VFS, i.e. the number of files
+    // it may contain.
+    #[serde(rename = "initialCapacity")]
+    pub initial_capacity: u32,
+    // Specifies the OPFS directory name in which to store metadata for the VFS.
+    pub directory: String,
+    // Sets the name to register this VFS under.
+    pub name: String,
+    // It is an opt-in workaround for a particular browser quirk which can cause
+    // initialization of this VFS to fail on its first attempt but to succeed if
+    // a second attempt is tried a short time later
+    #[serde(rename = "forceReinitIfPreviouslyFailed")]
+    pub force_reinit_if_previously_failed: bool,
+}
+
 /// Possible errors in initializing sqlite
 #[derive(Debug)]
 pub enum SQLiteError {
     /// error in initializing module
-    Module(JsValue),
+    InitModule(js_sys::Error),
     /// serialization and deserialization errors
     Serde(serde_wasm_bindgen::Error),
+    /// error in installing opfs sah pool vfs
+    InstallOpfsSAHPoolVfs(js_sys::Error),
 }
 
 impl Display for SQLiteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Module(msg) => f.debug_tuple("Module").field(msg).finish(),
+            Self::InitModule(msg) => f.debug_tuple("InitModule").field(msg).finish(),
             Self::Serde(msg) => f.debug_tuple("Serde").field(msg).finish(),
+            Self::InstallOpfsSAHPoolVfs(msg) => {
+                f.debug_tuple("InstallOpfsSAHPoolVfs").field(msg).finish()
+            }
         }
     }
 }
@@ -99,7 +128,6 @@ impl SQLite {
     /// `SQLiteError::Module`: error in initializing module
     ///
     /// `SQLiteError::Serde`: serialization and deserialization errors
-    ///
     async fn new() -> Result<Self, SQLiteError> {
         let proxy_uri = wasm_bindgen::link_to!(module = "/src/jswasm/sqlite3-opfs-async-proxy.js");
 
@@ -111,7 +139,7 @@ impl SQLite {
         let opts = serde_wasm_bindgen::to_value(&opts).map_err(SQLiteError::Serde)?;
         let module = wasm::SQLite::init(&Object::from(opts))
             .await
-            .map_err(SQLiteError::Module)?;
+            .map_err(SQLiteError::InitModule)?;
 
         let sqlite = wasm::SQLite::new(module);
 
@@ -124,6 +152,32 @@ impl SQLite {
         };
 
         Ok(sqlite)
+    }
+
+    /// install_opfs_sahpool() returns a Promise which resolves, on success, to a utility object
+    /// which can be used to perform basic administration of the file pool (colloquially known as `PoolUtil`).
+    ///
+    /// # Errors
+    ///
+    /// `SQLiteError::Serde`: serialization and deserialization errors
+    ///
+    /// `SQLiteError::InstallOpfsSAHPoolVfs`: error in installing opfs sah pool vfs
+    pub async fn install_opfs_sahpool(
+        &self,
+        cfg: Option<&OpfsSAHPoolCfg>,
+    ) -> Result<OpfsSAHPoolUtil, SQLiteError> {
+        let cfg = cfg
+            .map(|cfg| {
+                serde_wasm_bindgen::to_value(&cfg)
+                    .map_err(SQLiteError::Serde)
+                    .map(Object::from)
+            })
+            .transpose()?;
+        self.ffi
+            .handle()
+            .install_opfs_sahpool(cfg.as_ref())
+            .await
+            .map_err(SQLiteError::InstallOpfsSAHPoolVfs)
     }
 
     /// SQLite version
