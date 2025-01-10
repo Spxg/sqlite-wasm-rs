@@ -5,7 +5,7 @@ Wrap the official [`sqlite-wasm`](https://github.com/sqlite/sqlite-wasm), and ex
 ## Usage
 
 ```rust
-use sqlite_wasm_rs::c as ffi;
+use sqlite_wasm_rs::export as ffi;
 use std::ffi::CString;
 
 async fn open_db() -> anyhow::Result<()> {

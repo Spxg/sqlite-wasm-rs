@@ -2,10 +2,7 @@
 //! It is called "raw" because the memory needs to be handled by yourself.
 //! It is not recommended to use it directly, please use the `c` module.
 
-use crate::{
-    c::{sqlite3_stmt, sqlite3_value},
-    libsqlite3::{sqlite3, sqlite3_context, sqlite3_int64},
-};
+use crate::libsqlite3::*;
 use js_sys::{Error, Object, WebAssembly};
 use wasm_bindgen::{
     prelude::{wasm_bindgen, Closure},

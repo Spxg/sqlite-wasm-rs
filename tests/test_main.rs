@@ -1,10 +1,7 @@
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_dedicated_worker);
 
 use core::slice;
-use sqlite_wasm_rs::c::{self, sqlite3, SQLITE_DONE};
-use sqlite_wasm_rs::c::{sqlite3_stmt, SQLITE_ERROR};
-use sqlite_wasm_rs::libsqlite3::{SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_READWRITE};
-use sqlite_wasm_rs::{init_sqlite, OpfsSAHPoolCfg};
+use sqlite_wasm_rs::export::*;
 use std::ffi::CStr;
 use std::ffi::CString;
 use wasm_bindgen_test::{console_log, wasm_bindgen_test};
@@ -21,7 +18,7 @@ async fn test_exec_errmsg() {
     let filename = cstr(":memory:");
     let mut db = std::ptr::null_mut();
     let ret = unsafe {
-        c::sqlite3_open_v2(
+        sqlite3_open_v2(
             filename.as_ptr(),
             &mut db as *mut _,
             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
@@ -33,7 +30,7 @@ async fn test_exec_errmsg() {
     let mut errmsg: *mut ::std::os::raw::c_char = std::ptr::null_mut();
     let sql = cstr("SELECT * FROM non_existent_table");
     let ret = unsafe {
-        c::sqlite3_exec(
+        sqlite3_exec(
             db,
             sql.as_ptr(),
             None,
@@ -45,7 +42,7 @@ async fn test_exec_errmsg() {
     let msg = unsafe { CStr::from_ptr(errmsg) };
     console_log!("{msg:?}");
     unsafe {
-        c::sqlite3_free((errmsg).cast());
+        sqlite3_free((errmsg).cast());
     }
 }
 
@@ -58,7 +55,7 @@ async fn test_sqlite_prepare_v3_tail() {
 
     let vfs = CString::new("opfs").unwrap();
     let ret = unsafe {
-        c::sqlite3_open_v2(
+        sqlite3_open_v2(
             filename.as_ptr(),
             &mut db as *mut _,
             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
@@ -91,32 +88,32 @@ async fn test_sqlite_prepare_v3_tail() {
             let mut pz_tail = std::ptr::null();
 
             let ret =
-                c::sqlite3_prepare_v3(db, remaining_sql, -1, 0, &mut stmt as _, &mut pz_tail as _);
+                sqlite3_prepare_v3(db, remaining_sql, -1, 0, &mut stmt as _, &mut pz_tail as _);
             assert_eq!(ret, SQLITE_OK);
 
-            let mut rc = c::sqlite3_step(stmt);
+            let mut rc = sqlite3_step(stmt);
 
-            while rc == c::SQLITE_ROW {
-                for col in 0..c::sqlite3_column_count(stmt) {
-                    let value = c::sqlite3_column_value(stmt, col);
-                    let text = c::sqlite3_value_text(value);
-                    let len = c::sqlite3_value_bytes(value);
+            while rc == SQLITE_ROW {
+                for col in 0..sqlite3_column_count(stmt) {
+                    let value = sqlite3_column_value(stmt, col);
+                    let text = sqlite3_value_text(value);
+                    let len = sqlite3_value_bytes(value);
                     let slice = slice::from_raw_parts(text, len as usize);
                     let text = std::str::from_utf8(slice).unwrap();
                     console_log!("Column {}: {:?}", col, text);
                 }
-                rc = c::sqlite3_step(stmt);
+                rc = sqlite3_step(stmt);
             }
 
             if rc == SQLITE_DONE {
                 console_log!("SQL executed successfully.");
-                c::sqlite3_finalize(stmt);
+                sqlite3_finalize(stmt);
                 remaining_sql = pz_tail;
             }
         }
     }
     unsafe {
-        c::sqlite3_close_v2(db);
+        sqlite3_close_v2(db);
     }
 }
 
@@ -129,7 +126,7 @@ async fn test_mem_vfs() {
     let mut db = std::ptr::null_mut();
 
     let ret = unsafe {
-        c::sqlite3_open_v2(
+        sqlite3_open_v2(
             filename.as_ptr(),
             &mut db as *mut _,
             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
@@ -150,7 +147,7 @@ async fn test_opfs_vfs() {
 
     let vfs = CString::new("opfs").unwrap();
     let ret = unsafe {
-        c::sqlite3_open_v2(
+        sqlite3_open_v2(
             filename.as_ptr(),
             &mut db as *mut _,
             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
@@ -171,7 +168,7 @@ async fn test_opfs_sah_vfs_default() {
     let filename = cstr("test_opfs_sah_vfs_default.db");
     let mut db = std::ptr::null_mut();
     let ret = unsafe {
-        c::sqlite3_open_v2(
+        sqlite3_open_v2(
             filename.as_ptr(),
             &mut db as *mut _,
             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
@@ -201,7 +198,7 @@ async fn test_opfs_sah_vfs() {
     let filename = cstr("test_opfs_sah_vfs.db");
     let mut db = std::ptr::null_mut();
     let ret = unsafe {
-        c::sqlite3_open_v2(
+        sqlite3_open_v2(
             filename.as_ptr(),
             &mut db as *mut _,
             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
@@ -217,7 +214,7 @@ fn test_vfs(db: *mut sqlite3) {
     // drop first
     let sql = cstr("DROP TABLE COMPANY;");
     let ret = unsafe {
-        c::sqlite3_exec(
+        sqlite3_exec(
             db,
             sql.as_ptr(),
             None,
@@ -236,7 +233,7 @@ fn test_vfs(db: *mut sqlite3) {
     );
 
     let ret = unsafe {
-        c::sqlite3_exec(
+        sqlite3_exec(
             db,
             sql.as_ptr(),
             None,
@@ -248,7 +245,7 @@ fn test_vfs(db: *mut sqlite3) {
 
     let sql = cstr("INSERT INTO COMPANY (ID,NAME) VALUES (1, 'John Doe');");
     let ret = unsafe {
-        c::sqlite3_exec(
+        sqlite3_exec(
             db,
             sql.as_ptr(),
             None,
@@ -287,7 +284,7 @@ fn test_vfs(db: *mut sqlite3) {
         0
     }
     let ret = unsafe {
-        c::sqlite3_exec(
+        sqlite3_exec(
             db,
             sql.as_ptr(),
             Some(f),
@@ -318,7 +315,7 @@ async fn test_opfs_sah_util() {
 
     let mut db = std::ptr::null_mut();
     let ret = unsafe {
-        c::sqlite3_open_v2(
+        sqlite3_open_v2(
             filename.as_ptr(),
             &mut db as *mut _,
             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,

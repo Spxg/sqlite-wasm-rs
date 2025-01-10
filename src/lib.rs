@@ -3,16 +3,36 @@
 #[allow(non_upper_case_globals)]
 #[allow(non_camel_case_types)]
 #[allow(non_snake_case)]
-pub mod libsqlite3;
+mod libsqlite3;
 
 #[allow(non_upper_case_globals)]
 #[allow(non_camel_case_types)]
 #[allow(non_snake_case)]
-pub mod c;
-
-pub mod wasm;
-
+mod c;
 mod fragile;
+mod wasm;
+
+/// These exported APIs are stable and will not have breaking changes.
+pub mod export {
+    /// C interface definition of sqlite
+    pub use super::c::*;
+    /// Some sqlite types copied from libsqlite3-sys
+    pub use super::libsqlite3::*;
+    /// See <https://sqlite.org/wasm/doc/trunk/persistence.md#vfs-opfs-sahpool>
+    pub use super::wasm::OpfsSAHPoolUtil;
+    /// `async fn init_sqlite()`: before using C-API, you must initialize sqlite, once.
+    ///
+    /// `fn sqlite()`: get the sqlite instance
+    ///
+    /// `OpfsSAHPoolCfg`: see <https://sqlite.org/wasm/doc/trunk/persistence.md#vfs-opfs-sahpool>
+    ///
+    /// `SQLite`: sqlite-wasm instance, only can be created by `init_sqlite`
+    ///
+    /// `SQLiteError`: initializing instance and other possible errors
+    ///
+    /// `Version`: sqlite-wasm version
+    pub use super::{init_sqlite, sqlite, OpfsSAHPoolCfg, SQLite, SQLiteError, Version};
+}
 
 use fragile::FragileComfirmed;
 use js_sys::{Object, WebAssembly};
@@ -45,10 +65,10 @@ const WASM: &[u8] = include_bytes!("jswasm/sqlite3.wasm");
 struct InitOpts {
     /// sqlite wasm binary
     #[serde(rename = "wasmBinary")]
-    pub wasm_binary: &'static [u8],
+    wasm_binary: &'static [u8],
     /// opfs proxy uri
     #[serde(rename = "proxyUri")]
-    pub proxy_uri: String,
+    proxy_uri: String,
 }
 
 /// SQLite version info

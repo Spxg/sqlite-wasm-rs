@@ -1,7 +1,6 @@
 //! This module provides some C-Like interfaces from sqlite-wasm.
 
-pub use crate::init_sqlite;
-pub use crate::libsqlite3::*;
+use crate::libsqlite3::*;
 use crate::SQLite;
 use once_cell::sync::Lazy;
 use std::mem::{size_of, ManuallyDrop};
