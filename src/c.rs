@@ -64,7 +64,7 @@ impl<T> Drop for OutputPtr<'_, T> {
                 self.handle.peek(self.sqlite_ptr, &mut *self.rust_ptr);
                 self.handle.wasm().dealloc(self.sqlite_ptr);
                 if self.is_cstr {
-                    cstr_output_ptr(&self.handle, self.rust_ptr.cast());
+                    cstr_output_ptr(self.handle, self.rust_ptr.cast());
                 }
             }
         }
@@ -290,7 +290,7 @@ pub unsafe fn sqlite3_open_v2(
     let capi = sqlite3.capi();
 
     // using output-pointer arguments from JS
-    let ptr = OutputPtr::new(&sqlite3, ppDb, false);
+    let ptr = OutputPtr::new(sqlite3, ppDb, false);
     capi.sqlite3_open_v2(cstr!(filename), ptr.sqlite_ptr.cast(), flags, cstr!(vfs))
 }
 
@@ -347,7 +347,7 @@ pub unsafe fn sqlite3_exec(
     let capi = sqlite3.capi();
 
     // using output-pointer arguments from JS
-    let ptr = OutputPtr::new(&sqlite3, pzErrMsg, true);
+    let ptr = OutputPtr::new(sqlite3, pzErrMsg, true);
     capi.sqlite3_exec(
         db,
         cstr!(sql),
@@ -470,7 +470,7 @@ pub unsafe fn sqlite3_serialize(
         capi.sqlite3_serialize(db, cstr!(schema), piSize, flags)
     } else {
         // using output-pointer arguments from JS
-        let size = OutputPtr::new(&sqlite3, piSize, false);
+        let size = OutputPtr::new(sqlite3, piSize, false);
         let ptr = capi.sqlite3_serialize(db, cstr!(schema), size.sqlite_ptr.cast(), flags);
         drop(size);
 
@@ -1188,8 +1188,8 @@ pub unsafe fn sqlite3_prepare_v3(
     };
 
     // using output-pointer arguments from JS
-    let pp_stmt = OutputPtr::new(&sqlite3, ppStmt, false);
-    let pz_tail = OutputPtr::new(&sqlite3, pzTail, false);
+    let pp_stmt = OutputPtr::new(sqlite3, ppStmt, false);
+    let pz_tail = OutputPtr::new(sqlite3, pzTail, false);
     let ret = capi.sqlite3_prepare_v3(
         db,
         wasm_z_sql as _,
@@ -1441,7 +1441,7 @@ pub unsafe fn sqlite3_open(
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
 
-    let ptr = OutputPtr::new(&sqlite3, ppDb, false);
+    let ptr = OutputPtr::new(sqlite3, ppDb, false);
     capi.sqlite3_open(cstr!(filename), ptr.sqlite_ptr.cast())
 }
 
@@ -1502,8 +1502,8 @@ pub unsafe fn sqlite3_status(
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
 
-    let current = OutputPtr::new(&sqlite3, pCurrent, false);
-    let highwater = OutputPtr::new(&sqlite3, pHighwater, false);
+    let current = OutputPtr::new(sqlite3, pCurrent, false);
+    let highwater = OutputPtr::new(sqlite3, pHighwater, false);
 
     capi.sqlite3_status(
         op,
@@ -1526,8 +1526,8 @@ pub unsafe fn sqlite3_status64(
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
 
-    let current = OutputPtr::new(&sqlite3, pCurrent, false);
-    let highwater = OutputPtr::new(&sqlite3, pHighwater, false);
+    let current = OutputPtr::new(sqlite3, pCurrent, false);
+    let highwater = OutputPtr::new(sqlite3, pHighwater, false);
 
     capi.sqlite3_status64(
         op,
@@ -1881,11 +1881,11 @@ pub unsafe fn sqlite3_table_column_metadata(
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
 
-    let data_type = OutputPtr::new(&sqlite3, pzDataType, true);
-    let coll_seq = OutputPtr::new(&sqlite3, pzCollSeq, true);
-    let not_null = OutputPtr::new(&sqlite3, pNotNull, false);
-    let primary_key = OutputPtr::new(&sqlite3, pPrimaryKey, false);
-    let autoinc = OutputPtr::new(&sqlite3, pAutoinc, false);
+    let data_type = OutputPtr::new(sqlite3, pzDataType, true);
+    let coll_seq = OutputPtr::new(sqlite3, pzCollSeq, true);
+    let not_null = OutputPtr::new(sqlite3, pNotNull, false);
+    let primary_key = OutputPtr::new(sqlite3, pPrimaryKey, false);
+    let autoinc = OutputPtr::new(sqlite3, pAutoinc, false);
 
     capi.sqlite3_table_column_metadata(
         db,
