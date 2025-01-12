@@ -106,7 +106,8 @@ async fn test_sqlite_prepare_v3_tail() {
             }
 
             if rc == SQLITE_DONE {
-                console_log!("SQL executed successfully.");
+                let sql = CStr::from_ptr(unsafe { sqlite3_sql(stmt) });
+                console_log!("SQL {sql:?} executed successfully.");
                 sqlite3_finalize(stmt);
                 remaining_sql = pz_tail;
             }

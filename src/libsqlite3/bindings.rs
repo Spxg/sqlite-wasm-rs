@@ -512,7 +512,9 @@ pub struct sqlite3_context {
 pub struct sqlite3_stmt {
     _unused: [u8; 0],
 }
-pub type sqlite3_int64 = sqlite_int64;
 pub type sqlite_int64 = ::std::os::raw::c_longlong;
+pub type sqlite_uint64 = ::std::os::raw::c_ulonglong;
+pub type sqlite3_int64 = sqlite_int64;
+pub type sqlite3_uint64 = sqlite_uint64;
 pub type sqlite3_destructor_type =
     ::std::option::Option<unsafe extern "C" fn(arg1: *mut ::std::os::raw::c_void)>;
