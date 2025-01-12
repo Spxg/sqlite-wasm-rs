@@ -399,6 +399,249 @@ extern "C" {
         msg: JsValue,
         msgLen: ::std::os::raw::c_int,
     );
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_bind_text64(
+        capi: &CApi,
+        stmt: *mut sqlite3_stmt,
+        idx: ::std::os::raw::c_int,
+        text: *const ::std::os::raw::c_char,
+        n: sqlite3_uint64,
+        dtor: ::std::os::raw::c_int,
+        encoding: ::std::os::raw::c_uchar,
+    ) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_bind_blob64(
+        capi: &CApi,
+        stmt: *mut sqlite3_stmt,
+        idx: ::std::os::raw::c_int,
+        blob: *const ::std::os::raw::c_void,
+        n: sqlite3_uint64,
+        dtor: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_column_database_name(
+        capi: &CApi,
+        stmt: *mut sqlite3_stmt,
+        colIdx: ::std::os::raw::c_int,
+    ) -> String;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_column_origin_name(
+        capi: &CApi,
+        stmt: *mut sqlite3_stmt,
+        colIdx: ::std::os::raw::c_int,
+    ) -> String;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_column_table_name(
+        capi: &CApi,
+        stmt: *mut sqlite3_stmt,
+        colIdx: ::std::os::raw::c_int,
+    ) -> String;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_open(
+        capi: &CApi,
+        filename: JsValue,
+        ppDb: *mut *mut sqlite3,
+    ) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_bind_pointer(
+        capi: &CApi,
+        stmt: *mut sqlite3_stmt,
+        idx: ::std::os::raw::c_int,
+        ptr: *mut ::std::os::raw::c_void,
+        r#type: JsValue,
+        dtor: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_interrupt(capi: &CApi, db: *mut sqlite3);
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_config(
+        capi: &CApi,
+        op: ::std::os::raw::c_int,
+        arg: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_status(
+        capi: &CApi,
+        op: ::std::os::raw::c_int,
+        pCurrent: *mut ::std::os::raw::c_int,
+        pHighwater: *mut ::std::os::raw::c_int,
+        resetFlag: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_status64(
+        capi: &CApi,
+        op: ::std::os::raw::c_int,
+        pCurrent: *mut sqlite3_int64,
+        pHighwater: *mut sqlite3_int64,
+        resetFlag: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_column_type(
+        capi: &CApi,
+        stmt: *mut sqlite3_stmt,
+        colIdx: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_commit_hook(
+        capi: &CApi,
+        db: *mut sqlite3,
+        hook: ::std::option::Option<
+            &Closure<dyn FnMut(*mut ::std::os::raw::c_void) -> std::os::raw::c_int>,
+        >,
+        cbArg: *mut ::std::os::raw::c_void,
+    ) -> *mut ::std::os::raw::c_void;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_progress_handler(
+        capi: &CApi,
+        db: *mut sqlite3,
+        nOps: ::std::os::raw::c_int,
+        callback: ::std::option::Option<
+            &Closure<dyn FnMut(*mut ::std::os::raw::c_void) -> ::std::os::raw::c_int>,
+        >,
+        cbArg: *mut ::std::os::raw::c_void,
+    );
+
+    #[wasm_bindgen(method)]
+    pub unsafe fn sqlite3_rollback_hook(
+        capi: &CApi,
+        db: *mut sqlite3,
+        hook: ::std::option::Option<&Closure<dyn FnMut(*mut ::std::os::raw::c_void)>>,
+        cbArg: *mut ::std::os::raw::c_void,
+    ) -> *mut ::std::os::raw::c_void;
+
+    #[wasm_bindgen(method)]
+    pub unsafe fn sqlite3_update_hook(
+        capi: &CApi,
+        db: *mut sqlite3,
+        xUpdate: ::std::option::Option<
+            &Closure<
+                dyn FnMut(
+                    *mut ::std::os::raw::c_void,
+                    ::std::os::raw::c_int,
+                    String,
+                    String,
+                    sqlite3_int64,
+                ),
+            >,
+        >,
+        userCtx: *mut ::std::os::raw::c_void,
+    ) -> *mut ::std::os::raw::c_void;
+
+    #[wasm_bindgen(method)]
+    pub unsafe fn sqlite3_busy_timeout(
+        capi: &CApi,
+        db: *mut sqlite3,
+        ms: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_last_insert_rowid(capi: &CApi, db: *mut sqlite3) -> sqlite3_int64;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_bind_parameter_count(
+        capi: &CApi,
+        stmt: *mut sqlite3_stmt,
+    ) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_bind_parameter_name(
+        capi: &CApi,
+        stmt: *mut sqlite3_stmt,
+        nth: ::std::os::raw::c_int,
+    ) -> String;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_clear_bindings(capi: &CApi, stmt: *mut sqlite3_stmt) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_column_bytes(
+        capi: &CApi,
+        stmt: *mut sqlite3_stmt,
+        colIdx: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_column_blob(
+        capi: &CApi,
+        stmt: *mut sqlite3_stmt,
+        colIdx: ::std::os::raw::c_int,
+    ) -> *const ::std::os::raw::c_void;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_column_decltype(
+        capi: &CApi,
+        stmt: *mut sqlite3_stmt,
+        colIdx: ::std::os::raw::c_int,
+    ) -> String;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_column_double(
+        capi: &CApi,
+        stmt: *mut sqlite3_stmt,
+        colIdx: ::std::os::raw::c_int,
+    ) -> f64;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_column_int(
+        capi: &CApi,
+        stmt: *mut sqlite3_stmt,
+        colIdx: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_column_int64(
+        capi: &CApi,
+        stmt: *mut sqlite3_stmt,
+        colIdx: ::std::os::raw::c_int,
+    ) -> sqlite3_int64;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_sql(capi: &CApi, stmt: *mut sqlite3_stmt) -> String;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_stmt_readonly(capi: &CApi, stmt: *mut sqlite3_stmt) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_table_column_metadata(
+        capi: &CApi,
+        db: *mut sqlite3,
+        zDbName: JsValue,
+        zTableName: JsValue,
+        zColumnName: JsValue,
+        pzDataType: *mut *const ::std::os::raw::c_char,
+        pzCollSeq: *mut *const ::std::os::raw::c_char,
+        pNotNull: *mut ::std::os::raw::c_int,
+        pPrimaryKey: *mut ::std::os::raw::c_int,
+        pAutoinc: *mut ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_get_auxdata(
+        capi: &CApi,
+        ctx: *mut sqlite3_context,
+        n: ::std::os::raw::c_int,
+    ) -> *mut ::std::os::raw::c_void;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_extended_result_codes(
+        capi: &CApi,
+        db: *mut sqlite3,
+        onoff: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int;
 }
 
 /// Just like in C, WASM offers a memory "heap," and transfering values

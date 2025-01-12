@@ -34,23 +34,23 @@ fn cstring(s: String) -> CString {
 /// Output-pointer arguments are commonplace in C.
 /// On the contrary, they do not exist at all in JavaScript.
 struct OutputPtr<'a, T> {
-    // sqlite ptr
-    sqlite: *mut u8,
-    // rust ptr
-    rust: *mut T,
-    mmu: &'a SQLite,
+    handle: &'a SQLite,
+    sqlite_ptr: *mut u8,
+    rust_ptr: *mut T,
+    is_cstr: bool,
 }
 
 impl<'a, T> OutputPtr<'a, T> {
-    fn new(sqlite: &'a SQLite, rust: *mut T) -> Self {
+    fn new(handle: &'a SQLite, rust_ptr: *mut T, is_cstr: bool) -> Self {
         Self {
-            sqlite: if rust.is_null() {
+            handle,
+            sqlite_ptr: if rust_ptr.is_null() {
                 std::ptr::null_mut()
             } else {
-                sqlite.wasm().alloc(size_of::<T>())
+                handle.wasm().alloc(size_of::<T>())
             },
-            rust,
-            mmu: sqlite,
+            rust_ptr,
+            is_cstr,
         }
     }
 }
@@ -59,12 +59,31 @@ impl<'a, T> OutputPtr<'a, T> {
 impl<T> Drop for OutputPtr<'_, T> {
     fn drop(&mut self) {
         unsafe {
-            if !self.sqlite.is_null() {
-                assert!(!self.rust.is_null());
-                self.mmu.peek(self.sqlite, &mut *self.rust);
-                self.mmu.wasm().dealloc(self.sqlite);
+            if !self.sqlite_ptr.is_null() {
+                assert!(!self.rust_ptr.is_null());
+                self.handle.peek(self.sqlite_ptr, &mut *self.rust_ptr);
+                self.handle.wasm().dealloc(self.sqlite_ptr);
+                if self.is_cstr {
+                    cstr_output_ptr(&self.handle, self.rust_ptr.cast());
+                }
             }
         }
+    }
+}
+
+/// Convert output ptr of string type
+unsafe fn cstr_output_ptr(handle: &SQLite, ptr: *mut *const ::std::os::raw::c_char) {
+    if !ptr.is_null() && !(*ptr).is_null() {
+        let capi = handle.capi();
+        let wasm = handle.wasm();
+        let wasm_ptr = *ptr;
+        // convert to string
+        let errmsg = wasm.cstr_to_js(wasm_ptr.cast());
+        // free sqlite errmsg
+        capi.sqlite3_free(wasm_ptr.cast_mut().cast());
+        let raw = cstring(errmsg).into_raw();
+        *ptr = raw;
+        allocated().insert(Ptr(raw.cast()), AllocatedT::CString(raw));
     }
 }
 
@@ -112,15 +131,26 @@ fn allocated() -> MutexGuard<'static, HashMap<Ptr, AllocatedT>> {
     ALLOCATED.lock().expect("acquire allocated lock failed")
 }
 
-/// Maintain a list of `sqlite3_stmt` allocated memory
+#[derive(Hash, PartialEq, Eq)]
+struct StmtKey {
+    r#type: &'static str,
+    idx: ::std::os::raw::c_int,
+}
+
+impl StmtKey {
+    fn new(r#type: &'static str, idx: ::std::os::raw::c_int) -> Self {
+        Self { r#type, idx }
+    }
+}
+
+/// Maintain a list of `sqlite3_stmt and col` allocated memory
 /// and free the memory at the end of the life
-fn stmt_allocated() -> MutexGuard<'static, HashMap<Ptr, HashMap<::std::os::raw::c_int, AllocatedT>>>
-{
-    static STMT_ALLOCATED: Lazy<Mutex<HashMap<Ptr, HashMap<::std::os::raw::c_int, AllocatedT>>>> =
+fn stmt_with_key_allocated() -> MutexGuard<'static, HashMap<Ptr, HashMap<StmtKey, AllocatedT>>> {
+    static STMT_COL_ALLOCATED: Lazy<Mutex<HashMap<Ptr, HashMap<StmtKey, AllocatedT>>>> =
         Lazy::new(|| Mutex::new(HashMap::new()));
-    STMT_ALLOCATED
+    STMT_COL_ALLOCATED
         .lock()
-        .expect("acquire stmt allocated lock failed")
+        .expect("acquire stmt with key allocated lock failed")
 }
 
 /// Maintain a list of `aggregate_context` allocated memory
@@ -185,10 +215,70 @@ fn vec_into_raw_parts<T>(v: Vec<T>) -> (*mut T, usize, usize) {
     (me.as_mut_ptr(), me.len(), me.capacity())
 }
 
+/// Wrap some `column*` related methods
+enum ColumnCApi {
+    Name,
+    DatabaseName,
+    OriginName,
+    TableName,
+    Decltype,
+}
+
+impl ColumnCApi {
+    fn call(
+        self,
+        stmt: *mut sqlite3_stmt,
+        colIdx: ::std::os::raw::c_int,
+    ) -> *const ::std::os::raw::c_char {
+        let sqlite3 = sqlite();
+        let capi = sqlite3.capi();
+        let (s, t) = match self {
+            ColumnCApi::Name => (
+                capi.sqlite3_column_name(stmt, colIdx),
+                "sqlite3_column_name",
+            ),
+            ColumnCApi::DatabaseName => (
+                capi.sqlite3_column_database_name(stmt, colIdx),
+                "sqlite3_column_database_name",
+            ),
+            ColumnCApi::OriginName => (
+                capi.sqlite3_column_origin_name(stmt, colIdx),
+                "sqlite3_column_origin_name",
+            ),
+            ColumnCApi::TableName => (
+                capi.sqlite3_column_table_name(stmt, colIdx),
+                "sqlite3_column_table_name",
+            ),
+            ColumnCApi::Decltype => (
+                capi.sqlite3_column_decltype(stmt, colIdx),
+                "sqlite3_column_decltype",
+            ),
+        };
+
+        // # Safety
+        //
+        // The returned string pointer is valid until either the prepared statement
+        // is destroyed by sqlite3_finalize() or until the statement is automatically
+        // reprepared by the first call to sqlite3_step() for a particular run or until
+        // the next call to sqlite3_column_name() or sqlite3_column_name16() on the same column.
+        let ret = cstring(s).into_raw();
+
+        // We have established a mapping relationship between stmt and (col, text).
+        // When sqlite3_finalize is called, all memory will be freed or
+        // replaced by the same column.
+        stmt_with_key_allocated()
+            .entry(Ptr(stmt.cast()))
+            .or_default()
+            .insert(StmtKey::new(t, colIdx), AllocatedT::CString(ret));
+        ret
+    }
+}
+
 /// Open an `SQLite` database file as specified by the `filename` argument
 /// and support opfs vfs on wasm platform.
 ///
 /// See <https://www.sqlite.org/c3ref/open.html>
+///
 /// See <https://sqlite.org/wasm/doc/trunk/persistence.md>
 pub unsafe fn sqlite3_open_v2(
     filename: *const ::std::os::raw::c_char,
@@ -200,8 +290,8 @@ pub unsafe fn sqlite3_open_v2(
     let capi = sqlite3.capi();
 
     // using output-pointer arguments from JS
-    let ptr = OutputPtr::new(sqlite3, ppDb);
-    capi.sqlite3_open_v2(cstr!(filename), ptr.sqlite.cast(), flags, cstr!(vfs))
+    let ptr = OutputPtr::new(&sqlite3, ppDb, false);
+    capi.sqlite3_open_v2(cstr!(filename), ptr.sqlite_ptr.cast(), flags, cstr!(vfs))
 }
 
 /// A convenience wrapper around `sqlite3_prepare_v2()`, `sqlite3_step()`, and
@@ -255,25 +345,16 @@ pub unsafe fn sqlite3_exec(
 
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
-    let wasm = sqlite3.wasm();
 
     // using output-pointer arguments from JS
-    let ptr = OutputPtr::new(sqlite3, pzErrMsg);
-    let ret = capi.sqlite3_exec(db, cstr!(sql), callback.as_ref(), pCbArg, ptr.sqlite.cast());
-    drop(ptr);
-
-    // convert to rust's cstr
-    if !pzErrMsg.is_null() && !(*pzErrMsg).is_null() {
-        // convert to string
-        let errmsg = wasm.cstr_to_js((*pzErrMsg).cast());
-        // free sqlite errmsg
-        capi.sqlite3_free((*pzErrMsg).cast());
-        let raw = cstring(errmsg).into_raw();
-        *pzErrMsg = raw;
-        allocated().insert(Ptr(raw.cast()), AllocatedT::CString(raw));
-    }
-
-    ret
+    let ptr = OutputPtr::new(&sqlite3, pzErrMsg, true);
+    capi.sqlite3_exec(
+        db,
+        cstr!(sql),
+        callback.as_ref(),
+        pCbArg,
+        ptr.sqlite_ptr.cast(),
+    )
 }
 
 /// Destructor for the `sqlite3` object.
@@ -389,8 +470,8 @@ pub unsafe fn sqlite3_serialize(
         capi.sqlite3_serialize(db, cstr!(schema), piSize, flags)
     } else {
         // using output-pointer arguments from JS
-        let size = OutputPtr::new(sqlite3, piSize);
-        let ptr = capi.sqlite3_serialize(db, cstr!(schema), size.sqlite.cast(), flags);
+        let size = OutputPtr::new(&sqlite3, piSize, false);
+        let ptr = capi.sqlite3_serialize(db, cstr!(schema), size.sqlite_ptr.cast(), flags);
         drop(size);
 
         let ret = serialized(ptr, *piSize as usize, sqlite3);
@@ -524,16 +605,16 @@ pub unsafe fn sqlite3_create_function_v2(
 
     // Makes the closure leaky because the function is called multiple times
     if let Some(xFunc) = xFunc {
-        Closure::forget(xFunc)
+        Closure::forget(xFunc);
     }
     if let Some(xStep) = xStep {
-        Closure::forget(xStep)
+        Closure::forget(xStep);
     }
     if let Some(xFinal) = xFinal {
-        Closure::forget(xFinal)
+        Closure::forget(xFinal);
     }
     if let Some(xDestroy) = xDestroy {
-        Closure::forget(xDestroy)
+        Closure::forget(xDestroy);
     }
 
     ret
@@ -672,23 +753,7 @@ pub unsafe fn sqlite3_column_name(
     stmt: *mut sqlite3_stmt,
     colIdx: ::std::os::raw::c_int,
 ) -> *const ::std::os::raw::c_char {
-    let s = sqlite().capi().sqlite3_column_name(stmt, colIdx);
-    // # Safety
-    //
-    // The returned string pointer is valid until either the prepared statement
-    // is destroyed by sqlite3_finalize() or until the statement is automatically
-    // reprepared by the first call to sqlite3_step() for a particular run or until
-    // the next call to sqlite3_column_name() or sqlite3_column_name16() on the same column.
-    let ret = cstring(s).into_raw();
-
-    // We have established a mapping relationship between stmt and (col, text).
-    // When sqlite3_finalize is called, all memory will be freed or
-    // replaced by the same column.
-    stmt_allocated()
-        .entry(Ptr(stmt.cast()))
-        .or_default()
-        .insert(colIdx, AllocatedT::CString(ret));
-    ret
+    ColumnCApi::Name.call(stmt, colIdx)
 }
 
 /// Bind a `NULL` value to a parameter in a prepared statement.
@@ -848,7 +913,7 @@ pub unsafe fn sqlite3_value_blob(sqliteValue: *mut sqlite3_value) -> *const ::st
     // We record the memory allocated for sqlite3_value so that
     // it can be freed after stmt and context are finished.
     sqlite3_values_allocated().insert(Ptr(sqliteValue.cast()), AllocatedT::VecU8((ret, len, cap)));
-    ret as _
+    ret.cast()
 }
 
 /// Extract a `INTEGER` value from a protected `sqlite3_value` object.
@@ -983,10 +1048,10 @@ pub unsafe fn sqlite3_create_collation_v2(
 
     // Makes the closure leaky because the collation is called multiple times
     if let Some(xCompare) = xCompare {
-        Closure::forget(xCompare)
+        Closure::forget(xCompare);
     }
     if let Some(xDestroy) = xDestroy {
-        Closure::forget(xDestroy)
+        Closure::forget(xDestroy);
     }
 
     ret
@@ -1012,7 +1077,7 @@ pub unsafe fn sqlite3_extended_errcode(db: *mut sqlite3) -> ::std::os::raw::c_in
 /// See <https://www.sqlite.org/c3ref/finalize.html>
 pub unsafe fn sqlite3_finalize(stmt: *mut sqlite3_stmt) -> ::std::os::raw::c_int {
     // Free all memory allocated by stmt
-    stmt_allocated().remove(&Ptr(stmt.cast()));
+    stmt_with_key_allocated().remove(&Ptr(stmt.cast()));
 
     let mut locked = sqlite3_values_allocated();
 
@@ -1123,15 +1188,15 @@ pub unsafe fn sqlite3_prepare_v3(
     };
 
     // using output-pointer arguments from JS
-    let pp_stmt = OutputPtr::new(sqlite3, ppStmt);
-    let pz_tail = OutputPtr::new(sqlite3, pzTail);
+    let pp_stmt = OutputPtr::new(&sqlite3, ppStmt, false);
+    let pz_tail = OutputPtr::new(&sqlite3, pzTail, false);
     let ret = capi.sqlite3_prepare_v3(
         db,
         wasm_z_sql as _,
         nByte,
         prepFlags,
-        pp_stmt.sqlite.cast(),
-        pz_tail.sqlite.cast(),
+        pp_stmt.sqlite_ptr.cast(),
+        pz_tail.sqlite_ptr.cast(),
     );
     drop(pz_tail);
 
@@ -1224,4 +1289,638 @@ pub unsafe fn sqlite3_result_error(
     sqlite()
         .capi()
         .sqlite3_result_error(ctx, cstr!(msg), msgLen);
+}
+
+/// Bind a `TEXT` value to a parameter in a prepared statement.
+///
+/// See <https://www.sqlite.org/c3ref/bind_blob.html>
+pub unsafe fn sqlite3_bind_text64(
+    stmt: *mut sqlite3_stmt,
+    idx: ::std::os::raw::c_int,
+    text: *const ::std::os::raw::c_char,
+    n: sqlite3_uint64,
+    dtor: ::std::option::Option<unsafe extern "C" fn(arg1: *mut ::std::os::raw::c_void)>,
+    encoding: ::std::os::raw::c_uchar,
+) -> ::std::os::raw::c_int {
+    if n > sqlite3_uint64::from(u32::MAX) {
+        panic!("wasm32 does not support memory allocations larger than u32::MAX");
+    }
+    if encoding != SQLITE_UTF8 as u8 {
+        panic!("sqlite3_bind_text64 only support utf8 encoding now");
+    }
+
+    let sqlite3 = sqlite();
+    let capi = sqlite3.capi();
+    let wasm = sqlite3.wasm();
+
+    let dtor = dtori32(dtor);
+
+    // I don't know how to handle this, so I'll leave it to sqlite3
+    if text.is_null() {
+        capi.sqlite3_bind_text64(stmt, idx, text, n, dtor, encoding)
+    } else {
+        let slice = slice::from_raw_parts(text.cast::<u8>(), n as usize);
+        let wasm_ptr = wasm.alloc(n.max(1) as usize);
+        sqlite3.poke_buf(slice, wasm_ptr);
+
+        let ret = capi.sqlite3_bind_text64(stmt, idx, wasm_ptr as _, n, dtor, encoding);
+
+        // If SQLITE_TRANSIENT is set, can safely
+        // free it because sqlite3 has already copied it.
+        //
+        // If SQLITE_STATIC is set, it cannot be freed
+        // because it looks like this is a static thing in sqlite3
+        if dtor == -1 {
+            wasm.dealloc(wasm_ptr);
+        }
+
+        ret
+    }
+}
+
+/// Bind a `BLOB` value to a parameter in a prepared statement.
+///
+/// See <https://www.sqlite.org/c3ref/bind_blob.html>
+pub unsafe fn sqlite3_bind_blob64(
+    stmt: *mut sqlite3_stmt,
+    idx: ::std::os::raw::c_int,
+    blob: *const ::std::os::raw::c_void,
+    n: sqlite3_uint64,
+    dtor: ::std::option::Option<unsafe extern "C" fn(arg1: *mut ::std::os::raw::c_void)>,
+) -> ::std::os::raw::c_int {
+    if n > sqlite3_uint64::from(u32::MAX) {
+        panic!("wasm32 does not support memory allocations larger than u32::MAX");
+    }
+    let sqlite3 = sqlite();
+    let capi = sqlite3.capi();
+    let wasm = sqlite3.wasm();
+
+    let dtor = dtori32(dtor);
+
+    // I don't know how to handle this, so I'll leave it to sqlite3
+    if blob.is_null() {
+        capi.sqlite3_bind_blob64(stmt, idx, blob, n, dtor)
+    } else {
+        let slice = slice::from_raw_parts(blob.cast::<u8>(), n as usize);
+        let wasm_ptr = wasm.alloc(n.max(1) as usize);
+
+        sqlite3.poke_buf(slice, wasm_ptr);
+
+        let ret = capi.sqlite3_bind_blob64(stmt, idx, wasm_ptr as *const _, n, dtor);
+
+        // If SQLITE_TRANSIENT is set, can safely
+        // free it because sqlite3 has already copied it.
+        //
+        // If SQLITE_STATIC is set, it cannot be freed
+        // because it looks like this is a static thing in sqlite3
+        if dtor == -1 {
+            wasm.dealloc(wasm_ptr);
+        }
+
+        ret
+    }
+}
+
+/// These routines provide a means to determine the database, table, and
+/// table column that is the origin of a particular result column in SELECT statement.
+///
+/// See <https://www.sqlite.org/c3ref/column_database_name.html>
+pub unsafe fn sqlite3_column_database_name(
+    stmt: *mut sqlite3_stmt,
+    colIdx: ::std::os::raw::c_int,
+) -> *const ::std::os::raw::c_char {
+    ColumnCApi::DatabaseName.call(stmt, colIdx)
+}
+
+/// These routines provide a means to determine the database, table, and
+/// table column that is the origin of a particular result column in SELECT statement.
+///
+/// See <https://www.sqlite.org/c3ref/column_database_name.html>
+pub unsafe fn sqlite3_column_origin_name(
+    stmt: *mut sqlite3_stmt,
+    colIdx: ::std::os::raw::c_int,
+) -> *const ::std::os::raw::c_char {
+    ColumnCApi::OriginName.call(stmt, colIdx)
+}
+
+/// These routines provide a means to determine the database, table, and
+/// table column that is the origin of a particular result column in SELECT statement.
+///
+/// See <https://www.sqlite.org/c3ref/column_database_name.html>
+pub unsafe fn sqlite3_column_table_name(
+    stmt: *mut sqlite3_stmt,
+    colIdx: ::std::os::raw::c_int,
+) -> *const ::std::os::raw::c_char {
+    ColumnCApi::TableName.call(stmt, colIdx)
+}
+
+/// Compiles a prepared statement.
+///
+/// See <https://www.sqlite.org/c3ref/prepare.html>
+pub unsafe fn sqlite3_prepare_v2(
+    db: *mut sqlite3,
+    sql: *const ::std::os::raw::c_char,
+    nByte: ::std::os::raw::c_int,
+    ppStmt: *mut *mut sqlite3_stmt,
+    pzTail: *mut *const ::std::os::raw::c_char,
+) -> ::std::os::raw::c_int {
+    // sqlite3_prepare_v3() differs from sqlite3_prepare_v2() only in
+    // having the extra prepFlags parameter, which is a bit array consisting
+    // of zero or more of the SQLITE_PREPARE_* flags. The sqlite3_prepare_v2()
+    // interface works exactly the same as sqlite3_prepare_v3() with a zero prepFlags parameter.
+    sqlite3_prepare_v3(db, sql, nByte, 0, ppStmt, pzTail)
+}
+
+/// Open an `SQLite` database file as specified by the `filename` argument
+///
+/// See <https://www.sqlite.org/c3ref/open.html>
+pub unsafe fn sqlite3_open(
+    filename: *const ::std::os::raw::c_char,
+    ppDb: *mut *mut sqlite3,
+) -> ::std::os::raw::c_int {
+    let sqlite3 = sqlite();
+    let capi = sqlite3.capi();
+
+    let ptr = OutputPtr::new(&sqlite3, ppDb, false);
+    capi.sqlite3_open(cstr!(filename), ptr.sqlite_ptr.cast())
+}
+
+/// Causes the `idx`-th parameter in prepared statement `stmt` to have an SQL
+/// value of `NULL`, but to also be associated with the pointer `ptr` of type
+/// `type`. `dtor` is either a `NULL pointer` or a pointer to a destructor
+/// function for `ptr`. SQLite will invoke the destructor `dtor` with a single
+/// argument of `ptr` when it is finished using `ptr`. The `type` parameter
+/// should be a static string, preferably a string literal.
+///
+/// See <https://www.sqlite.org/c3ref/bind_blob.html>
+pub unsafe fn sqlite3_bind_pointer(
+    stmt: *mut sqlite3_stmt,
+    idx: ::std::os::raw::c_int,
+    ptr: *mut ::std::os::raw::c_void,
+    r#type: *const ::std::os::raw::c_char,
+    dtor: ::std::option::Option<unsafe extern "C" fn(arg1: *mut ::std::os::raw::c_void)>,
+) -> ::std::os::raw::c_int {
+    sqlite().capi().sqlite3_bind_pointer(
+        stmt,
+        idx,
+        ptr, // sqlite will not consume
+        cstr!(r#type),
+        dtori32(dtor),
+    )
+}
+
+/// See <https://www.sqlite.org/c3ref/interrupt.html>
+pub unsafe fn sqlite3_interrupt(db: *mut sqlite3) {
+    sqlite().capi().sqlite3_interrupt(db);
+}
+
+/// Used to make global configuration changes to `SQLite` in order to tune SQLite
+/// to the specific needs of the application. The default configuration is
+/// recommended for most applications and so this routine is usually not
+/// necessary. It is provided to support rare applications with unusual needs.
+///
+/// See <https://www.sqlite.org/c3ref/config.html>
+///
+/// Currently only one parameter is supported. Add more if needed.
+pub unsafe fn sqlite3_config(
+    op: ::std::os::raw::c_int,
+    arg: ::std::os::raw::c_int,
+) -> ::std::os::raw::c_int {
+    sqlite().capi().sqlite3_config(op, arg)
+}
+
+/// Used to retrieve runtime status information about the performance of
+/// `SQLite`, and optionally to reset various highwater marks.
+///
+/// See <https://www.sqlite.org/c3ref/status.html>
+pub unsafe fn sqlite3_status(
+    op: ::std::os::raw::c_int,
+    pCurrent: *mut ::std::os::raw::c_int,
+    pHighwater: *mut ::std::os::raw::c_int,
+    resetFlag: ::std::os::raw::c_int,
+) -> ::std::os::raw::c_int {
+    let sqlite3 = sqlite();
+    let capi = sqlite3.capi();
+
+    let current = OutputPtr::new(&sqlite3, pCurrent, false);
+    let highwater = OutputPtr::new(&sqlite3, pHighwater, false);
+
+    capi.sqlite3_status(
+        op,
+        current.sqlite_ptr.cast(),
+        highwater.sqlite_ptr.cast(),
+        resetFlag,
+    )
+}
+
+/// Used to retrieve runtime status information about the performance of
+/// `SQLite`, and optionally to reset various highwater marks.
+///
+/// See <https://www.sqlite.org/c3ref/status.html>
+pub unsafe fn sqlite3_status64(
+    op: ::std::os::raw::c_int,
+    pCurrent: *mut sqlite3_int64,
+    pHighwater: *mut sqlite3_int64,
+    resetFlag: ::std::os::raw::c_int,
+) -> ::std::os::raw::c_int {
+    let sqlite3 = sqlite();
+    let capi = sqlite3.capi();
+
+    let current = OutputPtr::new(&sqlite3, pCurrent, false);
+    let highwater = OutputPtr::new(&sqlite3, pHighwater, false);
+
+    capi.sqlite3_status64(
+        op,
+        current.sqlite_ptr.cast(),
+        highwater.sqlite_ptr.cast(),
+        resetFlag,
+    )
+}
+
+/// Return the amount of memory currently checked out.
+///
+/// See <https://www.sqlite.org/c3ref/memory_highwater.html>
+///
+/// See <https://github.com/sqlite/sqlite/blob/4112a63b8fa8357133f2c8e089dcd9193fc2926b/src/malloc.c>
+pub unsafe fn sqlite3_memory_used() -> sqlite3_int64 {
+    let mut res: sqlite3_int64 = 0;
+    let mut mx: sqlite3_int64 = 0;
+
+    sqlite3_status64(
+        SQLITE_STATUS_MEMORY_USED,
+        &mut res as *mut _,
+        &mut mx as *mut _,
+        0,
+    );
+
+    res
+}
+
+/// Return the maximum amount of memory that has ever been
+/// checked out since either the beginning of this process
+/// or since the most recent reset.
+///
+/// See <https://www.sqlite.org/c3ref/memory_highwater.html>
+///
+/// See <https://github.com/sqlite/sqlite/blob/4112a63b8fa8357133f2c8e089dcd9193fc2926b/src/malloc.c>
+pub unsafe fn sqlite3_memory_highwater(resetFlag: ::std::os::raw::c_int) -> sqlite3_int64 {
+    let mut res: sqlite3_int64 = 0;
+    let mut mx: sqlite3_int64 = 0;
+
+    sqlite3_status64(
+        SQLITE_STATUS_MEMORY_USED,
+        &mut res as *mut _,
+        &mut mx as *mut _,
+        resetFlag,
+    );
+
+    mx
+}
+
+/// Get the length in bytes of a `BLOB` or `TEXT` column in the current result row.
+///
+/// See <https://www.sqlite.org/c3ref/column_blob.html>
+pub unsafe fn sqlite3_column_type(
+    stmt: *mut sqlite3_stmt,
+    colIdx: ::std::os::raw::c_int,
+) -> ::std::os::raw::c_int {
+    sqlite().capi().sqlite3_column_type(stmt, colIdx)
+}
+
+/// Registers a callback function to be invoked whenever a transaction is
+/// committed. Any callback set by a previous call to `sqlite3_commit_hook()`
+/// for the same database connection is overridden.
+///
+/// See <https://www.sqlite.org/c3ref/commit_hook.html>
+pub unsafe fn sqlite3_commit_hook(
+    db: *mut sqlite3,
+    hook: ::std::option::Option<
+        unsafe extern "C" fn(cbArg: *mut ::std::os::raw::c_void) -> ::std::os::raw::c_int,
+    >,
+    cbArg: *mut ::std::os::raw::c_void,
+) -> *mut ::std::os::raw::c_void {
+    let hook = hook.map(|f| Closure::new(move |cbArg: *mut std::ffi::c_void| f(cbArg)));
+    let ret = sqlite()
+        .capi()
+        .sqlite3_commit_hook(db, hook.as_ref(), cbArg);
+    if let Some(hook) = hook {
+        Closure::forget(hook);
+    }
+    ret
+}
+
+/// Causes the callback function `callback` to be invoked periodically during
+/// long running calls to `sqlite3_step()` and `sqlite3_prepare()` and similar
+/// for database connection `db`. An example use for this interface is to keep
+/// a GUI updated during a large query.
+///
+/// See <https://www.sqlite.org/c3ref/progress_handler.html>
+pub unsafe fn sqlite3_progress_handler(
+    db: *mut sqlite3,
+    nOps: ::std::os::raw::c_int,
+    callback: ::std::option::Option<
+        unsafe extern "C" fn(cbArg: *mut ::std::os::raw::c_void) -> ::std::os::raw::c_int,
+    >,
+    cbArg: *mut ::std::os::raw::c_void,
+) {
+    let callback = callback.map(|f| Closure::new(move |cbArg: *mut std::ffi::c_void| f(cbArg)));
+    sqlite()
+        .capi()
+        .sqlite3_progress_handler(db, nOps, callback.as_ref(), cbArg);
+    if let Some(callback) = callback {
+        Closure::forget(callback);
+    }
+}
+
+/// The `sqlite3_rollback_hook()` interface registers a callback function to be
+/// invoked whenever a transaction is rolled back. Any callback set by a
+/// previous call to `sqlite3_rollback_hook()` for the same database connection
+/// is overridden.
+///
+/// See <https://www.sqlite.org/c3ref/commit_hook.html>
+pub unsafe fn sqlite3_rollback_hook(
+    db: *mut sqlite3,
+    hook: ::std::option::Option<unsafe extern "C" fn(cbArg: *mut ::std::os::raw::c_void)>,
+    cbArg: *mut ::std::os::raw::c_void,
+) -> *mut ::std::os::raw::c_void {
+    let hook = hook.map(|f| {
+        Closure::new(move |cbArg: *mut std::ffi::c_void| {
+            f(cbArg);
+        })
+    });
+    let ret = sqlite()
+        .capi()
+        .sqlite3_rollback_hook(db, hook.as_ref(), cbArg);
+    if let Some(hook) = hook {
+        Closure::forget(hook);
+    }
+    ret
+}
+
+/// Registers a callback function with the database connection identified by
+/// the first argument to be invoked whenever a row is updated, inserted or
+/// deleted in a rowid table. Any callback set by a previous call to this
+/// function for the same database connection is overridden.
+///
+/// See <https://www.sqlite.org/c3ref/update_hook.html>
+pub unsafe fn sqlite3_update_hook(
+    db: *mut sqlite3,
+    xUpdate: ::std::option::Option<
+        unsafe extern "C" fn(
+            userCtx: *mut ::std::os::raw::c_void,
+            op: ::std::os::raw::c_int,
+            dbName: *const ::std::os::raw::c_char,
+            tableName: *const ::std::os::raw::c_char,
+            newRowId: sqlite3_int64,
+        ),
+    >,
+    userCtx: *mut ::std::os::raw::c_void,
+) -> *mut ::std::os::raw::c_void {
+    let xUpdate = xUpdate.map(|f| {
+        Closure::new(
+            move |userCtx: *mut std::ffi::c_void,
+                  op: ::std::os::raw::c_int,
+                  dbName: String,
+                  tableName: String,
+                  newRowId: sqlite3_int64| {
+                let dbName = cstring(dbName);
+                let tableName = cstring(tableName);
+                f(userCtx, op, dbName.as_ptr(), tableName.as_ptr(), newRowId);
+            },
+        )
+    });
+
+    let ret = sqlite()
+        .capi()
+        .sqlite3_update_hook(db, xUpdate.as_ref(), userCtx);
+    if let Some(xUpdate) = xUpdate {
+        Closure::forget(xUpdate);
+    }
+    ret
+}
+/// Set A Busy Timeout.
+///
+/// Sets a `sqlite3_busy_handler` that sleeps for a specified amount of time
+/// when a table is locked. The handler will sleep multiple times until at
+/// least `ms` milliseconds of sleeping have accumulated. After at least `ms`
+/// milliseconds of sleeping, the handler returns 0 which causes
+/// `sqlite3_step()` to return `SQLITE_BUSY`.
+///
+/// See <https://www.sqlite.org/c3ref/busy_timeout.html>
+pub unsafe fn sqlite3_busy_timeout(
+    db: *mut sqlite3,
+    ms: ::std::os::raw::c_int,
+) -> ::std::os::raw::c_int {
+    sqlite().capi().sqlite3_busy_timeout(db, ms)
+}
+
+/// Usually returns the `rowid` of the most recent successful `INSERT` into a
+/// rowid table or virtual table on database connection `db`. Inserts into
+/// `WITHOUT ROWID` tables are not recorded. If no successful `INSERT`s into
+/// rowid tables have ever occurred on the database connection `db`, then
+/// `sqlite3_last_insert_rowid(db)` returns zero
+///
+/// See <https://www.sqlite.org/c3ref/last_insert_rowid.html>
+pub unsafe fn sqlite3_last_insert_rowid(db: *mut sqlite3) -> sqlite3_int64 {
+    sqlite().capi().sqlite3_last_insert_rowid(db)
+}
+
+/// Used to find the number of SQL parameters in a prepared statement. SQL
+/// parameters are tokens of the form `?`, `?NNN`, `:AAA`, `$AAA`, or `@AAA`
+/// that serve as placeholders for values that are bound to the parameters at a
+/// later time.
+///
+/// See <https://www.sqlite.org/c3ref/bind_parameter_count.html>
+pub unsafe fn sqlite3_bind_parameter_count(stmt: *mut sqlite3_stmt) -> ::std::os::raw::c_int {
+    sqlite().capi().sqlite3_bind_parameter_count(stmt)
+}
+
+/// See <https://www.sqlite.org/c3ref/bind_parameter_name.html>
+pub unsafe fn sqlite3_bind_parameter_name(
+    stmt: *mut sqlite3_stmt,
+    nth: ::std::os::raw::c_int,
+) -> *const ::std::os::raw::c_char {
+    let ret = sqlite().capi().sqlite3_bind_parameter_name(stmt, nth);
+    let raw = cstring(ret).into_raw();
+
+    stmt_with_key_allocated()
+        .entry(Ptr(stmt.cast()))
+        .or_default()
+        .insert(
+            StmtKey::new("sqlite3_bind_parameter_name", nth),
+            AllocatedT::CString(raw),
+        );
+
+    raw
+}
+
+/// Use this routine to reset all host parameters to NULL.
+///
+/// See <https://www.sqlite.org/c3ref/clear_bindings.html>
+pub unsafe fn sqlite3_clear_bindings(stmt: *mut sqlite3_stmt) -> ::std::os::raw::c_int {
+    sqlite().capi().sqlite3_clear_bindings(stmt)
+}
+
+/// Returns the initial data type of the result column in the current result
+/// row.
+///
+/// See <https://www.sqlite.org/c3ref/column_blob.html>
+pub unsafe fn sqlite3_column_bytes(
+    stmt: *mut sqlite3_stmt,
+    colIdx: ::std::os::raw::c_int,
+) -> ::std::os::raw::c_int {
+    sqlite().capi().sqlite3_column_bytes(stmt, colIdx)
+}
+
+/// Get a BLOB result value from a column in the current result row.
+///
+/// See <https://www.sqlite.org/c3ref/column_blob.html>
+pub unsafe fn sqlite3_column_blob(
+    stmt: *mut sqlite3_stmt,
+    colIdx: ::std::os::raw::c_int,
+) -> *const ::std::os::raw::c_void {
+    let sqlite3 = sqlite();
+    let capi = sqlite3.capi();
+
+    let ptr = capi.sqlite3_column_blob(stmt, colIdx);
+    let len = capi.sqlite3_column_bytes(stmt, colIdx) as usize;
+
+    let mut data = vec![0; len];
+    sqlite3.peek_buf(ptr as _, data.as_mut_slice());
+    let (ret, len, cap) = vec_into_raw_parts(data);
+
+    stmt_with_key_allocated()
+        .entry(Ptr(stmt.cast()))
+        .or_default()
+        .insert(
+            StmtKey::new("sqlite3_column_blob", colIdx),
+            AllocatedT::VecU8((ret, len, cap)),
+        );
+
+    ret.cast()
+}
+
+/// See <https://www.sqlite.org/c3ref/column_decltype.html>
+pub unsafe fn sqlite3_column_decltype(
+    stmt: *mut sqlite3_stmt,
+    colIdx: ::std::os::raw::c_int,
+) -> *const ::std::os::raw::c_char {
+    ColumnCApi::Decltype.call(stmt, colIdx)
+}
+
+/// Get a double precision floating point result value from a column in the
+/// current result row.
+///
+/// See <https://www.sqlite.org/c3ref/column_blob.html>
+pub unsafe fn sqlite3_column_double(stmt: *mut sqlite3_stmt, colIdx: ::std::os::raw::c_int) -> f64 {
+    sqlite().capi().sqlite3_column_double(stmt, colIdx)
+}
+
+/// Get an integer result value from a column in the current result row.
+///
+/// See <https://www.sqlite.org/c3ref/column_blob.html>
+pub unsafe fn sqlite3_column_int(
+    stmt: *mut sqlite3_stmt,
+    colIdx: ::std::os::raw::c_int,
+) -> ::std::os::raw::c_int {
+    sqlite().capi().sqlite3_column_int(stmt, colIdx)
+}
+
+/// Get a 64bit integer result value from a column in the current result row.
+///
+/// See <https://www.sqlite.org/c3ref/column_blob.html>
+pub unsafe fn sqlite3_column_int64(
+    stmt: *mut sqlite3_stmt,
+    colIdx: ::std::os::raw::c_int,
+) -> sqlite3_int64 {
+    sqlite().capi().sqlite3_column_int64(stmt, colIdx)
+}
+
+/// Returns a pointer to a copy of the UTF-8 SQL text used to create prepared
+/// statement `stmt` if `stmt` was created by `sqlite3_prepare_v2()` or
+/// `sqlite3_prepare_v3()`.
+///
+/// See <https://www.sqlite.org/c3ref/sql.html>
+pub unsafe fn sqlite3_sql(stmt: *mut sqlite3_stmt) -> *const ::std::os::raw::c_char {
+    let ret = sqlite().capi().sqlite3_sql(stmt);
+    let raw = cstring(ret).into_raw();
+    stmt_with_key_allocated()
+        .entry(Ptr(stmt.cast()))
+        .or_default()
+        .insert(StmtKey::new("sqlite3_sql", 0), AllocatedT::CString(raw));
+    raw
+}
+
+/// Returns true (non-zero) if and only if the prepared statement `stmt` makes
+/// no direct changes to the content of the database file.
+///
+/// See <https://www.sqlite.org/c3ref/stmt_readonly.html>
+pub unsafe fn sqlite3_stmt_readonly(stmt: *mut sqlite3_stmt) -> ::std::os::raw::c_int {
+    sqlite().capi().sqlite3_stmt_readonly(stmt)
+}
+
+/// Returns information about column `colName` of table `tblName` in database
+/// `dbName` on database connection `db`. The `sqlite3_table_column_metadata()`
+/// interface returns `SQLITE_OK` and fills in the non-NULL pointers in the
+/// final five arguments with appropriate values if the specified column
+/// exists. The `sqlite3_table_column_metadata()` interface returns
+/// `SQLITE_ERROR` if the specified column does not exist.
+///
+/// See <https://www.sqlite.org/c3ref/table_column_metadata.html>
+pub unsafe fn sqlite3_table_column_metadata(
+    db: *mut sqlite3,
+    zDbName: *const ::std::os::raw::c_char,
+    zTableName: *const ::std::os::raw::c_char,
+    zColumnName: *const ::std::os::raw::c_char,
+    pzDataType: *mut *const ::std::os::raw::c_char,
+    pzCollSeq: *mut *const ::std::os::raw::c_char,
+    pNotNull: *mut ::std::os::raw::c_int,
+    pPrimaryKey: *mut ::std::os::raw::c_int,
+    pAutoinc: *mut ::std::os::raw::c_int,
+) -> ::std::os::raw::c_int {
+    let sqlite3 = sqlite();
+    let capi = sqlite3.capi();
+
+    let data_type = OutputPtr::new(&sqlite3, pzDataType, true);
+    let coll_seq = OutputPtr::new(&sqlite3, pzCollSeq, true);
+    let not_null = OutputPtr::new(&sqlite3, pNotNull, false);
+    let primary_key = OutputPtr::new(&sqlite3, pPrimaryKey, false);
+    let autoinc = OutputPtr::new(&sqlite3, pAutoinc, false);
+
+    capi.sqlite3_table_column_metadata(
+        db,
+        cstr!(zDbName),
+        cstr!(zTableName),
+        cstr!(zColumnName),
+        data_type.sqlite_ptr.cast(),
+        coll_seq.sqlite_ptr.cast(),
+        not_null.sqlite_ptr.cast(),
+        primary_key.sqlite_ptr.cast(),
+        autoinc.sqlite_ptr.cast(),
+    )
+}
+
+/// Returns a pointer to the metadata associated by the
+/// `sqlite3_set_auxdata(ctx, n , pAux, xDelete)` function with the `n`th
+/// argument value to the application-defined function. `n` is zero for the
+/// left-most function argument.
+///
+/// See <https://www.sqlite.org/c3ref/get_auxdata.html>
+pub unsafe fn sqlite3_get_auxdata(
+    ctx: *mut sqlite3_context,
+    n: ::std::os::raw::c_int,
+) -> *mut ::std::os::raw::c_void {
+    sqlite().capi().sqlite3_get_auxdata(ctx, n)
+}
+
+/// Enables or disables the `extended result codes` feature of SQLite. The
+/// extended result codes are disabled by default for historical
+/// compatibility.
+///
+/// See <https://www.sqlite.org/c3ref/extended_result_codes.html>
+pub unsafe fn sqlite3_extended_result_codes(
+    db: *mut sqlite3,
+    onoff: ::std::os::raw::c_int,
+) -> ::std::os::raw::c_int {
+    sqlite().capi().sqlite3_extended_result_codes(db, onoff)
 }
