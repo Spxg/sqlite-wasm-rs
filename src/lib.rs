@@ -66,9 +66,6 @@ struct InitOpts {
     /// sqlite wasm binary
     #[serde(rename = "wasmBinary")]
     wasm_binary: &'static [u8],
-    /// opfs proxy uri
-    #[serde(rename = "proxyUri")]
-    proxy_uri: String,
 }
 
 /// SQLite version info
@@ -149,12 +146,7 @@ impl SQLite {
     ///
     /// `SQLiteError::Serde`: serialization and deserialization errors
     async fn new() -> Result<Self, SQLiteError> {
-        let proxy_uri = wasm_bindgen::link_to!(module = "/src/jswasm/sqlite3-opfs-async-proxy.js");
-
-        let opts = InitOpts {
-            wasm_binary: WASM,
-            proxy_uri,
-        };
+        let opts = InitOpts { wasm_binary: WASM };
 
         let opts = serde_wasm_bindgen::to_value(&opts).map_err(SQLiteError::Serde)?;
         let module = wasm::SQLite::init(&Object::from(opts))
