@@ -591,7 +591,7 @@ pub unsafe fn sqlite3_create_function_v2(
         })
     });
 
-    let ret = capi.sqlite3_create_function_v2(
+    let ret = capi.sqlite3_create_function_v2_2(
         db,
         cstr!(functionName),
         nArg,

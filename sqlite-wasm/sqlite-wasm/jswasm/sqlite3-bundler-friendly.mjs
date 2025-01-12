@@ -11007,6 +11007,17 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
       "sqlite3_create_function_v2", "int", [
         "sqlite3*", "string"/*funcName*/, "int"/*nArg*/,
         "int"/*eTextRep*/, "*"/*pApp*/,
+        new wasm.xWrap.FuncPtrAdapter({name: 'xFunc', ...__cfProxy.xFunc}),
+        new wasm.xWrap.FuncPtrAdapter({name: 'xStep', ...__cfProxy.xInverseAndStep}),
+        new wasm.xWrap.FuncPtrAdapter({name: 'xFinal', ...__cfProxy.xFinalAndValue}),
+        new wasm.xWrap.FuncPtrAdapter({name: 'xDestroy', ...__cfProxy.xDestroy})
+      ]
+    );
+
+    const __sqlite3CreateFunction2 = wasm.xWrap(
+      "sqlite3_create_function_v2", "int", [
+        "sqlite3*", "string"/*funcName*/, "int"/*nArg*/,
+        "int"/*eTextRep*/, "*"/*pApp*/,
         new wasm.xWrap.FuncPtrAdapter({name: 'xFunc', ...__cfProxy.xFunc2}),
         new wasm.xWrap.FuncPtrAdapter({name: 'xStep', ...__cfProxy.xStep2}),
         new wasm.xWrap.FuncPtrAdapter({name: 'xFinal', ...__cfProxy.xFinal2}),
@@ -11046,6 +11057,36 @@ globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){
       }
       try{
         const rc = __sqlite3CreateFunction(pDb, funcName, nArg, eTextRep,
+                                           pApp, xFunc, xStep, xFinal, xDestroy);
+        if(0===rc && (xFunc instanceof Function
+                      || xStep instanceof Function
+                      || xFinal instanceof Function
+                      || xDestroy instanceof Function)){
+          __dbCleanupMap.addFunction(pDb, funcName, nArg);
+        }
+        return rc;
+      }catch(e){
+        console.error("sqlite3_create_function_v2() setup threw:",e);
+        return util.sqlite3__wasm_db_error(pDb, e, "Creation of UDF threw: "+e);
+      }
+    };
+
+    capi.sqlite3_create_function_v2_2 = function f(
+      pDb, funcName, nArg, eTextRep, pApp,
+      xFunc,   //void (*xFunc)(sqlite3_context*,int,sqlite3_value**)
+      xStep,   //void (*xStep)(sqlite3_context*,int,sqlite3_value**)
+      xFinal,  //void (*xFinal)(sqlite3_context*)
+      xDestroy //void (*xDestroy)(void*)
+    ){
+      if( f.length!==arguments.length ){
+        return __dbArgcMismatch(pDb,"sqlite3_create_function_v2",f.length);
+      }else if( 0 === (eTextRep & 0xf) ){
+        eTextRep |= capi.SQLITE_UTF8;
+      }else if( capi.SQLITE_UTF8 !== (eTextRep & 0xf) ){
+        return __errEncoding(pDb);
+      }
+      try{
+        const rc = __sqlite3CreateFunction2(pDb, funcName, nArg, eTextRep,
                                            pApp, xFunc, xStep, xFinal, xDestroy);
         if(0===rc && (xFunc instanceof Function
                       || xStep instanceof Function
@@ -15102,8 +15143,14 @@ const installOpfsVfs = function callee(options){
       promiseWasRejected = false;
       return promiseResolve_(sqlite3);
     };
-    const W =
-    new Worker(new URL("sqlite3-opfs-async-proxy.js", import.meta.url));
+    const getWorker = () => {
+     if (Module['opfsProxyUri']) {
+       return new Worker(Module['opfsProxyUri']);
+     } else {
+       return new Worker(new URL("sqlite3-opfs-async-proxy.js", import.meta.url));
+      }
+    };
+    const W = getWorker();
     setTimeout(()=>{
       /* At attempt to work around a browser-specific quirk in which
          the Worker load is failing in such a way that we neither

@@ -59,15 +59,13 @@ pub fn sqlite() -> Option<&'static SQLite> {
 const WASM: &[u8] = include_bytes!("jswasm/sqlite3.wasm");
 
 /// Initialize sqlite parameters
-///
-/// Currently, only memory can be configured
 #[derive(Serialize)]
 struct InitOpts {
     /// sqlite wasm binary
     #[serde(rename = "wasmBinary")]
     wasm_binary: &'static [u8],
     /// opfs proxy uri
-    #[serde(rename = "proxyUri")]
+    #[serde(rename = "opfsProxyUri")]
     proxy_uri: String,
 }
 

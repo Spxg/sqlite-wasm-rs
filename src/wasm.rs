@@ -9,14 +9,6 @@ use wasm_bindgen::{
     JsValue,
 };
 
-// Workaround, make file copy to snippets
-//
-// https://github.com/rustwasm/wasm-bindgen/issues/4233
-#[wasm_bindgen(module = "/src/jswasm/sqlite3-opfs-async-proxy.js")]
-extern "C" {
-    type Workaround;
-}
-
 #[wasm_bindgen(module = "/src/jswasm/sqlite3.js")]
 extern "C" {
     pub type SQLite;
@@ -168,7 +160,7 @@ extern "C" {
     pub fn sqlite3_free(capi: &CApi, ptr: *mut ::std::os::raw::c_void);
 
     #[wasm_bindgen(method)]
-    pub fn sqlite3_create_function_v2(
+    pub fn sqlite3_create_function_v2_2(
         capi: &CApi,
         db: *mut sqlite3,
         functionName: JsValue,
