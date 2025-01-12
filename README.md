@@ -2,6 +2,8 @@
 
 Wrap the official [`sqlite-wasm`](https://github.com/sqlite/sqlite-wasm), and expect to provide a usable C-like API.
 
+This project was successfully used in [`diesel`](https://github.com/diesel-rs/diesel).
+
 ## Usage
 
 ```rust
@@ -57,9 +59,13 @@ async fn open_db() -> anyhow::Result<()> {
 }
 ```
 
-## About TEST
 
-This project was successfully used in [`diesel`](https://github.com/diesel-rs/diesel), and diesel's integration tests and unit tests all run successfully (except for a few tests that required `std::fs::*` ), see [`sqlitest.gif`](https://raw.githubusercontent.com/Spxg/Spxg/refs/heads/master/resources/sqlitest.gif).
+## Why vendor sqlite-wasm
+
+* sqlite-wasm wrap some codes that are very convenient for JS, but difficult to use for rust.
+* Some sqlite C-API are not exported.
+
+Change history: <https://github.com/Spxg/sqlite>
 
 ## Related Project
 
