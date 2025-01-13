@@ -185,7 +185,7 @@ extern "C" {
     pub fn sqlite3_result_text(
         capi: &CApi,
         ctx: *mut sqlite3_context,
-        text: JsValue,
+        text: *const ::std::os::raw::c_char,
         textLen: ::std::os::raw::c_int,
         dtor: ::std::os::raw::c_int,
     );

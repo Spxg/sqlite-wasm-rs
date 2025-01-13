@@ -35,7 +35,7 @@ fn cstring(s: String) -> CString {
 /// On the contrary, they do not exist at all in JavaScript.
 struct OutputPtr<'a, T> {
     handle: &'a SQLite,
-    sqlite_ptr: *mut u8,
+    wasm_ptr: *mut u8,
     rust_ptr: *mut T,
     is_cstr: bool,
 }
@@ -44,7 +44,7 @@ impl<'a, T> OutputPtr<'a, T> {
     fn new(handle: &'a SQLite, rust_ptr: *mut T, is_cstr: bool) -> Self {
         Self {
             handle,
-            sqlite_ptr: if rust_ptr.is_null() {
+            wasm_ptr: if rust_ptr.is_null() {
                 std::ptr::null_mut()
             } else {
                 handle.wasm().alloc(size_of::<T>())
@@ -59,10 +59,10 @@ impl<'a, T> OutputPtr<'a, T> {
 impl<T> Drop for OutputPtr<'_, T> {
     fn drop(&mut self) {
         unsafe {
-            if !self.sqlite_ptr.is_null() {
+            if !self.wasm_ptr.is_null() {
                 assert!(!self.rust_ptr.is_null());
-                self.handle.peek(self.sqlite_ptr, &mut *self.rust_ptr);
-                self.handle.wasm().dealloc(self.sqlite_ptr);
+                self.handle.peek(self.wasm_ptr, &mut *self.rust_ptr);
+                self.handle.wasm().dealloc(self.wasm_ptr);
                 if self.is_cstr {
                     cstr_output_ptr(self.handle, self.rust_ptr.cast());
                 }
@@ -274,6 +274,75 @@ impl ColumnCApi {
     }
 }
 
+/// Release `text` and `blob` memory when Drop
+struct WasmGuard<'a> {
+    sqlite3: &'a SQLite,
+    ptr: *mut u8,
+    free: bool,
+}
+
+impl Drop for WasmGuard<'_> {
+    fn drop(&mut self) {
+        if !self.ptr.is_null() && self.free {
+            self.sqlite3.wasm().dealloc(self.ptr);
+        }
+    }
+}
+
+/// Copy the contents of the rust blob to wasm
+unsafe fn wasm_blob(
+    sqlite3: &SQLite,
+    blob: *const ::std::os::raw::c_void,
+    len: ::std::os::raw::c_int,
+    free: bool,
+) -> WasmGuard {
+    let wasm = sqlite3.wasm();
+
+    let ptr = if blob.is_null() || len < 0 {
+        std::ptr::null_mut()
+    } else {
+        let slice = slice::from_raw_parts(blob.cast(), len as usize);
+        let wasm_ptr = wasm.alloc(len.max(1) as usize);
+        sqlite3.poke_buf(slice, wasm_ptr);
+        wasm_ptr
+    };
+
+    WasmGuard { sqlite3, ptr, free }
+}
+
+/// Copy the contents of the rust text to wasm
+///
+/// If the length is negative, it will be converted to cstr to get the length
+unsafe fn wasm_text(
+    sqlite3: &SQLite,
+    text: *const ::std::os::raw::c_char,
+    len: ::std::os::raw::c_int,
+    free: bool,
+) -> WasmGuard {
+    let wasm = sqlite3.wasm();
+
+    let ptr = if text.is_null() {
+        std::ptr::null_mut()
+    } else {
+        let (wasm_z_sql, len) = if len < 0 {
+            // cstr length
+            let cstr = CStr::from_ptr(text.cast_mut());
+            // safety: nBytes is negative, so it is a cstr
+            let len = cstr
+                .to_str()
+                .expect("sql must be cstr because nBytes is negative")
+                .len();
+            (wasm.alloc(len), len)
+        } else {
+            (wasm.alloc(len.max(1) as usize), len as usize)
+        };
+        sqlite3.poke_buf(slice::from_raw_parts(text.cast(), len), wasm_z_sql);
+        wasm_z_sql
+    };
+
+    WasmGuard { sqlite3, ptr, free }
+}
+
 /// Open an `SQLite` database file as specified by the `filename` argument
 /// and support opfs vfs on wasm platform.
 ///
@@ -291,7 +360,7 @@ pub unsafe fn sqlite3_open_v2(
 
     // using output-pointer arguments from JS
     let ptr = OutputPtr::new(sqlite3, ppDb, false);
-    capi.sqlite3_open_v2(cstr!(filename), ptr.sqlite_ptr.cast(), flags, cstr!(vfs))
+    capi.sqlite3_open_v2(cstr!(filename), ptr.wasm_ptr.cast(), flags, cstr!(vfs))
 }
 
 /// A convenience wrapper around `sqlite3_prepare_v2()`, `sqlite3_step()`, and
@@ -353,7 +422,7 @@ pub unsafe fn sqlite3_exec(
         cstr!(sql),
         callback.as_ref(),
         pCbArg,
-        ptr.sqlite_ptr.cast(),
+        ptr.wasm_ptr.cast(),
     )
 }
 
@@ -471,7 +540,7 @@ pub unsafe fn sqlite3_serialize(
     } else {
         // using output-pointer arguments from JS
         let size = OutputPtr::new(sqlite3, piSize, false);
-        let ptr = capi.sqlite3_serialize(db, cstr!(schema), size.sqlite_ptr.cast(), flags);
+        let ptr = capi.sqlite3_serialize(db, cstr!(schema), size.wasm_ptr.cast(), flags);
         drop(size);
 
         let ret = serialized(ptr, *piSize as usize, sqlite3);
@@ -634,20 +703,8 @@ pub unsafe fn sqlite3_result_text(
     let capi = sqlite3.capi();
 
     let dtor = dtori32(dtor);
-
-    // text: string | WasmPointer
-    // WasmPointer is number, so use 0 to represent null ptr
-    //
-    // I don't know how to handle this, so I'll leave it to sqlite3
-    if text.is_null() || textLen < 0 {
-        capi.sqlite3_result_text(ctx, JsValue::from(0x0), textLen, dtor);
-    } else {
-        let slice = slice::from_raw_parts(text.cast::<u8>(), textLen as usize);
-        // sqlite3_result_text only accepts utf8 data
-        let s = str::from_utf8(slice).expect("result text is not utf8");
-        // Using JsValue can reduce some memory management
-        capi.sqlite3_result_text(ctx, JsValue::from(s), textLen, dtor);
-    }
+    let guard = wasm_text(sqlite3, text, textLen, dtor == -1);
+    capi.sqlite3_result_text(ctx, guard.ptr.cast(), textLen, dtor);
 }
 
 /// Sets the result from an application-defined function to be the `BLOB` whose
@@ -663,29 +720,10 @@ pub unsafe fn sqlite3_result_blob(
 ) {
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
-    let wasm = sqlite3.wasm();
 
     let dtor = dtori32(dtor);
-
-    if blob.is_null() || blobLen < 0 {
-        capi.sqlite3_result_blob(ctx, blob, blobLen, dtor);
-    } else {
-        let slice = slice::from_raw_parts(blob.cast::<u8>(), blobLen as usize);
-        let wasm_ptr = wasm.alloc(blobLen.max(1) as usize);
-
-        sqlite3.poke_buf(slice, wasm_ptr);
-
-        capi.sqlite3_result_blob(ctx, wasm_ptr as _, blobLen, dtor);
-
-        // If SQLITE_TRANSIENT is set, can safely
-        // free it because sqlite3 has already copied it.
-        //
-        // If SQLITE_STATIC is set, it cannot be freed
-        // because it looks like this is a static thing in sqlite3
-        if dtor == -1 {
-            wasm.dealloc(wasm_ptr);
-        }
-    }
+    let guard = wasm_blob(sqlite3, blob, blobLen, dtor == -1);
+    capi.sqlite3_result_blob(ctx, guard.ptr.cast(), blobLen, dtor);
 }
 
 /// Sets the return value of the application-defined function to be the 32-bit
@@ -780,32 +818,10 @@ pub unsafe fn sqlite3_bind_blob(
 ) -> ::std::os::raw::c_int {
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
-    let wasm = sqlite3.wasm();
 
     let dtor = dtori32(dtor);
-
-    // I don't know how to handle this, so I'll leave it to sqlite3
-    if blob.is_null() || n < 0 {
-        capi.sqlite3_bind_blob(stmt, idx, blob, n, dtor)
-    } else {
-        let slice = slice::from_raw_parts(blob.cast::<u8>(), n as usize);
-        let wasm_ptr = wasm.alloc(n.max(1) as usize);
-
-        sqlite3.poke_buf(slice, wasm_ptr);
-
-        let ret = capi.sqlite3_bind_blob(stmt, idx, wasm_ptr as *const _, n, dtor);
-
-        // If SQLITE_TRANSIENT is set, can safely
-        // free it because sqlite3 has already copied it.
-        //
-        // If SQLITE_STATIC is set, it cannot be freed
-        // because it looks like this is a static thing in sqlite3
-        if dtor == -1 {
-            wasm.dealloc(wasm_ptr);
-        }
-
-        ret
-    }
+    let guard = wasm_blob(sqlite3, blob, n, dtor == -1);
+    capi.sqlite3_bind_blob(stmt, idx, guard.ptr.cast(), n, dtor)
 }
 
 /// Bind a `TEXT` value to a parameter in a prepared statement.
@@ -820,31 +836,10 @@ pub unsafe fn sqlite3_bind_text(
 ) -> ::std::os::raw::c_int {
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
-    let wasm = sqlite3.wasm();
 
     let dtor = dtori32(dtor);
-
-    // I don't know how to handle this, so I'll leave it to sqlite3
-    if text.is_null() || n < 0 {
-        capi.sqlite3_bind_text(stmt, idx, text, n, dtor)
-    } else {
-        let slice = slice::from_raw_parts(text.cast::<u8>(), n as usize);
-        let wasm_ptr = wasm.alloc(n.max(1) as usize);
-        sqlite3.poke_buf(slice, wasm_ptr);
-
-        let ret = capi.sqlite3_bind_text(stmt, idx, wasm_ptr as _, n, dtor);
-
-        // If SQLITE_TRANSIENT is set, can safely
-        // free it because sqlite3 has already copied it.
-        //
-        // If SQLITE_STATIC is set, it cannot be freed
-        // because it looks like this is a static thing in sqlite3
-        if dtor == -1 {
-            wasm.dealloc(wasm_ptr);
-        }
-
-        ret
-    }
+    let guard = wasm_text(sqlite3, text, n, dtor == -1);
+    capi.sqlite3_bind_text(stmt, idx, guard.ptr.cast(), n, dtor)
 }
 
 /// Frees an `sqlite3_value` object previously obtained from
@@ -1165,28 +1160,9 @@ pub unsafe fn sqlite3_prepare_v3(
 ) -> ::std::os::raw::c_int {
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
-    let wasm = sqlite3.wasm();
 
-    // I don't know how to handle this, so I'll leave it to sqlite3
-    let wasm_z_sql = if sql.is_null() || nByte < -1 {
-        std::ptr::null_mut::<u8>()
-    } else {
-        let (wasm_z_sql, len) = if nByte == -1 {
-            // cstr length
-            let cstr = CStr::from_ptr(sql.cast_mut());
-            // safety: nBytes is -1, so it is a cstr
-            let len = cstr
-                .to_str()
-                .expect("sql must be cstr because nBytes == -1")
-                .len();
-            (wasm.alloc(len), len)
-        } else {
-            (wasm.alloc(nByte.max(1) as usize), nByte as usize)
-        };
-        sqlite3.poke_buf(slice::from_raw_parts(sql.cast(), len), wasm_z_sql);
-        wasm_z_sql
-    };
-
+    let guard = wasm_text(sqlite3, sql, nByte, true);
+    let wasm_z_sql = guard.ptr.cast();
     // using output-pointer arguments from JS
     let pp_stmt = OutputPtr::new(sqlite3, ppStmt, false);
     let pz_tail = OutputPtr::new(sqlite3, pzTail, false);
@@ -1195,8 +1171,8 @@ pub unsafe fn sqlite3_prepare_v3(
         wasm_z_sql as _,
         nByte,
         prepFlags,
-        pp_stmt.sqlite_ptr.cast(),
-        pz_tail.sqlite_ptr.cast(),
+        pp_stmt.wasm_ptr.cast(),
+        pz_tail.wasm_ptr.cast(),
     );
     drop(pz_tail);
 
@@ -1209,10 +1185,6 @@ pub unsafe fn sqlite3_prepare_v3(
         *pzTail =
             sql.add((*pzTail as usize - wasm_z_sql as usize) / size_of::<::std::os::raw::c_char>());
     }
-
-    // the prepared statement that is returned
-    // (the sqlite3_stmt object) contains a copy of the original SQL text
-    wasm.dealloc(wasm_z_sql);
 
     ret
 }
@@ -1319,7 +1291,7 @@ pub unsafe fn sqlite3_bind_text64(
     if text.is_null() {
         capi.sqlite3_bind_text64(stmt, idx, text, n, dtor, encoding)
     } else {
-        let slice = slice::from_raw_parts(text.cast::<u8>(), n as usize);
+        let slice = slice::from_raw_parts(text.cast(), n as usize);
         let wasm_ptr = wasm.alloc(n.max(1) as usize);
         sqlite3.poke_buf(slice, wasm_ptr);
 
@@ -1361,9 +1333,8 @@ pub unsafe fn sqlite3_bind_blob64(
     if blob.is_null() {
         capi.sqlite3_bind_blob64(stmt, idx, blob, n, dtor)
     } else {
-        let slice = slice::from_raw_parts(blob.cast::<u8>(), n as usize);
+        let slice = slice::from_raw_parts(blob.cast(), n as usize);
         let wasm_ptr = wasm.alloc(n.max(1) as usize);
-
         sqlite3.poke_buf(slice, wasm_ptr);
 
         let ret = capi.sqlite3_bind_blob64(stmt, idx, wasm_ptr as *const _, n, dtor);
@@ -1442,7 +1413,7 @@ pub unsafe fn sqlite3_open(
     let capi = sqlite3.capi();
 
     let ptr = OutputPtr::new(sqlite3, ppDb, false);
-    capi.sqlite3_open(cstr!(filename), ptr.sqlite_ptr.cast())
+    capi.sqlite3_open(cstr!(filename), ptr.wasm_ptr.cast())
 }
 
 /// Causes the `idx`-th parameter in prepared statement `stmt` to have an SQL
@@ -1507,8 +1478,8 @@ pub unsafe fn sqlite3_status(
 
     capi.sqlite3_status(
         op,
-        current.sqlite_ptr.cast(),
-        highwater.sqlite_ptr.cast(),
+        current.wasm_ptr.cast(),
+        highwater.wasm_ptr.cast(),
         resetFlag,
     )
 }
@@ -1531,8 +1502,8 @@ pub unsafe fn sqlite3_status64(
 
     capi.sqlite3_status64(
         op,
-        current.sqlite_ptr.cast(),
-        highwater.sqlite_ptr.cast(),
+        current.wasm_ptr.cast(),
+        highwater.wasm_ptr.cast(),
         resetFlag,
     )
 }
@@ -1892,11 +1863,11 @@ pub unsafe fn sqlite3_table_column_metadata(
         cstr!(zDbName),
         cstr!(zTableName),
         cstr!(zColumnName),
-        data_type.sqlite_ptr.cast(),
-        coll_seq.sqlite_ptr.cast(),
-        not_null.sqlite_ptr.cast(),
-        primary_key.sqlite_ptr.cast(),
-        autoinc.sqlite_ptr.cast(),
+        data_type.wasm_ptr.cast(),
+        coll_seq.wasm_ptr.cast(),
+        not_null.wasm_ptr.cast(),
+        primary_key.wasm_ptr.cast(),
+        autoinc.wasm_ptr.cast(),
     )
 }
 
