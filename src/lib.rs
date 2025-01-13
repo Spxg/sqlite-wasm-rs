@@ -231,7 +231,7 @@ impl SQLite {
 
     unsafe fn peek<T>(&self, from: *mut u8, dst: &mut T) {
         let dst = std::ptr::from_ref(dst) as *mut u8;
-        let slice = unsafe { std::slice::from_raw_parts_mut(dst, size_of::<T>()) };
+        let slice = unsafe { std::slice::from_raw_parts_mut(dst, std::mem::size_of::<T>()) };
         self.peek_buf(from, slice);
     }
 
