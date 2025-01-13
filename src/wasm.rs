@@ -634,6 +634,15 @@ extern "C" {
         db: *mut sqlite3,
         onoff: ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int;
+
+    #[wasm_bindgen(method)]
+    pub fn sqlite3_set_auxdata(
+        capi: &CApi,
+        ctx: *mut sqlite3_context,
+        n: ::std::os::raw::c_int,
+        pAux: *mut ::std::os::raw::c_void,
+        xDelete: ::std::option::Option<&Closure<dyn FnMut()>>,
+    );
 }
 
 /// Just like in C, WASM offers a memory "heap," and transfering values

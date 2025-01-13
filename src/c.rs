@@ -1924,3 +1924,22 @@ pub unsafe fn sqlite3_extended_result_codes(
 ) -> ::std::os::raw::c_int {
     sqlite().capi().sqlite3_extended_result_codes(db, onoff)
 }
+
+/// Saves `pAux` as metadata for the `n`-th argument of the application-defined
+/// function.
+///
+/// See <https://www.sqlite.org/c3ref/get_auxdata.html>
+pub unsafe fn sqlite3_set_auxdata(
+    ctx: *mut sqlite3_context,
+    n: ::std::os::raw::c_int,
+    pAux: *mut ::std::os::raw::c_void,
+    xDelete: ::std::option::Option<unsafe extern "C" fn(pAux: *mut ::std::os::raw::c_void)>,
+) {
+    let xDelete = xDelete.map(|f| Closure::new(move || f(pAux)));
+    sqlite()
+        .capi()
+        .sqlite3_set_auxdata(ctx, n, pAux, xDelete.as_ref());
+    if let Some(xDelete) = xDelete {
+        xDelete.forget();
+    }
+}
