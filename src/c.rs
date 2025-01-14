@@ -12,6 +12,14 @@ use std::{
 use std::{panic, slice, str};
 use wasm_bindgen::{prelude::Closure, JsValue};
 
+/// Get a static reference to sqlite.
+///
+/// Need to call `init_sqlite()` before calling
+fn sqlite() -> &'static SQLite {
+    crate::sqlite()
+        .expect("Call init_sqlite() to initialize sqlite3 before executing the C interface")
+}
+
 /// Use JsValue to express a null pointer or string.
 /// Because the sqlite-wasm pointer is a number, use 0x0
 macro_rules! cstr {
@@ -34,7 +42,7 @@ fn cstring(s: String) -> CString {
 /// Output-pointer arguments are commonplace in C.
 /// On the contrary, they do not exist at all in JavaScript.
 struct OutputPtr<'a, T> {
-    handle: &'a SQLite,
+    sqlite3: &'a SQLite,
     wasm_ptr: *mut u8,
     rust_ptr: *mut T,
     is_cstr: bool,
@@ -43,7 +51,7 @@ struct OutputPtr<'a, T> {
 impl<'a, T> OutputPtr<'a, T> {
     fn new(handle: &'a SQLite, rust_ptr: *mut T, is_cstr: bool) -> Self {
         Self {
-            handle,
+            sqlite3: handle,
             wasm_ptr: if rust_ptr.is_null() {
                 std::ptr::null_mut()
             } else {
@@ -61,10 +69,10 @@ impl<T> Drop for OutputPtr<'_, T> {
         unsafe {
             if !self.wasm_ptr.is_null() {
                 assert!(!self.rust_ptr.is_null());
-                self.handle.peek(self.wasm_ptr, &mut *self.rust_ptr);
-                self.handle.wasm().dealloc(self.wasm_ptr);
+                self.sqlite3.peek(self.wasm_ptr, &mut *self.rust_ptr);
+                self.sqlite3.wasm().dealloc(self.wasm_ptr);
                 if self.is_cstr {
-                    cstr_output_ptr(self.handle, self.rust_ptr.cast());
+                    cstr_output_ptr(self.sqlite3, self.rust_ptr.cast());
                 }
             }
         }
@@ -181,14 +189,6 @@ fn sqlite3_values_allocated() -> MutexGuard<'static, HashMap<Ptr, AllocatedT>> {
     SQLITE3_VALUES_ALLOCATED
         .lock()
         .expect("acquire sqlite3 values allocated lock failed")
-}
-
-/// Get a static reference to sqlite.
-///
-/// Need to call `init_sqlite()` before calling
-fn sqlite() -> &'static SQLite {
-    crate::sqlite()
-        .expect("Call init_sqlite() to initialize sqlite3 before executing the C interface")
 }
 
 /// Convert the dtor function pointer to i32
@@ -324,23 +324,60 @@ unsafe fn wasm_text(
     let ptr = if text.is_null() {
         std::ptr::null_mut()
     } else {
-        let (wasm_z_sql, len) = if len < 0 {
+        let (wasm_ptr, len) = if len < 0 {
             // cstr length
             let cstr = CStr::from_ptr(text.cast_mut());
             // safety: nBytes is negative, so it is a cstr
             let len = cstr
                 .to_str()
-                .expect("sql must be cstr because nBytes is negative")
+                .expect("text must be cstr because length is negative")
                 .len();
             (wasm.alloc(len), len)
         } else {
             (wasm.alloc(len.max(1) as usize), len as usize)
         };
-        sqlite3.poke_buf(slice::from_raw_parts(text.cast(), len), wasm_z_sql);
-        wasm_z_sql
+        sqlite3.poke_buf(slice::from_raw_parts(text.cast(), len), wasm_ptr);
+        wasm_ptr
     };
 
     WasmGuard { sqlite3, ptr, free }
+}
+
+/// Copy the contents of the rust blob64 to wasm
+unsafe fn wasm_blob64(
+    sqlite3: &SQLite,
+    blob: *const ::std::os::raw::c_void,
+    len: sqlite3_uint64,
+    free: bool,
+) -> WasmGuard {
+    if len > sqlite3_uint64::from(u32::MAX) {
+        panic!("wasm32 does not support memory allocations larger than u32::MAX");
+    }
+
+    let wasm = sqlite3.wasm();
+
+    let ptr = if blob.is_null() {
+        std::ptr::null_mut()
+    } else {
+        let slice = slice::from_raw_parts(blob.cast(), len as usize);
+        let wasm_ptr = wasm.alloc(len.max(1) as usize);
+        sqlite3.poke_buf(slice, wasm_ptr);
+        wasm_ptr
+    };
+
+    WasmGuard { sqlite3, ptr, free }
+}
+
+/// Copy the contents of the rust text64 to wasm
+///
+/// If the length is negative, it will be converted to cstr to get the length
+unsafe fn wasm_text64(
+    sqlite3: &SQLite,
+    text: *const ::std::os::raw::c_char,
+    len: sqlite3_uint64,
+    free: bool,
+) -> WasmGuard {
+    wasm_blob64(sqlite3, text.cast(), len, free)
 }
 
 /// Open an `SQLite` database file as specified by the `filename` argument
@@ -1274,40 +1311,17 @@ pub unsafe fn sqlite3_bind_text64(
     dtor: ::std::option::Option<unsafe extern "C" fn(arg1: *mut ::std::os::raw::c_void)>,
     encoding: ::std::os::raw::c_uchar,
 ) -> ::std::os::raw::c_int {
-    if n > sqlite3_uint64::from(u32::MAX) {
-        panic!("wasm32 does not support memory allocations larger than u32::MAX");
-    }
     if encoding != SQLITE_UTF8 as u8 {
         panic!("sqlite3_bind_text64 only support utf8 encoding now");
     }
 
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
-    let wasm = sqlite3.wasm();
 
     let dtor = dtori32(dtor);
+    let guard = wasm_text64(sqlite3, text, n, dtor == -1);
 
-    // I don't know how to handle this, so I'll leave it to sqlite3
-    if text.is_null() {
-        capi.sqlite3_bind_text64(stmt, idx, text, n, dtor, encoding)
-    } else {
-        let slice = slice::from_raw_parts(text.cast(), n as usize);
-        let wasm_ptr = wasm.alloc(n.max(1) as usize);
-        sqlite3.poke_buf(slice, wasm_ptr);
-
-        let ret = capi.sqlite3_bind_text64(stmt, idx, wasm_ptr as _, n, dtor, encoding);
-
-        // If SQLITE_TRANSIENT is set, can safely
-        // free it because sqlite3 has already copied it.
-        //
-        // If SQLITE_STATIC is set, it cannot be freed
-        // because it looks like this is a static thing in sqlite3
-        if dtor == -1 {
-            wasm.dealloc(wasm_ptr);
-        }
-
-        ret
-    }
+    capi.sqlite3_bind_text64(stmt, idx, guard.ptr.cast(), n, dtor, encoding)
 }
 
 /// Bind a `BLOB` value to a parameter in a prepared statement.
@@ -1320,36 +1334,12 @@ pub unsafe fn sqlite3_bind_blob64(
     n: sqlite3_uint64,
     dtor: ::std::option::Option<unsafe extern "C" fn(arg1: *mut ::std::os::raw::c_void)>,
 ) -> ::std::os::raw::c_int {
-    if n > sqlite3_uint64::from(u32::MAX) {
-        panic!("wasm32 does not support memory allocations larger than u32::MAX");
-    }
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
-    let wasm = sqlite3.wasm();
 
     let dtor = dtori32(dtor);
-
-    // I don't know how to handle this, so I'll leave it to sqlite3
-    if blob.is_null() {
-        capi.sqlite3_bind_blob64(stmt, idx, blob, n, dtor)
-    } else {
-        let slice = slice::from_raw_parts(blob.cast(), n as usize);
-        let wasm_ptr = wasm.alloc(n.max(1) as usize);
-        sqlite3.poke_buf(slice, wasm_ptr);
-
-        let ret = capi.sqlite3_bind_blob64(stmt, idx, wasm_ptr as *const _, n, dtor);
-
-        // If SQLITE_TRANSIENT is set, can safely
-        // free it because sqlite3 has already copied it.
-        //
-        // If SQLITE_STATIC is set, it cannot be freed
-        // because it looks like this is a static thing in sqlite3
-        if dtor == -1 {
-            wasm.dealloc(wasm_ptr);
-        }
-
-        ret
-    }
+    let guard = wasm_blob64(sqlite3, blob, n, dtor == -1);
+    capi.sqlite3_bind_blob64(stmt, idx, guard.ptr.cast(), n, dtor)
 }
 
 /// These routines provide a means to determine the database, table, and
