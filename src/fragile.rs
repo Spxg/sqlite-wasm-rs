@@ -8,7 +8,7 @@ use std::ops::{Deref, DerefMut};
 use fragile::Fragile;
 
 pub(crate) struct FragileComfirmed<T> {
-    fragile: Fragile<T>,
+    pub(crate) fragile: Fragile<T>,
 }
 
 unsafe impl<T> Send for FragileComfirmed<T> {}

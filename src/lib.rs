@@ -10,6 +10,7 @@ mod libsqlite3;
 #[allow(non_snake_case)]
 mod c;
 mod fragile;
+mod multithreading;
 mod wasm;
 
 /// These exported APIs are stable and will not have breaking changes.
@@ -38,7 +39,7 @@ use fragile::FragileComfirmed;
 use js_sys::{Object, WebAssembly};
 use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt::Display, result::Result};
-use tokio::sync::OnceCell;
+use tokio::sync::{mpsc::UnboundedSender, OnceCell};
 use wasm::{CApi, OpfsSAHPoolUtil, Wasm};
 use wasm_bindgen::JsCast;
 
@@ -47,7 +48,18 @@ static SQLITE: OnceCell<SQLite> = OnceCell::const_new();
 
 /// Initialize sqlite and opfs vfs
 pub async fn init_sqlite() -> Result<&'static SQLite, SQLiteError> {
-    SQLITE.get_or_try_init(SQLite::new).await
+    SQLITE
+        .get_or_try_init(|| async {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let sqlite3 = SQLite::new(tx).await?;
+            wasm_bindgen_futures::spawn_local(async move {
+                while let Some(req) = rx.recv().await {
+                    req.call();
+                }
+            });
+            Ok(sqlite3)
+        })
+        .await
 }
 
 /// Get the current sqlite global instance
@@ -137,6 +149,7 @@ impl Error for SQLiteError {}
 /// so use `Fragile` to limit it to one thread.
 pub struct SQLite {
     ffi: FragileComfirmed<wasm::SQLite>,
+    tx: UnboundedSender<multithreading::Req>,
     version: Version,
 }
 
@@ -146,7 +159,7 @@ impl SQLite {
     /// `SQLiteError::Module`: error in initializing module
     ///
     /// `SQLiteError::Serde`: serialization and deserialization errors
-    async fn new() -> Result<Self, SQLiteError> {
+    async fn new(tx: UnboundedSender<multithreading::Req>) -> Result<Self, SQLiteError> {
         let proxy_uri = wasm_bindgen::link_to!(module = "/src/jswasm/sqlite3-opfs-async-proxy.js");
 
         let opts = InitOpts {
@@ -166,6 +179,7 @@ impl SQLite {
 
         let sqlite = Self {
             ffi: FragileComfirmed::new(sqlite),
+            tx,
             version,
         };
 
@@ -214,6 +228,10 @@ impl SQLite {
     #[must_use]
     fn wasm(&self) -> Wasm {
         self.ffi.handle().wasm()
+    }
+
+    pub(crate) fn main_thread(&self) -> bool {
+        self.ffi.fragile.try_get().is_ok()
     }
 }
 

@@ -1,6 +1,7 @@
 //! This module provides some C-Like interfaces from sqlite-wasm.
 
 use crate::libsqlite3::*;
+use crate::multithreading::{Req, Request, Response};
 use crate::SQLite;
 use once_cell::sync::Lazy;
 use std::mem::{size_of, ManuallyDrop};
@@ -15,7 +16,7 @@ use wasm_bindgen::{prelude::Closure, JsValue};
 /// Get a static reference to sqlite.
 ///
 /// Need to call `init_sqlite()` before calling
-fn sqlite() -> &'static SQLite {
+pub(crate) fn sqlite() -> &'static SQLite {
     crate::sqlite()
         .expect("Call init_sqlite() to initialize sqlite3 before executing the C interface")
 }
@@ -393,6 +394,19 @@ pub unsafe fn sqlite3_open_v2(
     vfs: *const ::std::os::raw::c_char,
 ) -> ::std::os::raw::c_int {
     let sqlite3 = sqlite();
+    if !sqlite3.main_thread() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        sqlite3
+            .tx
+            .send(Req {
+                payload: Request::sqlite3_open_v2((filename, ppDb, flags, vfs)),
+                tx,
+            })
+            .unwrap();
+        let Response::sqlite3_open_v2(ret) = rx.recv().unwrap();
+        return ret;
+    }
+
     let capi = sqlite3.capi();
 
     // using output-pointer arguments from JS
