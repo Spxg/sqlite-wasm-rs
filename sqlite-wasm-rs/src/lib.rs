@@ -14,23 +14,23 @@ mod wasm;
 
 /// These exported APIs are stable and will not have breaking changes.
 pub mod export {
-    /// C interface definition of sqlite
+    // C interface definition of sqlite
     pub use super::c::*;
-    /// Some sqlite types copied from libsqlite3-sys
+    // Some sqlite types copied from libsqlite3-sys
     pub use super::libsqlite3::*;
-    /// See <https://sqlite.org/wasm/doc/trunk/persistence.md#vfs-opfs-sahpool>
+    // See <https://sqlite.org/wasm/doc/trunk/persistence.md#vfs-opfs-sahpool>
     pub use super::wasm::OpfsSAHPoolUtil;
-    /// `async fn init_sqlite()`: before using C-API, you must initialize sqlite, once.
-    ///
-    /// `fn sqlite()`: get the sqlite instance
-    ///
-    /// `OpfsSAHPoolCfg`: see <https://sqlite.org/wasm/doc/trunk/persistence.md#vfs-opfs-sahpool>
-    ///
-    /// `SQLite`: sqlite-wasm instance, only can be created by `init_sqlite`
-    ///
-    /// `SQLiteError`: initializing instance and other possible errors
-    ///
-    /// `Version`: sqlite-wasm version
+    // `async fn init_sqlite()`: before using C-API, you must initialize sqlite, once.
+    //
+    // `fn sqlite()`: get the sqlite instance
+    //
+    // `OpfsSAHPoolCfg`: see <https://sqlite.org/wasm/doc/trunk/persistence.md#vfs-opfs-sahpool>
+    //
+    // `SQLite`: sqlite-wasm instance, only can be created by `init_sqlite`
+    //
+    // `SQLiteError`: initializing instance and other possible errors
+    //
+    // `Version`: sqlite-wasm version
     pub use super::{init_sqlite, sqlite, OpfsSAHPoolCfg, SQLite, SQLiteError, Version};
 }
 
