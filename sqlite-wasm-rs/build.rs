@@ -16,7 +16,7 @@ fn main() {
     for sig in signatures {
         let ident = sig.ident;
 
-        let mut args = vec![];
+        let mut args = Vec::with_capacity(sig.inputs.len());
         for input in sig.inputs.iter() {
             let syn::FnArg::Typed(pat_type) = input else {
                 unreachable!()

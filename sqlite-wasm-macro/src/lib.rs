@@ -16,7 +16,7 @@ pub fn multithread(_: TokenStream, item: TokenStream) -> TokenStream {
     } = parse_macro_input!(item as ItemFn);
 
     let ident = &sig.ident;
-    let mut args = vec![];
+    let mut args = Vec::with_capacity(sig.inputs.len());
     for input in sig.inputs.iter() {
         let syn::FnArg::Typed(pat_type) = input else {
             unreachable!()
