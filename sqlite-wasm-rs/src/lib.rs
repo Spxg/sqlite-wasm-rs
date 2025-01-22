@@ -154,9 +154,6 @@ impl Display for SQLiteError {
 impl Error for SQLiteError {}
 
 /// Wrapped sqlite instance
-///
-/// It is not sure about the multi-thread support of sqlite-wasm,
-/// so use `Fragile` to limit it to one thread.
 pub struct SQLite {
     ffi: FragileComfirmed<wasm::SQLite>,
     #[cfg(target_feature = "atomics")]
