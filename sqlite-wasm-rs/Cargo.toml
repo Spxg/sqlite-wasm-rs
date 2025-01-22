@@ -1,8 +1,8 @@
 [package]
 name = "sqlite-wasm-rs"
 version = "0.1.4"
-authors = ["Spxg <unsafe@outlook.es>"]
 edition = "2021"
+authors = ["Spxg <unsafe@outlook.es>"]
 readme = "README.md"
 license = "MIT"
 repository = "https://github.com/Spxg/sqlite-wasm-rs"
