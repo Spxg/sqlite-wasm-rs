@@ -45,7 +45,29 @@ use wasm_bindgen::JsCast;
 /// Sqlite only needs to be initialized once
 static SQLITE: OnceCell<SQLite> = OnceCell::const_new();
 
+/// Initialize sqlite, opfs and multithreading channel
+#[cfg(target_feature = "atomics")]
+pub async fn init_sqlite() -> Result<&'static SQLite, SQLiteError> {
+    SQLITE
+        .get_or_try_init(|| async {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let sqlite3 = SQLite::new(tx).await?;
+            // Here we set the channel directly during initialization
+            //
+            // The reason is that this channel is only effective in
+            // the thread that calls `init_sqlite`.
+            wasm_bindgen_futures::spawn_local(async move {
+                while let Some(req) = rx.recv().await {
+                    req.run();
+                }
+            });
+            Ok(sqlite3)
+        })
+        .await
+}
+
 /// Initialize sqlite and opfs vfs
+#[cfg(not(target_feature = "atomics"))]
 pub async fn init_sqlite() -> Result<&'static SQLite, SQLiteError> {
     SQLITE.get_or_try_init(SQLite::new).await
 }
@@ -137,6 +159,8 @@ impl Error for SQLiteError {}
 /// so use `Fragile` to limit it to one thread.
 pub struct SQLite {
     ffi: FragileComfirmed<wasm::SQLite>,
+    #[cfg(target_feature = "atomics")]
+    tx: tokio::sync::mpsc::UnboundedSender<c::multithreading::Task>,
     version: Version,
 }
 
@@ -146,7 +170,11 @@ impl SQLite {
     /// `SQLiteError::Module`: error in initializing module
     ///
     /// `SQLiteError::Serde`: serialization and deserialization errors
-    async fn new() -> Result<Self, SQLiteError> {
+    async fn new(
+        #[cfg(target_feature = "atomics")] tx: tokio::sync::mpsc::UnboundedSender<
+            c::multithreading::Task,
+        >,
+    ) -> Result<Self, SQLiteError> {
         let proxy_uri = wasm_bindgen::link_to!(module = "/src/jswasm/sqlite3-opfs-async-proxy.js");
 
         let opts = InitOpts {
@@ -166,6 +194,8 @@ impl SQLite {
 
         let sqlite = Self {
             ffi: FragileComfirmed::new(sqlite),
+            #[cfg(target_feature = "atomics")]
+            tx,
             version,
         };
 
@@ -214,6 +244,13 @@ impl SQLite {
     #[must_use]
     fn wasm(&self) -> Wasm {
         self.ffi.handle().wasm()
+    }
+
+    /// Determine whether sqlite is called in the thread
+    /// that initialized it
+    #[cfg(target_feature = "atomics")]
+    fn main_thread(&self) -> bool {
+        self.ffi.main_thread()
     }
 }
 

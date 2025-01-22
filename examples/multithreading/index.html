@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>thread example</title>
+</head>
+
+<body>
+  <script type="module">
+    const worker = new Worker('start.js', { type: 'module' });
+    worker.onmessage = function (event) {
+      worker.postMessage("");
+    }
+  </script>
+</body>
+
+</html>
