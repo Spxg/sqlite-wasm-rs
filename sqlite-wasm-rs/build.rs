@@ -6,6 +6,8 @@ use quote::quote;
 use syn::{Item, Signature};
 
 fn main() {
+    println!("cargo::rerun-if-changed=src/c.rs");
+
     let signatures = parse_fn();
     let mut req = Vec::with_capacity(signatures.len());
     let mut resp = Vec::with_capacity(signatures.len());
