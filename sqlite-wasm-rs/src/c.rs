@@ -27,6 +27,7 @@ pub(crate) mod multithreading {
     }
 
     impl Task {
+        /// Called by the main thread and sends the result to the child thread.
         pub fn run(self) {
             self.tx
                 .send(self.req.call())
@@ -34,6 +35,7 @@ pub(crate) mod multithreading {
         }
     }
 
+    /// Send a task to the main thread and wait for it to return synchronously.
     pub fn call(sqlite: &SQLite, req: CApiReq) -> CApiResp {
         let (tx, rx) = std::sync::mpsc::channel();
         sqlite
