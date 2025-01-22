@@ -7,7 +7,7 @@ use std::ops::{Deref, DerefMut};
 
 use fragile::Fragile;
 
-pub(crate) struct FragileComfirmed<T> {
+pub struct FragileComfirmed<T> {
     fragile: Fragile<T>,
 }
 
@@ -15,10 +15,15 @@ unsafe impl<T> Send for FragileComfirmed<T> {}
 unsafe impl<T> Sync for FragileComfirmed<T> {}
 
 impl<T> FragileComfirmed<T> {
-    pub(crate) fn new(t: T) -> Self {
+    pub fn new(t: T) -> Self {
         FragileComfirmed {
             fragile: Fragile::new(t),
         }
+    }
+
+    #[cfg(target_feature = "atomics")]
+    pub fn main_thread(&self) -> bool {
+        self.fragile.try_get().is_ok()
     }
 }
 

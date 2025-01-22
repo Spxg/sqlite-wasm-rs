@@ -19,9 +19,16 @@ serde-wasm-bindgen = "0.6.5"
 tokio = { version = "1.42.0", features = ["sync"] }
 wasm-bindgen = "0.2.99"
 wasm-bindgen-futures = "0.4.49"
+sqlite-wasm-macro = { path = "../sqlite-wasm-macro" }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.49"
+
+[build-dependencies]
+proc-macro2 = "1.0.92"
+quote = "1.0.38"
+syn = "2.0.92"
+prettyplease = "0.2.29"
 
 [package.metadata.docs.rs]
 targets = ["wasm32-unknown-unknown"]

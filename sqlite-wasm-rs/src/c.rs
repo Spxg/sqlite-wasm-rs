@@ -3,6 +3,7 @@
 use crate::libsqlite3::*;
 use crate::SQLite;
 use once_cell::sync::Lazy;
+use sqlite_wasm_macro::multithread;
 use std::mem::{size_of, ManuallyDrop};
 use std::sync::{Mutex, MutexGuard};
 use std::{
@@ -11,6 +12,40 @@ use std::{
 };
 use std::{panic, slice, str};
 use wasm_bindgen::{prelude::Closure, JsValue};
+
+/// Wrap some multithreading calls
+#[cfg(target_feature = "atomics")]
+pub(crate) mod multithreading {
+    use super::*;
+    use std::sync::mpsc::Sender;
+
+    include!(concat!(env!("OUT_DIR"), "/multithreading.rs"));
+
+    pub struct Task {
+        req: CApiReq,
+        tx: Sender<CApiResp>,
+    }
+
+    impl Task {
+        pub fn run(self) {
+            self.tx
+                .send(self.req.call())
+                .expect("recv channel never disconnect");
+        }
+    }
+
+    pub fn call(sqlite: &SQLite, req: CApiReq) -> CApiResp {
+        let (tx, rx) = std::sync::mpsc::channel();
+        sqlite
+            .tx
+            .send(Task { req, tx })
+            .expect("recv channel never disconnect");
+        rx.recv().expect("send channel never disconnect")
+    }
+}
+
+#[cfg(target_feature = "atomics")]
+use multithreading::{call, CApiReq, CApiResp};
 
 /// Get a static reference to sqlite.
 ///
@@ -386,6 +421,8 @@ unsafe fn wasm_text64(
 /// See <https://www.sqlite.org/c3ref/open.html>
 ///
 /// See <https://sqlite.org/wasm/doc/trunk/persistence.md>
+#[multithread]
+#[multithread]
 pub unsafe fn sqlite3_open_v2(
     filename: *const ::std::os::raw::c_char,
     ppDb: *mut *mut sqlite3,
@@ -405,6 +442,7 @@ pub unsafe fn sqlite3_open_v2(
 /// of SQL without having to use a lot of C code.
 ///
 /// See <https://www.sqlite.org/c3ref/exec.html>
+#[multithread]
 pub unsafe fn sqlite3_exec(
     db: *mut sqlite3,
     sql: *const ::std::os::raw::c_char,
@@ -466,6 +504,7 @@ pub unsafe fn sqlite3_exec(
 /// Destructor for the `sqlite3` object.
 ///
 /// See <https://www.sqlite.org/c3ref/close.html>
+#[multithread]
 pub unsafe fn sqlite3_close(db: *mut sqlite3) -> ::std::os::raw::c_int {
     sqlite().capi().sqlite3_close_v2(db)
 }
@@ -473,6 +512,7 @@ pub unsafe fn sqlite3_close(db: *mut sqlite3) -> ::std::os::raw::c_int {
 /// Destructor for the `sqlite3` object.
 ///
 /// See <https://www.sqlite.org/c3ref/close.html>
+#[multithread]
 pub unsafe fn sqlite3_close_v2(db: *mut sqlite3) -> ::std::os::raw::c_int {
     sqlite().capi().sqlite3_close_v2(db)
 }
@@ -485,6 +525,7 @@ pub unsafe fn sqlite3_close_v2(db: *mut sqlite3) -> ::std::os::raw::c_int {
 /// `sqlite3_changes64()` instead in these cases.
 ///
 /// See <https://www.sqlite.org/c3ref/changes.html>
+#[multithread]
 pub unsafe fn sqlite3_changes(db: *mut sqlite3) -> ::std::os::raw::c_int {
     sqlite().capi().sqlite3_changes(db)
 }
@@ -503,6 +544,7 @@ pub unsafe fn sqlite3_changes(db: *mut sqlite3) -> ::std::os::raw::c_int {
 /// <https://sqlite.org/wasm/doc/trunk/api-c-style.md#sqlite3_deserialize> for
 ///
 /// See <https://www.sqlite.org/c3ref/deserialize.html>
+#[multithread]
 pub unsafe fn sqlite3_deserialize(
     db: *mut sqlite3,
     schema: *const ::std::os::raw::c_char,
@@ -550,6 +592,7 @@ pub unsafe fn sqlite3_deserialize(
 /// if that database where backed up to disk.
 ///
 /// See <https://www.sqlite.org/c3ref/serialize.html>
+#[multithread]
 pub unsafe fn sqlite3_serialize(
     db: *mut sqlite3,
     schema: *const ::std::os::raw::c_char,
@@ -597,6 +640,7 @@ pub unsafe fn sqlite3_serialize(
 /// might be reused.
 ///
 /// See <https://www.sqlite.org/c3ref/free.html>
+#[multithread]
 pub unsafe fn sqlite3_free(ptr: *mut ::std::os::raw::c_void) {
     // Because sqlite3 uses other wasm memory, in theory only the memory
     // copied to rust needs to be freed, such as sqlite3_serialize
@@ -610,6 +654,7 @@ pub unsafe fn sqlite3_free(ptr: *mut ::std::os::raw::c_void) {
 ///
 /// The `capi.sqlite3_create_function_v2` exposed by JS has been modified because
 /// the original `helper` method is awkward to use in Rust
+#[multithread]
 pub unsafe fn sqlite3_create_function_v2(
     db: *mut sqlite3,
     functionName: *const ::std::os::raw::c_char,
@@ -730,6 +775,7 @@ pub unsafe fn sqlite3_create_function_v2(
 /// string
 ///
 /// See <https://www.sqlite.org/c3ref/result_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_result_text(
     ctx: *mut sqlite3_context,
     text: *const ::std::os::raw::c_char,
@@ -749,6 +795,7 @@ pub unsafe fn sqlite3_result_text(
 /// long.
 ///
 /// See <https://www.sqlite.org/c3ref/result_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_result_blob(
     ctx: *mut sqlite3_context,
     blob: *const ::std::os::raw::c_void,
@@ -767,6 +814,7 @@ pub unsafe fn sqlite3_result_blob(
 /// signed integer value given in the 2nd argument.
 ///
 /// See <https://www.sqlite.org/c3ref/result_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_result_int(ctx: *mut sqlite3_context, value: ::std::os::raw::c_int) {
     sqlite().capi().sqlite3_result_int(ctx, value);
 }
@@ -775,6 +823,7 @@ pub unsafe fn sqlite3_result_int(ctx: *mut sqlite3_context, value: ::std::os::ra
 /// signed integer value given in the 2nd argument.
 ///
 /// See <https://www.sqlite.org/c3ref/result_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_result_int64(ctx: *mut sqlite3_context, value: sqlite3_int64) {
     sqlite().capi().sqlite3_result_int64(ctx, value);
 }
@@ -783,6 +832,7 @@ pub unsafe fn sqlite3_result_int64(ctx: *mut sqlite3_context, value: sqlite3_int
 /// value specified by its 2nd argument.
 ///
 /// See <https://www.sqlite.org/c3ref/result_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_result_double(ctx: *mut sqlite3_context, value: f64) {
     sqlite().capi().sqlite3_result_double(ctx, value);
 }
@@ -790,6 +840,7 @@ pub unsafe fn sqlite3_result_double(ctx: *mut sqlite3_context, value: f64) {
 /// Sets the return value of the application-defined function to be `NULL`.
 ///
 /// See <https://www.sqlite.org/c3ref/result_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_result_null(ctx: *mut sqlite3_context) {
     sqlite().capi().sqlite3_result_null(ctx);
 }
@@ -797,6 +848,7 @@ pub unsafe fn sqlite3_result_null(ctx: *mut sqlite3_context) {
 /// Get a `sql_value*` result value from a column in the current result row.
 ///
 /// See <https://www.sqlite.org/c3ref/column_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_column_value(
     stmt: *mut sqlite3_stmt,
     colIdx: ::std::os::raw::c_int,
@@ -816,6 +868,7 @@ pub unsafe fn sqlite3_column_value(
 /// statement.
 ///
 /// See <https://www.sqlite.org/c3ref/column_count.html>
+#[multithread]
 pub unsafe fn sqlite3_column_count(stmt: *mut sqlite3_stmt) -> ::std::os::raw::c_int {
     sqlite().capi().sqlite3_column_count(stmt)
 }
@@ -824,6 +877,7 @@ pub unsafe fn sqlite3_column_count(stmt: *mut sqlite3_stmt) -> ::std::os::raw::c
 /// `SELECT statement`.
 ///
 /// See <https://www.sqlite.org/c3ref/column_name.html>
+#[multithread]
 pub unsafe fn sqlite3_column_name(
     stmt: *mut sqlite3_stmt,
     colIdx: ::std::os::raw::c_int,
@@ -834,6 +888,7 @@ pub unsafe fn sqlite3_column_name(
 /// Bind a `NULL` value to a parameter in a prepared statement.
 ///
 /// See <https://www.sqlite.org/c3ref/bind_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_bind_null(
     stmt: *mut sqlite3_stmt,
     idx: ::std::os::raw::c_int,
@@ -846,6 +901,7 @@ pub unsafe fn sqlite3_bind_null(
 /// Bind a `BLOB` value to a parameter in a prepared statement.
 ///
 /// See <https://www.sqlite.org/c3ref/bind_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_bind_blob(
     stmt: *mut sqlite3_stmt,
     idx: ::std::os::raw::c_int,
@@ -864,6 +920,7 @@ pub unsafe fn sqlite3_bind_blob(
 /// Bind a `TEXT` value to a parameter in a prepared statement.
 ///
 /// See <https://www.sqlite.org/c3ref/bind_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_bind_text(
     stmt: *mut sqlite3_stmt,
     idx: ::std::os::raw::c_int,
@@ -883,6 +940,7 @@ pub unsafe fn sqlite3_bind_text(
 /// `sqlite3_value_dup()`.
 ///
 /// See <https://www.sqlite.org/c3ref/value_dup.html>
+#[multithread]
 pub unsafe fn sqlite3_value_free(sqliteValue: *mut sqlite3_value) {
     // Free the dup sqlite3_value memory
     sqlite3_values_allocated().remove(&Ptr(sqliteValue.cast()));
@@ -893,6 +951,7 @@ pub unsafe fn sqlite3_value_free(sqliteValue: *mut sqlite3_value) {
 /// `sqlite3_value` object.
 ///
 /// See <https://www.sqlite.org/c3ref/value_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_value_bytes(sqliteValue: *mut sqlite3_value) -> ::std::os::raw::c_int {
     sqlite().capi().sqlite3_value_bytes(sqliteValue)
 }
@@ -903,6 +962,7 @@ pub unsafe fn sqlite3_value_bytes(sqliteValue: *mut sqlite3_value) -> ::std::os:
 /// subsequent calls to `sqlite3_value_bytes()` or `sqlite3_value_text()`!
 ///
 /// See <https://www.sqlite.org/c3ref/value_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_value_text(
     sqliteValue: *mut sqlite3_value,
 ) -> *const ::std::os::raw::c_uchar {
@@ -932,6 +992,7 @@ pub unsafe fn sqlite3_value_text(
 /// subsequent calls to `sqlite3_value_bytes` or `sqlite3_value_text()`!
 ///
 /// See <https://www.sqlite.org/c3ref/value_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_value_blob(sqliteValue: *mut sqlite3_value) -> *const ::std::os::raw::c_void {
     let sqlite3 = sqlite();
     let capi = sqlite3.capi();
@@ -951,6 +1012,7 @@ pub unsafe fn sqlite3_value_blob(sqliteValue: *mut sqlite3_value) -> *const ::st
 /// Extract a `INTEGER` value from a protected `sqlite3_value` object.
 ///
 /// See <https://www.sqlite.org/c3ref/value_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_value_int(sqliteValue: *mut sqlite3_value) -> ::std::os::raw::c_int {
     sqlite().capi().sqlite3_value_int(sqliteValue)
 }
@@ -958,6 +1020,7 @@ pub unsafe fn sqlite3_value_int(sqliteValue: *mut sqlite3_value) -> ::std::os::r
 /// Extract a 64-bit `INTEGER` value from a protected `sqlite3_value` object.
 ///
 /// See <https://www.sqlite.org/c3ref/value_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_value_int64(sqliteValue: *mut sqlite3_value) -> sqlite3_int64 {
     sqlite().capi().sqlite3_value_int64(sqliteValue)
 }
@@ -965,6 +1028,7 @@ pub unsafe fn sqlite3_value_int64(sqliteValue: *mut sqlite3_value) -> sqlite3_in
 /// Extract a `REAL` value from a protected `sqlite3_value` object.
 ///
 /// See <https://www.sqlite.org/c3ref/value_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_value_double(sqliteValue: *mut sqlite3_value) -> f64 {
     sqlite().capi().sqlite3_value_double(sqliteValue)
 }
@@ -973,6 +1037,7 @@ pub unsafe fn sqlite3_value_double(sqliteValue: *mut sqlite3_value) -> f64 {
 /// object.
 ///
 /// See <https://www.sqlite.org/c3ref/value_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_value_type(sqliteValue: *mut sqlite3_value) -> ::std::os::raw::c_int {
     sqlite().capi().sqlite3_value_type(sqliteValue)
 }
@@ -983,6 +1048,7 @@ pub unsafe fn sqlite3_value_type(sqliteValue: *mut sqlite3_value) -> ::std::os::
 /// pointer value, then the result is a NULL value.
 ///
 /// See <https://www.sqlite.org/c3ref/value_dup.html>
+#[multithread]
 pub unsafe fn sqlite3_value_dup(sqliteValue: *const sqlite3_value) -> *mut sqlite3_value {
     sqlite().capi().sqlite3_value_dup(sqliteValue)
 }
@@ -991,6 +1057,7 @@ pub unsafe fn sqlite3_value_dup(sqliteValue: *const sqlite3_value) -> *mut sqlit
 /// statement.
 ///
 /// See <https://www.sqlite.org/c3ref/bind_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_bind_double(
     stmt: *mut sqlite3_stmt,
     idx: ::std::os::raw::c_int,
@@ -1002,6 +1069,7 @@ pub unsafe fn sqlite3_bind_double(
 /// Bind an integer number to a parameter in a prepared statement.
 ///
 /// See <https://www.sqlite.org/c3ref/bind_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_bind_int(
     stmt: *mut sqlite3_stmt,
     idx: ::std::os::raw::c_int,
@@ -1013,6 +1081,7 @@ pub unsafe fn sqlite3_bind_int(
 /// Bind a 64 bit integer number to a parameter in a prepared statement.
 ///
 /// See <https://www.sqlite.org/c3ref/bind_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_bind_int64(
     stmt: *mut sqlite3_stmt,
     idx: ::std::os::raw::c_int,
@@ -1024,6 +1093,7 @@ pub unsafe fn sqlite3_bind_int64(
 /// Add a collation to a database connection.
 ///
 /// See <https://www.sqlite.org/c3ref/create_collation.html>
+#[multithread]
 pub unsafe fn sqlite3_create_collation_v2(
     db: *mut sqlite3,
     zName: *const ::std::os::raw::c_char,
@@ -1095,6 +1165,7 @@ pub unsafe fn sqlite3_create_collation_v2(
 /// disabled.
 ///
 /// See <https://www.sqlite.org/c3ref/errcode.html>
+#[multithread]
 pub unsafe fn sqlite3_extended_errcode(db: *mut sqlite3) -> ::std::os::raw::c_int {
     sqlite().capi().sqlite3_extended_errcode(db)
 }
@@ -1107,6 +1178,7 @@ pub unsafe fn sqlite3_extended_errcode(db: *mut sqlite3) -> ::std::os::raw::c_in
 /// error code.
 ///
 /// See <https://www.sqlite.org/c3ref/finalize.html>
+#[multithread]
 pub unsafe fn sqlite3_finalize(stmt: *mut sqlite3_stmt) -> ::std::os::raw::c_int {
     // Free all memory allocated by stmt
     stmt_with_key_allocated().remove(&Ptr(stmt.cast()));
@@ -1131,6 +1203,7 @@ pub unsafe fn sqlite3_finalize(stmt: *mut sqlite3_stmt) -> ::std::os::raw::c_int
 /// one or more times to evaluate the statement.
 ///
 /// See <https://www.sqlite.org/c3ref/step.html>
+#[multithread]
 pub unsafe fn sqlite3_step(stmt: *mut sqlite3_stmt) -> ::std::os::raw::c_int {
     sqlite().capi().sqlite3_step(stmt)
 }
@@ -1140,6 +1213,7 @@ pub unsafe fn sqlite3_step(stmt: *mut sqlite3_stmt) -> ::std::os::raw::c_int {
 /// language text that describes the error.
 ///
 /// See <https://www.sqlite.org/c3ref/errcode.html>
+#[multithread]
 pub unsafe fn sqlite3_errmsg(db: *mut sqlite3) -> *const ::std::os::raw::c_char {
     // The application does not need to worry about freeing the result.
     // However, the error string might be overwritten or deallocated by
@@ -1170,6 +1244,7 @@ pub unsafe fn sqlite3_errmsg(db: *mut sqlite3) -> *const ::std::os::raw::c_char 
 /// statement in the first place.
 ///
 /// See <https://www.sqlite.org/c3ref/db_handle.html>
+#[multithread]
 pub unsafe fn sqlite3_db_handle(stmt: *mut sqlite3_stmt) -> *mut sqlite3 {
     sqlite().capi().sqlite3_db_handle(stmt)
 }
@@ -1180,6 +1255,7 @@ pub unsafe fn sqlite3_db_handle(stmt: *mut sqlite3_stmt) -> *mut sqlite3 {
 /// `sqlite3_clear_bindings()` to reset the bindings.
 ///
 /// See <https://www.sqlite.org/c3ref/reset.html>
+#[multithread]
 pub unsafe fn sqlite3_reset(stmt: *mut sqlite3_stmt) -> ::std::os::raw::c_int {
     sqlite().capi().sqlite3_reset(stmt)
 }
@@ -1187,6 +1263,7 @@ pub unsafe fn sqlite3_reset(stmt: *mut sqlite3_stmt) -> ::std::os::raw::c_int {
 /// Compiles a prepared statement.
 ///
 /// See <https://www.sqlite.org/c3ref/prepare.html>
+#[multithread]
 pub unsafe fn sqlite3_prepare_v3(
     db: *mut sqlite3,
     sql: *const ::std::os::raw::c_char,
@@ -1231,6 +1308,7 @@ pub unsafe fn sqlite3_prepare_v3(
 /// registered the application defined function.
 ///
 /// See <https://www.sqlite.org/c3ref/context_db_handle.html>
+#[multithread]
 pub unsafe fn sqlite3_context_db_handle(ctx: *mut sqlite3_context) -> *mut sqlite3 {
     sqlite().capi().sqlite3_context_db_handle(ctx)
 }
@@ -1240,6 +1318,7 @@ pub unsafe fn sqlite3_context_db_handle(ctx: *mut sqlite3_context) -> *mut sqlit
 /// registered the application defined function.
 ///
 /// See <https://www.sqlite.org/c3ref/user_data.html>
+#[multithread]
 pub unsafe fn sqlite3_user_data(ctx: *mut sqlite3_context) -> *mut ::std::os::raw::c_void {
     sqlite().capi().sqlite3_user_data(ctx)
 }
@@ -1248,6 +1327,7 @@ pub unsafe fn sqlite3_user_data(ctx: *mut sqlite3_context) -> *mut ::std::os::ra
 /// memory for storing their state.
 ///
 /// See <https://www.sqlite.org/c3ref/aggregate_context.html>
+#[multithread]
 pub unsafe fn sqlite3_aggregate_context(
     ctx: *mut sqlite3_context,
     nBytes: ::std::os::raw::c_int,
@@ -1290,6 +1370,7 @@ pub unsafe fn sqlite3_aggregate_context(
 /// error message.
 ///
 /// See <https://www.sqlite.org/c3ref/result_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_result_error(
     ctx: *mut sqlite3_context,
     msg: *const ::std::os::raw::c_char,
@@ -1303,6 +1384,7 @@ pub unsafe fn sqlite3_result_error(
 /// Bind a `TEXT` value to a parameter in a prepared statement.
 ///
 /// See <https://www.sqlite.org/c3ref/bind_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_bind_text64(
     stmt: *mut sqlite3_stmt,
     idx: ::std::os::raw::c_int,
@@ -1327,6 +1409,7 @@ pub unsafe fn sqlite3_bind_text64(
 /// Bind a `BLOB` value to a parameter in a prepared statement.
 ///
 /// See <https://www.sqlite.org/c3ref/bind_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_bind_blob64(
     stmt: *mut sqlite3_stmt,
     idx: ::std::os::raw::c_int,
@@ -1346,6 +1429,7 @@ pub unsafe fn sqlite3_bind_blob64(
 /// table column that is the origin of a particular result column in SELECT statement.
 ///
 /// See <https://www.sqlite.org/c3ref/column_database_name.html>
+#[multithread]
 pub unsafe fn sqlite3_column_database_name(
     stmt: *mut sqlite3_stmt,
     colIdx: ::std::os::raw::c_int,
@@ -1357,6 +1441,7 @@ pub unsafe fn sqlite3_column_database_name(
 /// table column that is the origin of a particular result column in SELECT statement.
 ///
 /// See <https://www.sqlite.org/c3ref/column_database_name.html>
+#[multithread]
 pub unsafe fn sqlite3_column_origin_name(
     stmt: *mut sqlite3_stmt,
     colIdx: ::std::os::raw::c_int,
@@ -1368,6 +1453,7 @@ pub unsafe fn sqlite3_column_origin_name(
 /// table column that is the origin of a particular result column in SELECT statement.
 ///
 /// See <https://www.sqlite.org/c3ref/column_database_name.html>
+#[multithread]
 pub unsafe fn sqlite3_column_table_name(
     stmt: *mut sqlite3_stmt,
     colIdx: ::std::os::raw::c_int,
@@ -1378,6 +1464,7 @@ pub unsafe fn sqlite3_column_table_name(
 /// Compiles a prepared statement.
 ///
 /// See <https://www.sqlite.org/c3ref/prepare.html>
+#[multithread]
 pub unsafe fn sqlite3_prepare_v2(
     db: *mut sqlite3,
     sql: *const ::std::os::raw::c_char,
@@ -1395,6 +1482,7 @@ pub unsafe fn sqlite3_prepare_v2(
 /// Open an `SQLite` database file as specified by the `filename` argument
 ///
 /// See <https://www.sqlite.org/c3ref/open.html>
+#[multithread]
 pub unsafe fn sqlite3_open(
     filename: *const ::std::os::raw::c_char,
     ppDb: *mut *mut sqlite3,
@@ -1414,6 +1502,7 @@ pub unsafe fn sqlite3_open(
 /// should be a static string, preferably a string literal.
 ///
 /// See <https://www.sqlite.org/c3ref/bind_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_bind_pointer(
     stmt: *mut sqlite3_stmt,
     idx: ::std::os::raw::c_int,
@@ -1431,6 +1520,7 @@ pub unsafe fn sqlite3_bind_pointer(
 }
 
 /// See <https://www.sqlite.org/c3ref/interrupt.html>
+#[multithread]
 pub unsafe fn sqlite3_interrupt(db: *mut sqlite3) {
     sqlite().capi().sqlite3_interrupt(db);
 }
@@ -1443,6 +1533,7 @@ pub unsafe fn sqlite3_interrupt(db: *mut sqlite3) {
 /// See <https://www.sqlite.org/c3ref/config.html>
 ///
 /// Currently only one parameter is supported. Add more if needed.
+#[multithread]
 pub unsafe fn sqlite3_config(
     op: ::std::os::raw::c_int,
     arg: ::std::os::raw::c_int,
@@ -1454,6 +1545,7 @@ pub unsafe fn sqlite3_config(
 /// `SQLite`, and optionally to reset various highwater marks.
 ///
 /// See <https://www.sqlite.org/c3ref/status.html>
+#[multithread]
 pub unsafe fn sqlite3_status(
     op: ::std::os::raw::c_int,
     pCurrent: *mut ::std::os::raw::c_int,
@@ -1478,6 +1570,7 @@ pub unsafe fn sqlite3_status(
 /// `SQLite`, and optionally to reset various highwater marks.
 ///
 /// See <https://www.sqlite.org/c3ref/status.html>
+#[multithread]
 pub unsafe fn sqlite3_status64(
     op: ::std::os::raw::c_int,
     pCurrent: *mut sqlite3_int64,
@@ -1503,6 +1596,8 @@ pub unsafe fn sqlite3_status64(
 /// See <https://www.sqlite.org/c3ref/memory_highwater.html>
 ///
 /// See <https://github.com/sqlite/sqlite/blob/4112a63b8fa8357133f2c8e089dcd9193fc2926b/src/malloc.c>
+#[multithread]
+#[multithread]
 pub unsafe fn sqlite3_memory_used() -> sqlite3_int64 {
     let mut res: sqlite3_int64 = 0;
     let mut mx: sqlite3_int64 = 0;
@@ -1524,6 +1619,7 @@ pub unsafe fn sqlite3_memory_used() -> sqlite3_int64 {
 /// See <https://www.sqlite.org/c3ref/memory_highwater.html>
 ///
 /// See <https://github.com/sqlite/sqlite/blob/4112a63b8fa8357133f2c8e089dcd9193fc2926b/src/malloc.c>
+#[multithread]
 pub unsafe fn sqlite3_memory_highwater(resetFlag: ::std::os::raw::c_int) -> sqlite3_int64 {
     let mut res: sqlite3_int64 = 0;
     let mut mx: sqlite3_int64 = 0;
@@ -1541,6 +1637,7 @@ pub unsafe fn sqlite3_memory_highwater(resetFlag: ::std::os::raw::c_int) -> sqli
 /// Get the length in bytes of a `BLOB` or `TEXT` column in the current result row.
 ///
 /// See <https://www.sqlite.org/c3ref/column_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_column_type(
     stmt: *mut sqlite3_stmt,
     colIdx: ::std::os::raw::c_int,
@@ -1553,6 +1650,7 @@ pub unsafe fn sqlite3_column_type(
 /// for the same database connection is overridden.
 ///
 /// See <https://www.sqlite.org/c3ref/commit_hook.html>
+#[multithread]
 pub unsafe fn sqlite3_commit_hook(
     db: *mut sqlite3,
     hook: ::std::option::Option<
@@ -1576,6 +1674,7 @@ pub unsafe fn sqlite3_commit_hook(
 /// a GUI updated during a large query.
 ///
 /// See <https://www.sqlite.org/c3ref/progress_handler.html>
+#[multithread]
 pub unsafe fn sqlite3_progress_handler(
     db: *mut sqlite3,
     nOps: ::std::os::raw::c_int,
@@ -1599,6 +1698,7 @@ pub unsafe fn sqlite3_progress_handler(
 /// is overridden.
 ///
 /// See <https://www.sqlite.org/c3ref/commit_hook.html>
+#[multithread]
 pub unsafe fn sqlite3_rollback_hook(
     db: *mut sqlite3,
     hook: ::std::option::Option<unsafe extern "C" fn(cbArg: *mut ::std::os::raw::c_void)>,
@@ -1624,6 +1724,7 @@ pub unsafe fn sqlite3_rollback_hook(
 /// function for the same database connection is overridden.
 ///
 /// See <https://www.sqlite.org/c3ref/update_hook.html>
+#[multithread]
 pub unsafe fn sqlite3_update_hook(
     db: *mut sqlite3,
     xUpdate: ::std::option::Option<
@@ -1668,6 +1769,7 @@ pub unsafe fn sqlite3_update_hook(
 /// `sqlite3_step()` to return `SQLITE_BUSY`.
 ///
 /// See <https://www.sqlite.org/c3ref/busy_timeout.html>
+#[multithread]
 pub unsafe fn sqlite3_busy_timeout(
     db: *mut sqlite3,
     ms: ::std::os::raw::c_int,
@@ -1682,6 +1784,7 @@ pub unsafe fn sqlite3_busy_timeout(
 /// `sqlite3_last_insert_rowid(db)` returns zero
 ///
 /// See <https://www.sqlite.org/c3ref/last_insert_rowid.html>
+#[multithread]
 pub unsafe fn sqlite3_last_insert_rowid(db: *mut sqlite3) -> sqlite3_int64 {
     sqlite().capi().sqlite3_last_insert_rowid(db)
 }
@@ -1692,11 +1795,13 @@ pub unsafe fn sqlite3_last_insert_rowid(db: *mut sqlite3) -> sqlite3_int64 {
 /// later time.
 ///
 /// See <https://www.sqlite.org/c3ref/bind_parameter_count.html>
+#[multithread]
 pub unsafe fn sqlite3_bind_parameter_count(stmt: *mut sqlite3_stmt) -> ::std::os::raw::c_int {
     sqlite().capi().sqlite3_bind_parameter_count(stmt)
 }
 
 /// See <https://www.sqlite.org/c3ref/bind_parameter_name.html>
+#[multithread]
 pub unsafe fn sqlite3_bind_parameter_name(
     stmt: *mut sqlite3_stmt,
     nth: ::std::os::raw::c_int,
@@ -1718,6 +1823,7 @@ pub unsafe fn sqlite3_bind_parameter_name(
 /// Use this routine to reset all host parameters to NULL.
 ///
 /// See <https://www.sqlite.org/c3ref/clear_bindings.html>
+#[multithread]
 pub unsafe fn sqlite3_clear_bindings(stmt: *mut sqlite3_stmt) -> ::std::os::raw::c_int {
     sqlite().capi().sqlite3_clear_bindings(stmt)
 }
@@ -1726,6 +1832,7 @@ pub unsafe fn sqlite3_clear_bindings(stmt: *mut sqlite3_stmt) -> ::std::os::raw:
 /// row.
 ///
 /// See <https://www.sqlite.org/c3ref/column_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_column_bytes(
     stmt: *mut sqlite3_stmt,
     colIdx: ::std::os::raw::c_int,
@@ -1736,6 +1843,7 @@ pub unsafe fn sqlite3_column_bytes(
 /// Get a BLOB result value from a column in the current result row.
 ///
 /// See <https://www.sqlite.org/c3ref/column_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_column_blob(
     stmt: *mut sqlite3_stmt,
     colIdx: ::std::os::raw::c_int,
@@ -1762,6 +1870,7 @@ pub unsafe fn sqlite3_column_blob(
 }
 
 /// See <https://www.sqlite.org/c3ref/column_decltype.html>
+#[multithread]
 pub unsafe fn sqlite3_column_decltype(
     stmt: *mut sqlite3_stmt,
     colIdx: ::std::os::raw::c_int,
@@ -1773,6 +1882,7 @@ pub unsafe fn sqlite3_column_decltype(
 /// current result row.
 ///
 /// See <https://www.sqlite.org/c3ref/column_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_column_double(stmt: *mut sqlite3_stmt, colIdx: ::std::os::raw::c_int) -> f64 {
     sqlite().capi().sqlite3_column_double(stmt, colIdx)
 }
@@ -1780,6 +1890,7 @@ pub unsafe fn sqlite3_column_double(stmt: *mut sqlite3_stmt, colIdx: ::std::os::
 /// Get an integer result value from a column in the current result row.
 ///
 /// See <https://www.sqlite.org/c3ref/column_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_column_int(
     stmt: *mut sqlite3_stmt,
     colIdx: ::std::os::raw::c_int,
@@ -1790,6 +1901,7 @@ pub unsafe fn sqlite3_column_int(
 /// Get a 64bit integer result value from a column in the current result row.
 ///
 /// See <https://www.sqlite.org/c3ref/column_blob.html>
+#[multithread]
 pub unsafe fn sqlite3_column_int64(
     stmt: *mut sqlite3_stmt,
     colIdx: ::std::os::raw::c_int,
@@ -1802,6 +1914,7 @@ pub unsafe fn sqlite3_column_int64(
 /// `sqlite3_prepare_v3()`.
 ///
 /// See <https://www.sqlite.org/c3ref/sql.html>
+#[multithread]
 pub unsafe fn sqlite3_sql(stmt: *mut sqlite3_stmt) -> *const ::std::os::raw::c_char {
     let ret = sqlite().capi().sqlite3_sql(stmt);
     let raw = cstring(ret).into_raw();
@@ -1816,6 +1929,7 @@ pub unsafe fn sqlite3_sql(stmt: *mut sqlite3_stmt) -> *const ::std::os::raw::c_c
 /// no direct changes to the content of the database file.
 ///
 /// See <https://www.sqlite.org/c3ref/stmt_readonly.html>
+#[multithread]
 pub unsafe fn sqlite3_stmt_readonly(stmt: *mut sqlite3_stmt) -> ::std::os::raw::c_int {
     sqlite().capi().sqlite3_stmt_readonly(stmt)
 }
@@ -1828,6 +1942,7 @@ pub unsafe fn sqlite3_stmt_readonly(stmt: *mut sqlite3_stmt) -> ::std::os::raw::
 /// `SQLITE_ERROR` if the specified column does not exist.
 ///
 /// See <https://www.sqlite.org/c3ref/table_column_metadata.html>
+#[multithread]
 pub unsafe fn sqlite3_table_column_metadata(
     db: *mut sqlite3,
     zDbName: *const ::std::os::raw::c_char,
@@ -1867,6 +1982,7 @@ pub unsafe fn sqlite3_table_column_metadata(
 /// left-most function argument.
 ///
 /// See <https://www.sqlite.org/c3ref/get_auxdata.html>
+#[multithread]
 pub unsafe fn sqlite3_get_auxdata(
     ctx: *mut sqlite3_context,
     n: ::std::os::raw::c_int,
@@ -1879,6 +1995,7 @@ pub unsafe fn sqlite3_get_auxdata(
 /// compatibility.
 ///
 /// See <https://www.sqlite.org/c3ref/extended_result_codes.html>
+#[multithread]
 pub unsafe fn sqlite3_extended_result_codes(
     db: *mut sqlite3,
     onoff: ::std::os::raw::c_int,
@@ -1890,6 +2007,7 @@ pub unsafe fn sqlite3_extended_result_codes(
 /// function.
 ///
 /// See <https://www.sqlite.org/c3ref/get_auxdata.html>
+#[multithread]
 pub unsafe fn sqlite3_set_auxdata(
     ctx: *mut sqlite3_context,
     n: ::std::os::raw::c_int,

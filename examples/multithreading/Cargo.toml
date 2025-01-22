@@ -1,0 +1,15 @@
+[package]
+name = "multithreading"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wasm-bindgen = "0.2.100"
+wasm-bindgen-test = "0.3.50"
+web-sys = { version = "0.3.77", features = ["Worker"] }
+sqlite-wasm-rs = { path = "../../sqlite-wasm-rs" }
+wasm-bindgen-futures = "0.4.50"
+wasmtimer = "0.4.1"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
