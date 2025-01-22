@@ -2,8 +2,6 @@
 
 Wrap the official [`sqlite-wasm`](https://github.com/sqlite/sqlite-wasm), and expect to provide a usable C-like API.
 
-This project was successfully used in [`diesel`](https://github.com/diesel-rs/diesel).
-
 ## Usage
 
 ```rust
