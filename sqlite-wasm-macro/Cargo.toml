@@ -2,6 +2,13 @@
 name = "sqlite-wasm-macro"
 version = "0.1.0"
 edition = "2021"
+authors = ["Spxg <unsafe@outlook.es>"]
+readme = "README.md"
+license = "MIT"
+repository = "https://github.com/Spxg/sqlite-wasm-rs"
+description = "Helps generate multithreading code"
+categories = ["development-tools::ffi", "wasm", "database"]
+keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "javascript"]
 
 [lib]
 proc-macro = true
@@ -11,3 +18,5 @@ proc-macro2 = "1.0.92"
 quote = "1.0.38"
 syn = "2.0.92"
 
+[package.metadata.docs.rs]
+targets = ["wasm32-unknown-unknown"]
