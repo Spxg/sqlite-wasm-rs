@@ -424,7 +424,6 @@ unsafe fn wasm_text64(
 ///
 /// See <https://sqlite.org/wasm/doc/trunk/persistence.md>
 #[multithread]
-#[multithread]
 pub unsafe fn sqlite3_open_v2(
     filename: *const ::std::os::raw::c_char,
     ppDb: *mut *mut sqlite3,
@@ -1598,7 +1597,6 @@ pub unsafe fn sqlite3_status64(
 /// See <https://www.sqlite.org/c3ref/memory_highwater.html>
 ///
 /// See <https://github.com/sqlite/sqlite/blob/4112a63b8fa8357133f2c8e089dcd9193fc2926b/src/malloc.c>
-#[multithread]
 #[multithread]
 pub unsafe fn sqlite3_memory_used() -> sqlite3_int64 {
     let mut res: sqlite3_int64 = 0;
