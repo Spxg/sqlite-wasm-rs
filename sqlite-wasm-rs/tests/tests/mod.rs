@@ -1,4 +1,4 @@
-mod aux;
+mod auxdata;
 mod bind64;
 mod column_metadata;
 mod common;
