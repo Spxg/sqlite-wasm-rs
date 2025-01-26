@@ -27,9 +27,7 @@ pub fn multithread(_: TokenStream, item: TokenStream) -> TokenStream {
     quote!(
         #(#attrs)*
         #vis #sig {
-            #[cfg(target_feature = "atomics")]
             let sqlite3 = sqlite();
-            #[cfg(target_feature = "atomics")]
             if !sqlite3.main_thread() {
                 let CApiResp::#ident(ret) = call(sqlite3, CApiReq::#ident((#(#args),*))) else {
                     unreachable!()

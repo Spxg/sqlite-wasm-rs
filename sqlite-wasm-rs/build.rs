@@ -3,7 +3,7 @@
 use std::{fs, path::PathBuf};
 
 use quote::quote;
-use syn::{Item, Signature};
+use syn::{punctuated::Punctuated, Item, Meta, Signature, Token};
 
 fn main() {
     println!("cargo::rerun-if-changed=src/c.rs");
@@ -90,7 +90,14 @@ fn parse_fn() -> Vec<Signature> {
     let mut result = Vec::with_capacity(ast.items.len());
     for item in ast.items.into_iter() {
         if let Item::Fn(f) = item {
-            if f.attrs.iter().any(|x| x.path().is_ident("multithread")) {
+            if f.attrs.iter().any(|x| {
+                x.path().is_ident("cfg_attr") && {
+                    let nested = x
+                        .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+                        .unwrap();
+                    nested.iter().any(|x| x.path().is_ident("multithread"))
+                }
+            }) {
                 result.push(f.sig);
             }
         }
