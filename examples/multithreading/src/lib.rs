@@ -32,7 +32,7 @@ pub fn child_entry_point(addr: u32) {
 
 #[wasm_bindgen]
 pub async fn test_spawn() {
-    let sqlite3 = sqlite_wasm_rs::init_sqlite().await.unwrap();
+    let sqlite3 = sqlite_wasm_rs::export::init_sqlite().await.unwrap();
     console_log!(
         "thread {:?}: init sqlite success",
         std::thread::current().id()

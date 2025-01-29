@@ -2,14 +2,14 @@
 //! It is called "raw" because the memory needs to be handled by yourself.
 //! It is not recommended to use it directly, please use the `c` module.
 
-use crate::libsqlite3::*;
+use crate::wrapper::libsqlite3::*;
 use js_sys::{Error, Object, WebAssembly};
 use wasm_bindgen::{
     prelude::{wasm_bindgen, Closure},
     JsValue,
 };
 
-#[wasm_bindgen(module = "/src/jswasm/sqlite3.js")]
+#[wasm_bindgen(module = "/src/wrapper/jswasm/sqlite3.js")]
 extern "C" {
     pub type SQLite;
 

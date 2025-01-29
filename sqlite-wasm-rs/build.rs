@@ -6,7 +6,7 @@ use quote::quote;
 use syn::{punctuated::Punctuated, Item, Meta, Signature, Token};
 
 fn main() {
-    println!("cargo::rerun-if-changed=src/c.rs");
+    println!("cargo::rerun-if-changed=src/wrapper/c.rs");
 
     let signatures = parse_fn();
     let mut req = Vec::with_capacity(signatures.len());
@@ -85,7 +85,7 @@ fn main() {
 
 /// Collect function signatures marked with the `multithread` attribute
 fn parse_fn() -> Vec<Signature> {
-    let file = fs::read_to_string("src/c.rs").unwrap();
+    let file = fs::read_to_string("src/wrapper/c.rs").unwrap();
     let ast = syn::parse_file(&file).unwrap();
     let mut result = Vec::with_capacity(ast.items.len());
     for item in ast.items.into_iter() {

@@ -7,7 +7,7 @@ export default defineConfig([
   {
     input: "sqlite_sdk.js",
     output: {
-      file: "src/jswasm/sqlite3.js",
+      file: "src/wrapper/jswasm/sqlite3.js",
       format: "es",
     },
     treeshake: "smallest",
@@ -18,7 +18,7 @@ export default defineConfig([
         targets: [
           {
             src: "./sqlite-wasm/sqlite3.wasm",
-            dest: "src/jswasm",
+            dest: "src/wrapper/jswasm",
           },
         ],
       }),
@@ -28,7 +28,7 @@ export default defineConfig([
     input:
       "./sqlite-wasm/sqlite3-opfs-async-proxy.js",
     output: {
-      file: "src/jswasm/sqlite3-opfs-async-proxy.js",
+      file: "src/wrapper/jswasm/sqlite3-opfs-async-proxy.js",
       format: "es",
     },
     plugins: [terser()],
