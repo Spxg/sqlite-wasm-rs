@@ -4,6 +4,7 @@ mod column_metadata;
 mod common;
 mod hook;
 mod status;
+#[cfg(feature = "wrapper")]
 mod vfs;
 
 use sqlite_wasm_rs::export::*;

@@ -6,6 +6,11 @@ use syn::{punctuated::Punctuated, Item, Meta, Signature, Token};
 fn main() {
     if cfg!(feature = "wrapper") {
         multithread_codegen();
+    } else {
+        let path = std::env::current_dir().unwrap().join("source");
+        let lib_path = path.to_str().unwrap();
+        println!("cargo:rustc-link-search=native={lib_path}");
+        println!("cargo:rustc-link-lib=static=sqlite3");
     }
 }
 
