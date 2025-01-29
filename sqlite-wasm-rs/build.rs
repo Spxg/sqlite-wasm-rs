@@ -1,11 +1,15 @@
-//! Helps generate multithreaded code
-
 use std::{fs, path::PathBuf};
 
 use quote::quote;
 use syn::{punctuated::Punctuated, Item, Meta, Signature, Token};
 
 fn main() {
+    if cfg!(feature = "wrapper") {
+        multithread_codegen();
+    }
+}
+
+fn multithread_codegen() {
     println!("cargo::rerun-if-changed=src/wrapper/c.rs");
 
     let signatures = parse_fn();
