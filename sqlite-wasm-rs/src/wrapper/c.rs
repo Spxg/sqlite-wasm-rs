@@ -55,7 +55,7 @@ use multithreading::{call, CApiReq, CApiResp};
 ///
 /// Need to call `init_sqlite()` before calling
 fn sqlite() -> &'static SQLite {
-    crate::wrapper::sqlite()
+    super::sqlite()
         .expect("Call init_sqlite() to initialize sqlite3 before executing the C interface")
 }
 
