@@ -1,7 +1,7 @@
 //! This module provides some C-Like interfaces from sqlite-wasm.
 
-use crate::libsqlite3::*;
-use crate::SQLite;
+use crate::wrapper::libsqlite3::*;
+use crate::wrapper::SQLite;
 use once_cell::sync::Lazy;
 use std::mem::{size_of, ManuallyDrop};
 use std::sync::{Mutex, MutexGuard};
@@ -55,7 +55,7 @@ use multithreading::{call, CApiReq, CApiResp};
 ///
 /// Need to call `init_sqlite()` before calling
 fn sqlite() -> &'static SQLite {
-    crate::sqlite()
+    crate::wrapper::sqlite()
         .expect("Call init_sqlite() to initialize sqlite3 before executing the C interface")
 }
 
