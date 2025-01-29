@@ -62,7 +62,7 @@ async fn test_column_metadata() {
         }
     }
     unsafe {
-        sqlite3_close_v2(db);
+        sqlite3_close(db);
     }
 }
 

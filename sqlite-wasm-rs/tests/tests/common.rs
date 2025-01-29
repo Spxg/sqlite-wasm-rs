@@ -61,7 +61,7 @@ async fn test_sqlite_prepare_v3_tail() {
         }
     }
     unsafe {
-        sqlite3_close_v2(db);
+        sqlite3_close(db);
     }
 }
 
