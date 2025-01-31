@@ -22,7 +22,7 @@ wasm-bindgen-futures = "0.4.49"
 web-sys = { version = "0.3.77", features = ["Performance", "Window"] }
 
 [features]
-default = ["wrapper"]
+default = ["link"]
 wrapper = []
 link = []
 
