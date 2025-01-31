@@ -1,6 +1,6 @@
 [package]
 name = "sqlite-wasm-rs"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 authors = ["Spxg <unsafe@outlook.es>"]
 readme = "README.md"
@@ -21,7 +21,7 @@ wasm-bindgen = "0.2.99"
 wasm-bindgen-futures = "0.4.49"
 
 [target.'cfg(target_feature = "atomics")'.dependencies]
-sqlite-wasm-macro = { path = "../sqlite-wasm-macro", version = "0.1.0" }
+sqlite-wasm-macro = { path = "../sqlite-wasm-macro", version = "0.1.1" }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.49"
