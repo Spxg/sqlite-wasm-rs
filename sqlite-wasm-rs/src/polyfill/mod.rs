@@ -6,7 +6,7 @@ mod libsqlite3;
 #[allow(non_upper_case_globals)]
 #[allow(non_camel_case_types)]
 #[allow(non_snake_case)]
-mod polyfill;
+mod fill;
 
 /// These exported APIs are stable and will not have breaking changes.
 pub mod export {
