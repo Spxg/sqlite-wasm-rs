@@ -22,9 +22,9 @@ wasm-bindgen-futures = "0.4.49"
 web-sys = { version = "0.3.77", features = ["Performance", "Window"] }
 
 [features]
-default = ["link"]
+default = ["polyfill"]
 wrapper = []
-link = []
+polyfill = []
 
 [target.'cfg(target_feature = "atomics")'.dependencies]
 sqlite-wasm-macro = { path = "../sqlite-wasm-macro", version = "0.1.1" }

@@ -31,12 +31,12 @@ fn yday_from_date(date: &Date) -> u32 {
     let year = date.get_full_year();
     let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
 
-    let monthDaysCumulative = if leap {
+    let month_days_cumulative = if leap {
         MONTH_DAYS_LEAP_CUMULATIVE
     } else {
         MONTH_DAYS_REGULAR_CUMULATIVE
     };
-    monthDaysCumulative[date.get_month() as usize] + date.get_date() - 1
+    month_days_cumulative[date.get_month() as usize] + date.get_date() - 1
 }
 
 #[no_mangle]

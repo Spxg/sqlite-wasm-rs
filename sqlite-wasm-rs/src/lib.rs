@@ -3,11 +3,11 @@
 #[cfg(feature = "wrapper")]
 mod wrapper;
 
-#[cfg(feature = "link")]
-mod link;
+#[cfg(feature = "polyfill")]
+mod polyfill;
 
 #[cfg(feature = "wrapper")]
 pub use wrapper::export;
 
-#[cfg(feature = "link")]
-pub use link::export;
+#[cfg(feature = "polyfill")]
+pub use polyfill::export;
