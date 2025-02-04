@@ -7,7 +7,6 @@ mod libsqlite3;
 #[allow(non_camel_case_types)]
 #[allow(non_snake_case)]
 mod c;
-mod fragile;
 mod wasm;
 
 /// These exported APIs are stable and will not have breaking changes.
@@ -32,7 +31,7 @@ pub mod export {
     pub use super::{init_sqlite, sqlite, OpfsSAHPoolCfg, SQLite, SQLiteError, Version};
 }
 
-use fragile::FragileComfirmed;
+use crate::fragile::FragileComfirmed;
 use js_sys::{Object, WebAssembly};
 use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt::Display, result::Result};

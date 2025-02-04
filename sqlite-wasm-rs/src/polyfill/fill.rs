@@ -126,7 +126,7 @@ pub unsafe extern "C" fn sqlite3_os_init() -> std::os::raw::c_int {
         szOsFile: 0,
         mxPathname: 512,
         pNext: std::ptr::null_mut(),
-        zName: "none\0".as_ptr() as *const std::os::raw::c_char,
+        zName: "none\0".as_ptr().cast(),
         pAppData: std::ptr::null_mut(),
         xOpen: None,
         xDelete: None,
@@ -158,7 +158,6 @@ unsafe extern "C" fn xSleep(
     _arg1: *mut sqlite3_vfs,
     _microseconds: ::std::os::raw::c_int,
 ) -> ::std::os::raw::c_int {
-    // https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs-sahpool.c-pp.js#L416
     0
 }
 
@@ -188,7 +187,6 @@ unsafe extern "C" fn xGetLastError(
     _arg2: ::std::os::raw::c_int,
     _arg3: *mut ::std::os::raw::c_char,
 ) -> ::std::os::raw::c_int {
-    // https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L895
     0
 }
 
