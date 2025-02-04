@@ -1,5 +1,3 @@
-wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_dedicated_worker);
-
 use super::{cstr, memory_db};
 use sqlite_wasm_rs::export::*;
 use std::ffi::CStr;

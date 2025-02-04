@@ -1,5 +1,7 @@
 #![doc = include_str!("../README.md")]
 
+pub(crate) mod fragile;
+
 #[cfg(feature = "wrapper")]
 mod wrapper;
 
