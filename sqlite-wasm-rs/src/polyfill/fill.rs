@@ -1,5 +1,7 @@
 use super::export::{sqlite3_int64, sqlite3_vfs, sqlite3_vfs_register};
 use js_sys::{Date, Math};
+use wasm_bindgen::JsCast;
+use web_sys::{SharedWorkerGlobalScope, WorkerGlobalScope};
 
 pub type time_t = std::os::raw::c_longlong;
 
@@ -112,10 +114,16 @@ pub unsafe extern "C" fn _tzset_js(
 /// Copy from sqlite-wasm
 #[no_mangle]
 pub unsafe extern "C" fn emscripten_get_now() -> std::os::raw::c_double {
-    let window = web_sys::window().expect("should have a window in this context");
-    let performance = window
-        .performance()
-        .expect("performance should be available");
+    let performance = if let Some(window) = web_sys::window() {
+        window.performance()
+    } else if let Ok(worker) = js_sys::global().dyn_into::<WorkerGlobalScope>() {
+        worker.performance()
+    } else if let Ok(worker) = js_sys::global().dyn_into::<SharedWorkerGlobalScope>() {
+        worker.performance()
+    } else {
+        panic!("sqlite not run in main_thread, dedicated worker or shared worker");
+    }
+    .expect("performance should be available");
     performance.now()
 }
 

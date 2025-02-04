@@ -28,6 +28,7 @@ web-sys = { version = "0.3.77", features = [
   "FileSystemDirectoryHandle",
   "FileSystemGetDirectoryOptions",
   "FileSystemReadWriteOptions",
+  "SharedWorkerGlobalScope",
   "WorkerGlobalScope",
   "WorkerNavigator",
   "TextEncoder",
