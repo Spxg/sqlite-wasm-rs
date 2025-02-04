@@ -209,44 +209,43 @@ unsafe extern "C" fn xCurrentTimeInt64(
     0
 }
 
-const ALIGN: usize = 8;
+// https://github.com/alexcrichton/dlmalloc-rs/blob/fb116603713825b43b113cc734bb7d663cb64be9/src/dlmalloc.rs#L141
+const ALIGN: usize = std::mem::size_of::<usize>() * 2;
 
 #[no_mangle]
 pub unsafe extern "C" fn malloc(size: usize) -> *mut u8 {
-    let layout = match std::alloc::Layout::from_size_align(size + ALIGN, ALIGN) {
-        Ok(layout) => layout,
-        Err(_) => return std::ptr::null_mut(),
-    };
-
+    let layout = std::alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
     let ptr = std::alloc::alloc(layout);
+
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
+    *ptr.cast::<usize>() = size;
 
-    *(ptr as *mut usize) = size;
-    ptr.offset(ALIGN as isize)
+    ptr.add(ALIGN)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn free(ptr: *mut u8) {
-    let ptr = ptr.offset(-(ALIGN as isize));
-    let size = *(ptr as *mut usize);
-    let layout = std::alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
+    let ptr = ptr.sub(ALIGN);
+    let size = *(ptr.cast::<usize>());
 
+    let layout = std::alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
     std::alloc::dealloc(ptr, layout);
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn realloc(ptr: *mut u8, new_size: usize) -> *mut u8 {
-    let ptr = ptr.offset(-(ALIGN as isize));
-    let size = *(ptr as *mut usize);
-    let layout = std::alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
+    let ptr = ptr.sub(ALIGN);
+    let size = *(ptr.cast::<usize>());
 
+    let layout = std::alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
     let ptr = std::alloc::realloc(ptr, layout, new_size + ALIGN);
+
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
+    *ptr.cast::<usize>() = new_size;
 
-    *(ptr as *mut usize) = new_size;
-    ptr.offset(ALIGN as isize)
+    ptr.add(ALIGN)
 }
