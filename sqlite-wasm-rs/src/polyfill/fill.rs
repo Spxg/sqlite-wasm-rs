@@ -41,11 +41,12 @@ fn yday_from_date(date: &Date) -> u32 {
     month_days_cumulative[date.get_month() as usize] + date.get_date() - 1
 }
 
+/// https://github.com/sqlite/sqlite-wasm/blob/7c1b309c3bd07d8e6d92f82344108cebbd14f161/sqlite-wasm/jswasm/sqlite3-bundler-friendly.mjs#L3404
 #[no_mangle]
 pub unsafe extern "C" fn _localtime_js(t: time_t, tm: *mut tm) {
     assert!(t < INT53_MIN || t > INT53_MAX, "wrong time range");
 
-    let date = Date::new(&t.into());
+    let date = Date::new(&(t * 1000).into());
     (*tm).tm_sec = date.get_seconds() as _;
     (*tm).tm_min = date.get_minutes() as _;
     (*tm).tm_hour = date.get_hours() as _;
@@ -67,6 +68,7 @@ pub unsafe extern "C" fn _localtime_js(t: time_t, tm: *mut tm) {
     (*tm).tm_gmtoff = (date.get_timezone_offset() * 60.0) as _;
 }
 
+/// https://github.com/sqlite/sqlite-wasm/blob/7c1b309c3bd07d8e6d92f82344108cebbd14f161/sqlite-wasm/jswasm/sqlite3-bundler-friendly.mjs#L3460
 #[no_mangle]
 pub unsafe extern "C" fn _tzset_js(
     timezone: *mut std::os::raw::c_longlong,
@@ -111,7 +113,7 @@ pub unsafe extern "C" fn _tzset_js(
     }
 }
 
-/// Copy from sqlite-wasm
+/// https://github.com/sqlite/sqlite-wasm/blob/7c1b309c3bd07d8e6d92f82344108cebbd14f161/sqlite-wasm/jswasm/sqlite3-bundler-friendly.mjs#L3496
 #[no_mangle]
 pub unsafe extern "C" fn emscripten_get_now() -> std::os::raw::c_double {
     let performance = if let Some(window) = web_sys::window() {
@@ -169,23 +171,23 @@ unsafe extern "C" fn xSleep(
     0
 }
 
+/// https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L951
 unsafe extern "C" fn xRandomness(
     _arg1: *mut sqlite3_vfs,
     nByte: ::std::os::raw::c_int,
     zOut: *mut ::std::os::raw::c_char,
 ) -> ::std::os::raw::c_int {
-    // https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L951
     for i in 0..nByte {
         *zOut.offset(i as isize) = ((Math::random() * 255000.0) as u8 & 0xFF) as _;
     }
     0
 }
 
+/// https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L870
 unsafe extern "C" fn xCurrentTime(
     _arg1: *mut sqlite3_vfs,
     arg2: *mut f64,
 ) -> ::std::os::raw::c_int {
-    // https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L870
     *arg2 = 2440587.5 + (Date::new_0().get_time() / 86400000.0) + 2440587.5;
     0
 }
@@ -198,11 +200,11 @@ unsafe extern "C" fn xGetLastError(
     0
 }
 
+/// https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L877
 unsafe extern "C" fn xCurrentTimeInt64(
     _arg1: *mut sqlite3_vfs,
     arg2: *mut sqlite3_int64,
 ) -> ::std::os::raw::c_int {
-    // https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L877
     *arg2 = ((2440587.5 * 86400000.0) + Date::new_0().get_time()) as sqlite3_int64;
     0
 }
