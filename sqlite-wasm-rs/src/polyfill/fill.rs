@@ -180,7 +180,7 @@ unsafe extern "C" fn xRandomness(
     for i in 0..nByte {
         *zOut.offset(i as isize) = ((Math::random() * 255000.0) as u8 & 0xFF) as _;
     }
-    0
+    nByte
 }
 
 /// https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L870
@@ -188,7 +188,7 @@ unsafe extern "C" fn xCurrentTime(
     _arg1: *mut sqlite3_vfs,
     arg2: *mut f64,
 ) -> ::std::os::raw::c_int {
-    *arg2 = 2440587.5 + (Date::new_0().get_time() / 86400000.0) + 2440587.5;
+    *arg2 = 2440587.5 + (Date::new_0().get_time() / 86400000.0);
     0
 }
 

@@ -907,7 +907,7 @@ fn vfs() -> sqlite3_vfs {
         _arg1: *mut sqlite3_vfs,
         arg2: *mut f64,
     ) -> ::std::os::raw::c_int {
-        *arg2 = 2440587.5 + (Date::new_0().get_time() / 86400000.0) + 2440587.5;
+        *arg2 = 2440587.5 + (Date::new_0().get_time() / 86400000.0);
         0
     }
 
@@ -1019,7 +1019,7 @@ fn vfs() -> sqlite3_vfs {
         for i in 0..nByte {
             *zOut.offset(i as isize) = ((Math::random() * 255000.0) as u8 & 0xFF) as _;
         }
-        0
+        nByte
     }
 
     sqlite3_vfs {
