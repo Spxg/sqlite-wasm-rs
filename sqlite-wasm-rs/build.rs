@@ -5,8 +5,12 @@ use syn::{punctuated::Punctuated, Item, Meta, Signature, Token};
 
 fn main() {
     if cfg!(feature = "wrapper") {
-        multithread_codegen();
-    } else {
+        println!("cargo::rerun-if-changed=src/wrapper/c.rs");
+        multithread_codegen("src/wrapper/c.rs", "wrapper_multi.rs");
+    } else if cfg!(feature = "polyfill") {
+        println!("cargo::rerun-if-changed=src/polyfill/vfs/sahpool.rs");
+        multithread_codegen("src/polyfill/vfs/sahpool.rs", "polyfill_multi_sahpool.rs");
+
         let path = std::env::current_dir().unwrap().join("source");
         let lib_path = path.to_str().unwrap();
         println!("cargo:rustc-link-search=native={lib_path}");
@@ -14,10 +18,8 @@ fn main() {
     }
 }
 
-fn multithread_codegen() {
-    println!("cargo::rerun-if-changed=src/wrapper/c.rs");
-
-    let signatures = parse_fn();
+fn multithread_codegen(path: &str, out_name: &str) {
+    let signatures = parse_fn(path);
     let mut req = Vec::with_capacity(signatures.len());
     let mut resp = Vec::with_capacity(signatures.len());
     let mut call_pat = Vec::with_capacity(signatures.len());
@@ -88,13 +90,13 @@ fn multithread_codegen() {
 
     let rs = prettyplease::unparse(&rs);
     let output = std::env::var("OUT_DIR").expect("OUT_DIR env not set");
-    let path = PathBuf::new().join(output).join("multithreading.rs");
+    let path = PathBuf::new().join(output).join(out_name);
     fs::write(path, rs).expect("write multithreading failed");
 }
 
 /// Collect function signatures marked with the `multithread` attribute
-fn parse_fn() -> Vec<Signature> {
-    let file = fs::read_to_string("src/wrapper/c.rs").unwrap();
+fn parse_fn(path: &str) -> Vec<Signature> {
+    let file = fs::read_to_string(path).unwrap();
     let ast = syn::parse_file(&file).unwrap();
     let mut result = Vec::with_capacity(ast.items.len());
     for item in ast.items.into_iter() {

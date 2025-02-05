@@ -21,7 +21,7 @@ pub(crate) mod multithreading {
     use super::*;
     use std::sync::mpsc::Sender;
 
-    include!(concat!(env!("OUT_DIR"), "/multithreading.rs"));
+    include!(concat!(env!("OUT_DIR"), "/wrapper_multi.rs"));
 
     pub struct Task {
         req: CApiReq,
