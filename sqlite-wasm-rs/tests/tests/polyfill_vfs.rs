@@ -6,9 +6,9 @@ use wasm_bindgen_test::wasm_bindgen_test;
 #[wasm_bindgen_test]
 #[allow(unused)]
 async fn test_opfs_sah_vfs_default() {
-    install_opfs_sahpool(None).await.unwrap();
+    install_opfs_sahpool(None, true).await.unwrap();
 
-    let filename = cstr("file:test_opfs_sah_vfs_default.db?vfs=opfs-sahpool");
+    let filename = cstr("test_opfs_sah_vfs_default.db");
     let mut db = std::ptr::null_mut();
     let ret = unsafe {
         sqlite3_open_v2(
@@ -25,10 +25,13 @@ async fn test_opfs_sah_vfs_default() {
 #[wasm_bindgen_test]
 #[allow(unused)]
 async fn test_opfs_sah_util() {
-    let util = install_opfs_sahpool(Some(&OpfsSAHPoolCfg {
-        clear_on_init: true,
-        initial_capacity: 6,
-    }))
+    let util = install_opfs_sahpool(
+        Some(&OpfsSAHPoolCfg {
+            clear_on_init: true,
+            initial_capacity: 6,
+        }),
+        false,
+    )
     .await
     .unwrap();
 

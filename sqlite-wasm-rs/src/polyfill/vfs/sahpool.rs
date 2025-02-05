@@ -1080,6 +1080,7 @@ fn vfs() -> sqlite3_vfs {
 /// to perform basic administration of the file pool
 pub async fn install_opfs_sahpool(
     options: Option<&OpfsSAHPoolCfg>,
+    default_vfs: bool,
 ) -> Result<OpfsSAHPoolUtil, OpfsSAHError> {
     let pool = POOL
         .get_or_try_init(|| async {
@@ -1088,7 +1089,7 @@ pub async fn install_opfs_sahpool(
         })
         .await?;
 
-    let ret = unsafe { sqlite3_vfs_register(Box::leak(Box::new(vfs())), 1) };
+    let ret = unsafe { sqlite3_vfs_register(Box::leak(Box::new(vfs())), i32::from(!default_vfs)) };
     if ret != SQLITE_OK {
         return Err(OpfsSAHError::Custom(
             "register opfs-sahpool vfs failed".into(),
