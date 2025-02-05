@@ -140,8 +140,20 @@ async fn test_opfs_sah_util() {
     assert!(util.export_file("1").is_err());
     let db = util.export_file("/test_opfs_sah_util.db").unwrap();
     assert!(util.import_db("1", vec![0]).is_err());
-    util.import_db("new.db", db).unwrap();
+    util.import_db("/new.db", db).unwrap();
     assert_eq!(before + 1, util.get_file_count());
+
+    let filename = cstr("new.db");
+    let mut db = std::ptr::null_mut();
+    let ret = unsafe {
+        sqlite3_open_v2(
+            filename.as_ptr(),
+            &mut db as *mut _,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+            vfs.as_ptr(),
+        )
+    };
+    test_vfs(db);
     util.wipe_files().await;
     assert_eq!(0, util.get_file_count());
 
