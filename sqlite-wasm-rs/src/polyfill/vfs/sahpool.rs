@@ -290,19 +290,29 @@ impl OpfsSAHPool {
         if Array::from(&file_digest)
             .every(&mut |v, i, _| v.as_f64().unwrap() as u32 == comp_digest.get_index(i))
         {
-            let path_bytes = Array::from(&self.ap_body)
-                .find_index(&mut |x, _, _| x.as_f64().unwrap() as u8 == 0);
-            if path_bytes == 0 {
+            let path_size = Array::from(&self.ap_body)
+                .find_index(&mut |x, _, _| x.as_f64().unwrap() as u8 == 0)
+                as u32;
+            if path_size == 0 {
                 sah.truncate_with_u32(HEADER_OFFSET_DATA as u32)
                     .map_err(OpfsSAHError::Truncate)?;
                 return Ok(None);
             }
+            let path_bytes = self.ap_body.subarray(0, path_size);
+            let mut path = vec![0; path_size as usize];
+            for idx in 0..path_size {
+                // why not `copy_to`?
+                //
+                // see <https://github.com/rustwasm/wasm-bindgen/issues/4395>
+                path[idx as usize] = path_bytes.get_index(idx);
+            }
+            // set_associated_path ensures that it is utf8
+            let path = String::from_utf8(path).unwrap();
+            Ok(Some(path))
         } else {
             self.set_associated_path(sah, "", 0)?;
-            return Ok(None);
+            Ok(None)
         }
-
-        Ok(None)
     }
 
     /// Stores the given client-defined path and SQLITE_OPEN_xyz flags
@@ -329,10 +339,10 @@ impl OpfsSAHPool {
             .fill(0, path.len() as u32, HEADER_MAX_PATH_SIZE as u32);
         self.dv_body.set_uint32(HEADER_OFFSET_FLAGS, flags as u32);
 
+        let digest = compute_digest(&self.ap_body);
+
         sah.write_with_js_u8_array_and_options(&self.ap_body, &read_write_options(0.0))
             .map_err(OpfsSAHError::Write)?;
-
-        let digest = compute_digest(&self.ap_body);
         sah.write_with_buffer_source_and_options(
             &digest,
             &read_write_options(HEADER_OFFSET_DIGEST as f64),
@@ -476,7 +486,7 @@ impl OpfsSAHPool {
     fn delete_path(&self, path: &str) -> Result<bool, OpfsSAHError> {
         let sah = self.map_filename_to_sah.get(&JsValue::from(path));
         let found = !sah.is_undefined();
-        if !sah.is_undefined() {
+        if found {
             let sah: FileSystemSyncAccessHandle = sah.into();
             self.map_filename_to_sah.delete(&JsValue::from(path));
             self.set_associated_path(&sah, "", 0)?;
@@ -522,8 +532,8 @@ impl OpfsSAHPool {
             return Err(OpfsSAHError::Custom("File not found:".into()));
         }
         let sah = FileSystemSyncAccessHandle::from(sah);
-        let n =
-            (sah.get_size().map_err(OpfsSAHError::GetSize)? - HEADER_OFFSET_DATA as f64) as usize;
+        let n = sah.get_size().map_err(OpfsSAHError::GetSize)? - HEADER_OFFSET_DATA as f64;
+        let n = n.max(0.0) as usize;
         let mut data = vec![0; n];
         if n > 0 {
             let read = sah
@@ -558,7 +568,7 @@ impl OpfsSAHPool {
                 "Byte array size is invalid for an SQLite db.".into(),
             ));
         }
-        if !HEADER.as_bytes().iter().zip(bytes).all(|(x, y)| x == y) {
+        if HEADER.as_bytes().iter().zip(bytes).any(|(x, y)| x != y) {
             return Err(OpfsSAHError::Custom(
                 "Input does not contain an SQLite database header.".into(),
             ));
@@ -572,15 +582,15 @@ impl OpfsSAHPool {
                 "Expected to write {} bytes but wrote {}.",
                 length, write
             )));
-        } else {
-            let bytes = [1, 1];
-            sah.write_with_u8_array_and_options(
-                &bytes,
-                &read_write_options((HEADER_OFFSET_DATA + 18) as f64),
-            )
-            .map_err(OpfsSAHError::Write)?;
-            self.set_associated_path(&sah, name, SQLITE_OPEN_MAIN_DB)?;
         }
+
+        let bytes = [1, 1];
+        sah.write_with_u8_array_and_options(
+            &bytes,
+            &read_write_options((HEADER_OFFSET_DATA + 18) as f64),
+        )
+        .map_err(OpfsSAHError::Write)?;
+        self.set_associated_path(&sah, name, SQLITE_OPEN_MAIN_DB)?;
 
         Ok(())
     }
