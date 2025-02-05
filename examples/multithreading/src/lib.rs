@@ -1,7 +1,8 @@
+#![allow(deprecated)]
 use std::{ffi::CString, time::Duration};
 
 use sqlite_wasm_rs::export::{
-    sqlite3, sqlite3_close_v2, sqlite3_column_int, sqlite3_exec, sqlite3_finalize,
+    sqlite3, sqlite3_close, sqlite3_column_int, sqlite3_exec, sqlite3_finalize,
     sqlite3_memory_highwater, sqlite3_memory_used, sqlite3_open_v2, sqlite3_prepare_v3,
     sqlite3_step, sqlite3_stmt, SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_READWRITE, SQLITE_ROW,
 };
@@ -118,7 +119,7 @@ fn insert_record() {
         )
     };
     assert_eq!(SQLITE_OK, ret);
-    unsafe { sqlite3_close_v2(conn) };
+    unsafe { sqlite3_close(conn) };
 }
 
 fn count_record() -> i32 {
@@ -143,7 +144,7 @@ fn count_record() -> i32 {
     unsafe {
         sqlite3_finalize(stmt);
     }
-    unsafe { sqlite3_close_v2(conn) };
+    unsafe { sqlite3_close(conn) };
 
     count
 }
@@ -166,7 +167,7 @@ fn create_table() {
         )
     };
     assert_eq!(SQLITE_OK, ret);
-    unsafe { sqlite3_close_v2(conn) };
+    unsafe { sqlite3_close(conn) };
 
     console_log!(
         "thread {:?}: create table success",

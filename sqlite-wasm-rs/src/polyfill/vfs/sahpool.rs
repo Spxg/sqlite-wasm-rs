@@ -13,6 +13,53 @@ use web_sys::{
     WorkerGlobalScope,
 };
 
+#[cfg(target_feature = "atomics")]
+use sqlite_wasm_macro::multithread;
+
+#[cfg(target_feature = "atomics")]
+type SQLite = OpfsSAH;
+
+#[cfg(target_feature = "atomics")]
+fn sqlite() -> &'static OpfsSAH {
+    &OPFS_SAH.get().expect("init pool first")
+}
+
+#[cfg(target_feature = "atomics")]
+use multithreading::{call, CApiReq, CApiResp};
+
+/// Wrap some multithreading calls
+#[cfg(target_feature = "atomics")]
+mod multithreading {
+    use super::*;
+    use std::sync::mpsc::Sender;
+
+    include!(concat!(env!("OUT_DIR"), "/polyfill_multi_sahpool.rs"));
+
+    pub struct Task {
+        req: CApiReq,
+        tx: Sender<CApiResp>,
+    }
+
+    impl Task {
+        /// Called by the main thread and sends the result to the child thread.
+        pub fn run(self) {
+            self.tx
+                .send(self.req.call())
+                .expect("recv channel never disconnect");
+        }
+    }
+
+    /// Send a task to the main thread and wait for it to return synchronously.
+    pub fn call(sqlite: &SQLite, req: CApiReq) -> CApiResp {
+        let (tx, rx) = std::sync::mpsc::channel();
+        sqlite
+            .tx
+            .send(Task { req, tx })
+            .expect("recv channel never disconnect");
+        rx.recv().expect("send channel never disconnect")
+    }
+}
+
 const DEFAULT_VFS_DIR: &str = ".opfs-sahpool";
 
 const SECTOR_SIZE: usize = 4096;
@@ -26,6 +73,18 @@ const HEADER_OFFSET_DATA: usize = SECTOR_SIZE;
 
 const PERSISTENT_FILE_TYPES: i32 =
     SQLITE_OPEN_MAIN_DB | SQLITE_OPEN_MAIN_JOURNAL | SQLITE_OPEN_SUPER_JOURNAL | SQLITE_OPEN_WAL;
+
+static OPFS_SAH: tokio::sync::OnceCell<OpfsSAH> = tokio::sync::OnceCell::const_new();
+
+fn pool() -> &'static FragileComfirmed<OpfsSAHPool> {
+    &OPFS_SAH.get().expect("init pool first").pool
+}
+
+fn read_write_options(at: f64) -> FileSystemReadWriteOptions {
+    let options = FileSystemReadWriteOptions::new();
+    options.set_at(at);
+    options
+}
 
 /// `OpfsSAHPool` options
 pub struct OpfsSAHPoolCfg {
@@ -723,201 +782,303 @@ impl OpfsSAHPoolUtil {
     }
 }
 
-static POOL: tokio::sync::OnceCell<FragileComfirmed<OpfsSAHPool>> =
-    tokio::sync::OnceCell::const_new();
-
-fn pool() -> &'static FragileComfirmed<OpfsSAHPool> {
-    POOL.get().expect("init pool first")
+#[cfg_attr(target_feature = "atomics", multithread)]
+unsafe extern "C" fn xCheckReservedLock(
+    _arg1: *mut sqlite3_file,
+    pResOut: *mut ::std::os::raw::c_int,
+) -> ::std::os::raw::c_int {
+    let pool = pool();
+    pool.pop_err();
+    *pResOut = 1;
+    0
 }
 
-fn read_write_options(at: f64) -> FileSystemReadWriteOptions {
-    let options = FileSystemReadWriteOptions::new();
-    options.set_at(at);
-    options
+#[cfg_attr(target_feature = "atomics", multithread)]
+unsafe extern "C" fn xClose(arg1: *mut sqlite3_file) -> ::std::os::raw::c_int {
+    let pool = pool();
+    let f = || {
+        if let Ok(file) = pool.get_o_file_for_s3_file(arg1) {
+            file.sah.flush().map_err(OpfsSAHError::Flush)?;
+            if (file.flags & SQLITE_OPEN_DELETEONCLOSE) != 0 {
+                pool.delete_path(&file.path)?;
+            }
+        }
+        Ok::<_, OpfsSAHError>(())
+    };
+    if let Err(e) = f() {
+        return pool.store_err(&e, Some(SQLITE_IOERR));
+    }
+    0
+}
+
+unsafe extern "C" fn xDeviceCharacteristics(_arg1: *mut sqlite3_file) -> ::std::os::raw::c_int {
+    SQLITE_IOCAP_UNDELETABLE_WHEN_OPEN
+}
+
+unsafe extern "C" fn xFileControl(
+    _arg1: *mut sqlite3_file,
+    _op: ::std::os::raw::c_int,
+    _pArg: *mut ::std::os::raw::c_void,
+) -> ::std::os::raw::c_int {
+    SQLITE_NOTFOUND
+}
+
+#[cfg_attr(target_feature = "atomics", multithread)]
+unsafe extern "C" fn xFileSize(
+    arg1: *mut sqlite3_file,
+    pSize: *mut sqlite3_int64,
+) -> ::std::os::raw::c_int {
+    let pool = pool();
+    if let Ok(file) = pool.get_o_file_for_s3_file(arg1) {
+        let size = file.sah.get_size().unwrap() as i64 - HEADER_OFFSET_DATA as i64;
+        *pSize = size;
+    }
+    0
+}
+
+#[cfg_attr(target_feature = "atomics", multithread)]
+unsafe extern "C" fn xLock(
+    arg1: *mut sqlite3_file,
+    arg2: ::std::os::raw::c_int,
+) -> ::std::os::raw::c_int {
+    let pool = pool();
+    pool.pop_err();
+    let _ = pool
+        .get_o_file_for_s3_file(arg1)
+        .and_then(|file| file.set_lock(arg2));
+    0
+}
+
+#[cfg_attr(target_feature = "atomics", multithread)]
+unsafe extern "C" fn xRead(
+    arg1: *mut sqlite3_file,
+    arg2: *mut ::std::os::raw::c_void,
+    iAmt: ::std::os::raw::c_int,
+    iOfst: sqlite3_int64,
+) -> ::std::os::raw::c_int {
+    let pool = pool();
+    pool.pop_err();
+    let f = || {
+        let file = pool.get_o_file_for_s3_file(arg1)?;
+        let slice = std::slice::from_raw_parts_mut(arg2.cast::<u8>(), iAmt as usize);
+
+        let n_read = file
+            .sah
+            .read_with_u8_array_and_options(
+                slice,
+                &read_write_options((HEADER_OFFSET_DATA as i64 + iOfst) as f64),
+            )
+            .map_err(OpfsSAHError::Read)?;
+
+        if (n_read as i32) < iAmt {
+            slice[n_read as usize..iAmt as usize].fill(0);
+            return Ok(SQLITE_IOERR_SHORT_READ);
+        }
+
+        Ok::<i32, OpfsSAHError>(0)
+    };
+    match f() {
+        Ok(ret) => ret,
+        Err(e) => pool.store_err(&e, Some(SQLITE_IOERR)),
+    }
+}
+
+unsafe extern "C" fn xSectorSize(_arg1: *mut sqlite3_file) -> ::std::os::raw::c_int {
+    SECTOR_SIZE as i32
+}
+
+#[cfg_attr(target_feature = "atomics", multithread)]
+unsafe extern "C" fn xSync(
+    arg1: *mut sqlite3_file,
+    _flags: ::std::os::raw::c_int,
+) -> ::std::os::raw::c_int {
+    let pool = pool();
+    pool.pop_err();
+
+    if let Err(e) = pool
+        .get_o_file_for_s3_file(arg1)
+        .and_then(|file| file.sah.flush().map_err(OpfsSAHError::Flush))
+    {
+        return pool.store_err(&e, Some(SQLITE_IOERR));
+    }
+
+    0
+}
+
+#[cfg_attr(target_feature = "atomics", multithread)]
+unsafe extern "C" fn xTruncate(
+    arg1: *mut sqlite3_file,
+    size: sqlite3_int64,
+) -> ::std::os::raw::c_int {
+    let pool = pool();
+    pool.pop_err();
+
+    if let Err(e) = pool.get_o_file_for_s3_file(arg1).and_then(|file| {
+        file.sah
+            .truncate_with_f64((HEADER_OFFSET_DATA as i64 + size) as f64)
+            .map_err(OpfsSAHError::Truncate)
+    }) {
+        return pool.store_err(&e, Some(SQLITE_IOERR));
+    }
+
+    0
+}
+
+#[cfg_attr(target_feature = "atomics", multithread)]
+unsafe extern "C" fn xUnlock(
+    arg1: *mut sqlite3_file,
+    arg2: ::std::os::raw::c_int,
+) -> ::std::os::raw::c_int {
+    let pool = pool();
+    let _ = pool
+        .get_o_file_for_s3_file(arg1)
+        .and_then(|file| file.set_lock(arg2));
+    0
+}
+
+#[cfg_attr(target_feature = "atomics", multithread)]
+unsafe extern "C" fn xWrite(
+    arg1: *mut sqlite3_file,
+    arg2: *const ::std::os::raw::c_void,
+    iAmt: ::std::os::raw::c_int,
+    iOfst: sqlite3_int64,
+) -> ::std::os::raw::c_int {
+    let pool = pool();
+    pool.pop_err();
+
+    let f = || {
+        let file = pool.get_o_file_for_s3_file(arg1)?;
+        let slice = std::slice::from_raw_parts(arg2.cast::<u8>(), iAmt as usize);
+
+        let n_write = file
+            .sah
+            .write_with_u8_array_and_options(
+                slice,
+                &read_write_options((HEADER_OFFSET_DATA as i64 + iOfst) as f64),
+            )
+            .map_err(OpfsSAHError::Read)?;
+
+        let ret = if iAmt == n_write as i32 {
+            0
+        } else {
+            SQLITE_ERROR
+        };
+
+        Ok::<i32, OpfsSAHError>(ret)
+    };
+    match f() {
+        Ok(ret) => ret,
+        Err(e) => pool.store_err(&e, Some(SQLITE_IOERR)),
+    }
+}
+
+#[cfg_attr(target_feature = "atomics", multithread)]
+unsafe extern "C" fn xAccess(
+    _arg1: *mut sqlite3_vfs,
+    zName: *const ::std::os::raw::c_char,
+    _flags: ::std::os::raw::c_int,
+    pResOut: *mut ::std::os::raw::c_int,
+) -> ::std::os::raw::c_int {
+    let pool = pool();
+    pool.pop_err();
+    *pResOut = match pool.get_path(zName) {
+        Ok(s) => i32::from(pool.has_filename(&s)),
+        Err(_) => 0,
+    };
+    0
+}
+
+#[cfg_attr(target_feature = "atomics", multithread)]
+unsafe extern "C" fn xDelete(
+    _arg1: *mut sqlite3_vfs,
+    zName: *const ::std::os::raw::c_char,
+    _syncDir: ::std::os::raw::c_int,
+) -> ::std::os::raw::c_int {
+    let pool = pool();
+    pool.pop_err();
+
+    if let Err(e) = pool.get_path(zName).map(|name| pool.delete_path(&name)) {
+        return pool.store_err(&e, Some(SQLITE_IOERR_DELETE));
+    }
+    0
+}
+
+unsafe extern "C" fn xFullPathname(
+    _arg1: *mut sqlite3_vfs,
+    zName: *const ::std::os::raw::c_char,
+    nOut: ::std::os::raw::c_int,
+    zOut: *mut ::std::os::raw::c_char,
+) -> ::std::os::raw::c_int {
+    zName.copy_to(zOut, nOut as usize);
+    0
+}
+
+#[cfg_attr(target_feature = "atomics", multithread)]
+unsafe extern "C" fn xGetLastError(
+    _arg1: *mut sqlite3_vfs,
+    arg2: ::std::os::raw::c_int,
+    arg3: *mut ::std::os::raw::c_char,
+) -> ::std::os::raw::c_int {
+    let pool = pool();
+    if let Some((_, msg)) = pool.pop_err() {
+        msg.as_ptr()
+            .copy_to(arg3.cast(), msg.len().min(arg2 as usize));
+        std::ptr::write(arg3.add(arg2 as usize - 1), 0);
+    }
+    0
+}
+
+#[cfg_attr(target_feature = "atomics", multithread)]
+unsafe extern "C" fn xOpen(
+    _arg1: *mut sqlite3_vfs,
+    zName: sqlite3_filename,
+    arg2: *mut sqlite3_file,
+    flags: ::std::os::raw::c_int,
+    pOutFlags: *mut ::std::os::raw::c_int,
+) -> ::std::os::raw::c_int {
+    let pool = pool();
+
+    let f = || {
+        let name = pool.get_path(zName)?;
+        let sah = match pool.get_sah_for_path(&name) {
+            Some(sah) => sah,
+            None => {
+                if flags & SQLITE_OPEN_CREATE == 0 {
+                    return Ok(SQLITE_ERROR);
+                }
+                if let Some(sah) = pool.next_available_sah() {
+                    pool.set_associated_path(&sah, &name, flags)?;
+                    sah
+                } else {
+                    return Ok(SQLITE_ERROR);
+                }
+            }
+        };
+        let file = Object::new();
+        Reflect::set(&file, &JsValue::from("path"), &JsValue::from(name)).unwrap();
+        Reflect::set(&file, &JsValue::from("flags"), &JsValue::from(flags)).unwrap();
+        Reflect::set(&file, &JsValue::from("sah"), &JsValue::from(sah)).unwrap();
+        Reflect::set(
+            &file,
+            &JsValue::from("lockType"),
+            &JsValue::from(SQLITE_LOCK_NONE),
+        )
+        .unwrap();
+        pool.map_s3_file_to_o_file(arg2, Some(file));
+
+        let io_method = Box::leak(Box::new(io_methods()));
+        (*arg2).pMethods = io_method;
+        *pOutFlags = flags;
+
+        Ok::<i32, OpfsSAHError>(0)
+    };
+    match f() {
+        Ok(ret) => ret,
+        Err(e) => pool.store_err(&e, Some(SQLITE_CANTOPEN)),
+    }
 }
 
 fn io_methods() -> sqlite3_io_methods {
-    unsafe extern "C" fn xCheckReservedLock(
-        _arg1: *mut sqlite3_file,
-        pResOut: *mut ::std::os::raw::c_int,
-    ) -> ::std::os::raw::c_int {
-        let pool = pool();
-        pool.pop_err();
-        *pResOut = 1;
-        0
-    }
-
-    unsafe extern "C" fn xClose(arg1: *mut sqlite3_file) -> ::std::os::raw::c_int {
-        let pool = pool();
-        let f = || {
-            if let Ok(file) = pool.get_o_file_for_s3_file(arg1) {
-                file.sah.flush().map_err(OpfsSAHError::Flush)?;
-                if (file.flags & SQLITE_OPEN_DELETEONCLOSE) != 0 {
-                    pool.delete_path(&file.path)?;
-                }
-            }
-            Ok::<_, OpfsSAHError>(())
-        };
-        if let Err(e) = f() {
-            return pool.store_err(&e, Some(SQLITE_IOERR));
-        }
-        0
-    }
-
-    unsafe extern "C" fn xDeviceCharacteristics(_arg1: *mut sqlite3_file) -> ::std::os::raw::c_int {
-        SQLITE_IOCAP_UNDELETABLE_WHEN_OPEN
-    }
-
-    unsafe extern "C" fn xFileControl(
-        _arg1: *mut sqlite3_file,
-        _op: ::std::os::raw::c_int,
-        _pArg: *mut ::std::os::raw::c_void,
-    ) -> ::std::os::raw::c_int {
-        SQLITE_NOTFOUND
-    }
-
-    unsafe extern "C" fn xFileSize(
-        arg1: *mut sqlite3_file,
-        pSize: *mut sqlite3_int64,
-    ) -> ::std::os::raw::c_int {
-        let pool = pool();
-        if let Ok(file) = pool.get_o_file_for_s3_file(arg1) {
-            let size = file.sah.get_size().unwrap() as i64 - HEADER_OFFSET_DATA as i64;
-            *pSize = size;
-        }
-        0
-    }
-
-    unsafe extern "C" fn xLock(
-        arg1: *mut sqlite3_file,
-        arg2: ::std::os::raw::c_int,
-    ) -> ::std::os::raw::c_int {
-        let pool = pool();
-        pool.pop_err();
-        let _ = pool
-            .get_o_file_for_s3_file(arg1)
-            .and_then(|file| file.set_lock(arg2));
-        0
-    }
-
-    unsafe extern "C" fn xRead(
-        arg1: *mut sqlite3_file,
-        arg2: *mut ::std::os::raw::c_void,
-        iAmt: ::std::os::raw::c_int,
-        iOfst: sqlite3_int64,
-    ) -> ::std::os::raw::c_int {
-        let pool = pool();
-        pool.pop_err();
-        let f = || {
-            let file = pool.get_o_file_for_s3_file(arg1)?;
-            let slice = std::slice::from_raw_parts_mut(arg2.cast::<u8>(), iAmt as usize);
-
-            let n_read = file
-                .sah
-                .read_with_u8_array_and_options(
-                    slice,
-                    &read_write_options((HEADER_OFFSET_DATA as i64 + iOfst) as f64),
-                )
-                .map_err(OpfsSAHError::Read)?;
-
-            if (n_read as i32) < iAmt {
-                slice[n_read as usize..iAmt as usize].fill(0);
-                return Ok(SQLITE_IOERR_SHORT_READ);
-            }
-
-            Ok::<i32, OpfsSAHError>(0)
-        };
-        match f() {
-            Ok(ret) => ret,
-            Err(e) => pool.store_err(&e, Some(SQLITE_IOERR)),
-        }
-    }
-
-    unsafe extern "C" fn xSectorSize(_arg1: *mut sqlite3_file) -> ::std::os::raw::c_int {
-        SECTOR_SIZE as i32
-    }
-
-    unsafe extern "C" fn xSync(
-        arg1: *mut sqlite3_file,
-        _flags: ::std::os::raw::c_int,
-    ) -> ::std::os::raw::c_int {
-        let pool = pool();
-        pool.pop_err();
-
-        if let Err(e) = pool
-            .get_o_file_for_s3_file(arg1)
-            .and_then(|file| file.sah.flush().map_err(OpfsSAHError::Flush))
-        {
-            return pool.store_err(&e, Some(SQLITE_IOERR));
-        }
-
-        0
-    }
-
-    unsafe extern "C" fn xTruncate(
-        arg1: *mut sqlite3_file,
-        size: sqlite3_int64,
-    ) -> ::std::os::raw::c_int {
-        let pool = pool();
-        pool.pop_err();
-
-        if let Err(e) = pool.get_o_file_for_s3_file(arg1).and_then(|file| {
-            file.sah
-                .truncate_with_f64((HEADER_OFFSET_DATA as i64 + size) as f64)
-                .map_err(OpfsSAHError::Truncate)
-        }) {
-            return pool.store_err(&e, Some(SQLITE_IOERR));
-        }
-
-        0
-    }
-
-    unsafe extern "C" fn xUnlock(
-        arg1: *mut sqlite3_file,
-        arg2: ::std::os::raw::c_int,
-    ) -> ::std::os::raw::c_int {
-        let pool = pool();
-        let _ = pool
-            .get_o_file_for_s3_file(arg1)
-            .and_then(|file| file.set_lock(arg2));
-        0
-    }
-
-    unsafe extern "C" fn xWrite(
-        arg1: *mut sqlite3_file,
-        arg2: *const ::std::os::raw::c_void,
-        iAmt: ::std::os::raw::c_int,
-        iOfst: sqlite3_int64,
-    ) -> ::std::os::raw::c_int {
-        let pool = pool();
-        pool.pop_err();
-
-        let f = || {
-            let file = pool.get_o_file_for_s3_file(arg1)?;
-            let slice = std::slice::from_raw_parts(arg2.cast::<u8>(), iAmt as usize);
-
-            let n_write = file
-                .sah
-                .write_with_u8_array_and_options(
-                    slice,
-                    &read_write_options((HEADER_OFFSET_DATA as i64 + iOfst) as f64),
-                )
-                .map_err(OpfsSAHError::Read)?;
-
-            let ret = if iAmt == n_write as i32 {
-                0
-            } else {
-                SQLITE_ERROR
-            };
-
-            Ok::<i32, OpfsSAHError>(ret)
-        };
-        match f() {
-            Ok(ret) => ret,
-            Err(e) => pool.store_err(&e, Some(SQLITE_IOERR)),
-        }
-    }
-
     sqlite3_io_methods {
         iVersion: 1,
         xClose: Some(xClose),
@@ -942,108 +1103,6 @@ fn io_methods() -> sqlite3_io_methods {
 }
 
 fn vfs() -> sqlite3_vfs {
-    unsafe extern "C" fn xAccess(
-        _arg1: *mut sqlite3_vfs,
-        zName: *const ::std::os::raw::c_char,
-        _flags: ::std::os::raw::c_int,
-        pResOut: *mut ::std::os::raw::c_int,
-    ) -> ::std::os::raw::c_int {
-        let pool = pool();
-        pool.pop_err();
-        *pResOut = match pool.get_path(zName) {
-            Ok(s) => i32::from(pool.has_filename(&s)),
-            Err(_) => 0,
-        };
-        0
-    }
-
-    unsafe extern "C" fn xDelete(
-        _arg1: *mut sqlite3_vfs,
-        zName: *const ::std::os::raw::c_char,
-        _syncDir: ::std::os::raw::c_int,
-    ) -> ::std::os::raw::c_int {
-        let pool = pool();
-        pool.pop_err();
-
-        if let Err(e) = pool.get_path(zName).map(|name| pool.delete_path(&name)) {
-            return pool.store_err(&e, Some(SQLITE_IOERR_DELETE));
-        }
-        0
-    }
-
-    unsafe extern "C" fn xFullPathname(
-        _arg1: *mut sqlite3_vfs,
-        zName: *const ::std::os::raw::c_char,
-        nOut: ::std::os::raw::c_int,
-        zOut: *mut ::std::os::raw::c_char,
-    ) -> ::std::os::raw::c_int {
-        zName.copy_to(zOut, nOut as usize);
-        0
-    }
-
-    unsafe extern "C" fn xGetLastError(
-        _arg1: *mut sqlite3_vfs,
-        arg2: ::std::os::raw::c_int,
-        arg3: *mut ::std::os::raw::c_char,
-    ) -> ::std::os::raw::c_int {
-        let pool = pool();
-        if let Some((_, msg)) = pool.pop_err() {
-            msg.as_ptr()
-                .copy_to(arg3.cast(), msg.len().min(arg2 as usize));
-            std::ptr::write(arg3.add(arg2 as usize - 1), 0);
-        }
-        0
-    }
-
-    unsafe extern "C" fn xOpen(
-        _arg1: *mut sqlite3_vfs,
-        zName: sqlite3_filename,
-        arg2: *mut sqlite3_file,
-        flags: ::std::os::raw::c_int,
-        pOutFlags: *mut ::std::os::raw::c_int,
-    ) -> ::std::os::raw::c_int {
-        let pool = pool();
-
-        let f = || {
-            let name = pool.get_path(zName)?;
-            let sah = match pool.get_sah_for_path(&name) {
-                Some(sah) => sah,
-                None => {
-                    if flags & SQLITE_OPEN_CREATE == 0 {
-                        return Ok(SQLITE_ERROR);
-                    }
-                    if let Some(sah) = pool.next_available_sah() {
-                        pool.set_associated_path(&sah, &name, flags)?;
-                        sah
-                    } else {
-                        return Ok(SQLITE_ERROR);
-                    }
-                }
-            };
-            let file = Object::new();
-            Reflect::set(&file, &JsValue::from("path"), &JsValue::from(name)).unwrap();
-            Reflect::set(&file, &JsValue::from("flags"), &JsValue::from(flags)).unwrap();
-            Reflect::set(&file, &JsValue::from("sah"), &JsValue::from(sah)).unwrap();
-            Reflect::set(
-                &file,
-                &JsValue::from("lockType"),
-                &JsValue::from(SQLITE_LOCK_NONE),
-            )
-            .unwrap();
-            pool.map_s3_file_to_o_file(arg2, Some(file));
-
-            let io_method = Box::leak(Box::new(io_methods()));
-            (*arg2).pMethods = io_method;
-            *pOutFlags = flags;
-
-            Ok::<i32, OpfsSAHError>(0)
-        };
-        match f() {
-            Ok(ret) => ret,
-            Err(e) => pool.store_err(&e, Some(SQLITE_CANTOPEN)),
-        }
-    }
-
     let default_vfs = unsafe { sqlite3_vfs_find(std::ptr::null()) };
     let xRandomness = unsafe { (*default_vfs).xRandomness };
     let xSleep = unsafe { (*default_vfs).xSleep };
@@ -1076,16 +1135,61 @@ fn vfs() -> sqlite3_vfs {
     }
 }
 
+struct OpfsSAH {
+    pool: FragileComfirmed<OpfsSAHPool>,
+    #[cfg(target_feature = "atomics")]
+    tx: tokio::sync::mpsc::UnboundedSender<multithreading::Task>,
+}
+
+impl OpfsSAH {
+    fn new(
+        pool: OpfsSAHPool,
+        #[cfg(target_feature = "atomics")] tx: tokio::sync::mpsc::UnboundedSender<
+            multithreading::Task,
+        >,
+    ) -> Self {
+        Self {
+            pool: FragileComfirmed::new(pool),
+            #[cfg(target_feature = "atomics")]
+            tx,
+        }
+    }
+
+    /// Determine whether sqlite is called in the thread
+    /// that initialized it
+    #[cfg(target_feature = "atomics")]
+    fn main_thread(&self) -> bool {
+        self.pool.main_thread()
+    }
+}
+
 /// Register `opfs-sahpool` vfs and return a utility object which can be used
 /// to perform basic administration of the file pool
 pub async fn install_opfs_sahpool(
     options: Option<&OpfsSAHPoolCfg>,
     default_vfs: bool,
 ) -> Result<OpfsSAHPoolUtil, OpfsSAHError> {
-    let pool = POOL
+    #[cfg(target_feature = "atomics")]
+    let opfs_sah = OPFS_SAH
+        .get_or_try_init(|| async {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let opfs_sah = OpfsSAH::new(OpfsSAHPool::new(options).await?, tx);
+
+            wasm_bindgen_futures::spawn_local(async move {
+                while let Some(req) = rx.recv().await {
+                    req.run();
+                }
+            });
+
+            Ok(opfs_sah)
+        })
+        .await?;
+
+    #[cfg(not(target_feature = "atomics"))]
+    let opfs_sah = OPFS_SAH
         .get_or_try_init(|| async {
             let pool = OpfsSAHPool::new(options).await?;
-            Ok(FragileComfirmed::new(pool))
+            Ok(OpfsSAH::new(pool))
         })
         .await?;
 
@@ -1096,7 +1200,9 @@ pub async fn install_opfs_sahpool(
         ));
     }
 
-    let util = OpfsSAHPoolUtil { pool };
+    let util = OpfsSAHPoolUtil {
+        pool: &opfs_sah.pool,
+    };
 
     Ok(util)
 }
