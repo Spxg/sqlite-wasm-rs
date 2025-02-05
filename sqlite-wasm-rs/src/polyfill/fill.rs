@@ -164,6 +164,19 @@ pub unsafe extern "C" fn sqlite3_os_end() -> std::os::raw::c_int {
     0
 }
 
+/// thread::sleep is available when atomics are enabled
+#[cfg(target_feature = "atomics")]
+unsafe extern "C" fn xSleep(
+    _arg1: *mut sqlite3_vfs,
+    microseconds: ::std::os::raw::c_int,
+) -> ::std::os::raw::c_int {
+    use std::{thread, time::Duration};
+
+    thread::sleep(Duration::from_micros(microseconds as u64));
+    0
+}
+
+#[cfg(not(target_feature = "atomics"))]
 unsafe extern "C" fn xSleep(
     _arg1: *mut sqlite3_vfs,
     _microseconds: ::std::os::raw::c_int,
