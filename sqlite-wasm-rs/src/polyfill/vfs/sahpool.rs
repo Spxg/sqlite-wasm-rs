@@ -4,7 +4,7 @@ use crate::fragile::FragileComfirmed;
 use js_sys::{
     Array, DataView, IteratorNext, Map, Math, Number, Object, Reflect, Set, Uint32Array, Uint8Array,
 };
-use std::{ffi::CStr, sync::Mutex, usize};
+use std::{ffi::CStr, sync::Mutex};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
@@ -151,8 +151,7 @@ fn compute_digest(_byte_array: &Uint8Array) -> Uint32Array {
 
 fn get_random_name() -> String {
     let random = Number::from(Math::random()).to_string(36).unwrap();
-    let name = random.slice(2, random.length()).as_string().unwrap();
-    name
+    random.slice(2, random.length()).as_string().unwrap()
 }
 
 struct FileObject {
@@ -224,7 +223,7 @@ impl OpfsSAHPool {
         const OPAQUE_DIR_NAME: &str = ".opaque";
 
         let default_options = OpfsSAHPoolCfg::default();
-        let options = options.unwrap_or_else(|| &default_options);
+        let options = options.unwrap_or(&default_options);
 
         let vfs_dir = DEFAULT_VFS_DIR;
         let capacity = options.initial_capacity;
@@ -352,10 +351,8 @@ impl OpfsSAHPool {
     /// currently-opened client-specified filenames.
     fn get_file_names(&self) -> Vec<String> {
         let mut result = vec![];
-        for n in self.map_filename_to_sah.keys() {
-            if let Ok(name) = n {
-                result.push(name.as_string().unwrap());
-            }
+        for name in self.map_filename_to_sah.keys().into_iter().flatten() {
+            result.push(name.as_string().unwrap());
         }
         result
     }
@@ -505,12 +502,10 @@ impl OpfsSAHPool {
                     sah.truncate_with_u32(HEADER_OFFSET_DATA as u32)
                         .map_err(OpfsSAHError::Truncate)?;
                     self.set_associated_path(&sah, "", 0)?;
+                } else if let Some(path) = self.get_associated_path(&sah)? {
+                    self.map_filename_to_sah.set(&JsValue::from(path), &sah);
                 } else {
-                    if let Some(path) = self.get_associated_path(&sah)? {
-                        self.map_filename_to_sah.set(&JsValue::from(path), &sah);
-                    } else {
-                        self.available_sah.add(&sah);
-                    }
+                    self.available_sah.add(&sah);
                 }
             }
             Ok::<_, OpfsSAHError>(())
@@ -528,11 +523,9 @@ impl OpfsSAHPool {
     /// Releases all currently-opened SAHs. The only legal
     /// operation after this is acquireAccessHandles().
     fn release_access_handles(&self) {
-        for sah in self.map_sah_to_name.keys() {
-            if let Ok(sah) = sah {
-                let sah = FileSystemSyncAccessHandle::from(sah);
-                sah.close();
-            }
+        for sah in self.map_sah_to_name.keys().into_iter().flatten() {
+            let sah = FileSystemSyncAccessHandle::from(sah);
+            sah.close();
         }
         self.map_sah_to_name.clear();
         self.map_filename_to_sah.clear();
@@ -1116,7 +1109,7 @@ fn vfs() -> sqlite3_vfs {
         szOsFile: std::mem::size_of::<sqlite3_file>() as i32,
         mxPathname: HEADER_MAX_PATH_SIZE as i32,
         pNext: std::ptr::null_mut(),
-        zName: "opfs-sahpool\0".as_ptr().cast(),
+        zName: c"opfs-sahpool".as_ptr().cast(),
         pAppData: std::ptr::null_mut(),
         xOpen: Some(xOpen),
         xDelete: Some(xDelete),
