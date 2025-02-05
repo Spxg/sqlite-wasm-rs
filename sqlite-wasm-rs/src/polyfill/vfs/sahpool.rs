@@ -497,7 +497,15 @@ impl OpfsSAHPool {
 
     /// All "../" parts and duplicate slashes are resolve/removed from
     /// the returned result.
-    fn get_path(&self, name: &str) -> Result<String, OpfsSAHError> {
+    fn get_path(&self, name: *const ::std::os::raw::c_char) -> Result<String, OpfsSAHError> {
+        if name.is_null() {
+            return Err(OpfsSAHError::Custom("name is null ptr".into()));
+        }
+        let name = unsafe {
+            CStr::from_ptr(name)
+                .to_str()
+                .map_err(|e| OpfsSAHError::Custom(format!("{e:?}")))?
+        };
         Url::new_with_base(name, "file://localhost/")
             .map(|x| x.pathname())
             .map_err(OpfsSAHError::GetPath)
@@ -923,8 +931,7 @@ fn vfs() -> sqlite3_vfs {
     ) -> ::std::os::raw::c_int {
         let pool = pool();
         pool.store_err(None, None);
-        let s = CStr::from_ptr(zName).to_str().unwrap();
-        *pResOut = match pool.get_path(s) {
+        *pResOut = match pool.get_path(zName) {
             Ok(s) => i32::from(pool.has_filename(&s)),
             Err(_) => 0,
         };
@@ -939,8 +946,7 @@ fn vfs() -> sqlite3_vfs {
         let pool = pool();
         pool.store_err(None, None);
 
-        let name = CStr::from_ptr(zName).to_str().unwrap();
-        if let Err(e) = pool.get_path(name).map(|name| pool.delete_path(&name)) {
+        if let Err(e) = pool.get_path(zName).map(|name| pool.delete_path(&name)) {
             return pool.store_err(Some(&e), Some(SQLITE_IOERR_DELETE));
         }
         0
@@ -978,9 +984,9 @@ fn vfs() -> sqlite3_vfs {
         pOutFlags: *mut ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int {
         let pool = pool();
-        let name = CStr::from_ptr(zName).to_str().unwrap();
+
         let f = || {
-            let name = pool.get_path(&name)?;
+            let name = pool.get_path(zName)?;
             let sah = match pool.get_sah_for_path(&name) {
                 Some(sah) => sah,
                 None => {
