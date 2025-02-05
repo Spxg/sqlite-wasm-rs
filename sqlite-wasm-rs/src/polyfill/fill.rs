@@ -1,3 +1,5 @@
+//! This module fills in the external functions needed to link to `sqlite.o`
+
 use super::export::{sqlite3_int64, sqlite3_vfs, sqlite3_vfs_register};
 use js_sys::{Date, Math};
 use wasm_bindgen::JsCast;
