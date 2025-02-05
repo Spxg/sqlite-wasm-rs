@@ -44,7 +44,7 @@ fn yday_from_date(date: &Date) -> u32 {
 /// https://github.com/sqlite/sqlite-wasm/blob/7c1b309c3bd07d8e6d92f82344108cebbd14f161/sqlite-wasm/jswasm/sqlite3-bundler-friendly.mjs#L3404
 #[no_mangle]
 pub unsafe extern "C" fn _localtime_js(t: time_t, tm: *mut tm) {
-    assert!(t < INT53_MIN || t > INT53_MAX, "wrong time range");
+    assert!(!(INT53_MIN..=INT53_MAX).contains(&t), "wrong time range");
 
     let date = Date::new(&(t * 1000).into());
     (*tm).tm_sec = date.get_seconds() as _;
@@ -78,9 +78,9 @@ pub unsafe extern "C" fn _tzset_js(
 ) {
     unsafe fn set_name(name: String, dst: *mut std::os::raw::c_char) {
         for (idx, byte) in name.bytes().enumerate() {
-            *dst.offset(idx as _) = byte as _;
+            *dst.add(idx) = byte as _;
         }
-        *dst.offset(name.len() as _) = 0;
+        *dst.add(name.len()) = 0;
     }
 
     fn extract_zone(timezone_offset: f64) -> String {
@@ -136,7 +136,7 @@ pub unsafe extern "C" fn sqlite3_os_init() -> std::os::raw::c_int {
         szOsFile: 0,
         mxPathname: 512,
         pNext: std::ptr::null_mut(),
-        zName: "none\0".as_ptr().cast(),
+        zName: c"none".as_ptr().cast(),
         pAppData: std::ptr::null_mut(),
         xOpen: None,
         xDelete: None,
@@ -186,7 +186,7 @@ unsafe extern "C" fn xRandomness(
     zOut: *mut ::std::os::raw::c_char,
 ) -> ::std::os::raw::c_int {
     for i in 0..nByte {
-        *zOut.offset(i as isize) = ((Math::random() * 255000.0) as u8 & 0xFF) as _;
+        *zOut.offset(i as isize) = (Math::random() * 255000.0) as _;
     }
     nByte
 }
