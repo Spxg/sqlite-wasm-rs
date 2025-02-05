@@ -463,9 +463,12 @@ impl OpfsSAHPool {
 
     /// Given an (sqlite3_file*), returns the mapped
     /// xOpen file object.
-    fn get_o_file_for_s3_file(&self, p_file: *mut sqlite3_file) -> Option<Object> {
+    fn get_o_file_for_s3_file(&self, p_file: *mut sqlite3_file) -> Result<Object, OpfsSAHError> {
         let file = self.map_s3_file_to_o_file.get(&JsValue::from(p_file));
-        (!file.is_undefined()).then(|| file.into())
+        if file.is_undefined() {
+            return Err(OpfsSAHError::Custom("open file not exists".into()));
+        }
+        Ok(file.into())
     }
 
     /// Maps or unmaps (if file is falsy) the given (sqlite3_file*)
@@ -712,7 +715,7 @@ fn io_methods() -> sqlite3_io_methods {
     unsafe extern "C" fn xClose(arg1: *mut sqlite3_file) -> ::std::os::raw::c_int {
         let pool = pool();
         let f = || {
-            if let Some(file) = pool.get_o_file_for_s3_file(arg1) {
+            if let Ok(file) = pool.get_o_file_for_s3_file(arg1) {
                 pool.map_s3_file_to_o_file(arg1, None);
                 let (path, flags, sah) = get_file_fields(&file);
                 sah.flush().map_err(OpfsSAHError::Flush)?;
@@ -745,7 +748,7 @@ fn io_methods() -> sqlite3_io_methods {
         pSize: *mut sqlite3_int64,
     ) -> ::std::os::raw::c_int {
         let pool = pool();
-        if let Some(file) = pool.get_o_file_for_s3_file(arg1) {
+        if let Ok(file) = pool.get_o_file_for_s3_file(arg1) {
             let (_, _, sah) = get_file_fields(&file);
             let size = sah.get_size().unwrap() as i64 - HEADER_OFFSET_DATA as i64;
             *pSize = size;
@@ -759,7 +762,7 @@ fn io_methods() -> sqlite3_io_methods {
     ) -> ::std::os::raw::c_int {
         let pool = pool();
         pool.store_err(None, None);
-        if let Some(file) = pool.get_o_file_for_s3_file(arg1) {
+        if let Ok(file) = pool.get_o_file_for_s3_file(arg1) {
             // seems unused
             Reflect::set(&file, &JsValue::from("lockType"), &JsValue::from(arg2)).unwrap();
         }
@@ -775,9 +778,7 @@ fn io_methods() -> sqlite3_io_methods {
         let pool = pool();
         pool.store_err(None, None);
         let f = || {
-            let file = pool
-                .get_o_file_for_s3_file(arg1)
-                .ok_or_else(|| OpfsSAHError::Custom("open file not exists".into()))?;
+            let file = pool.get_o_file_for_s3_file(arg1)?;
             let (_, _, sah) = get_file_fields(&file);
             let slice = std::slice::from_raw_parts_mut(arg2.cast::<u8>(), iAmt as usize);
 
@@ -814,7 +815,6 @@ fn io_methods() -> sqlite3_io_methods {
 
         let get_sah = pool
             .get_o_file_for_s3_file(arg1)
-            .ok_or_else(|| OpfsSAHError::Custom("open file not exists".into()))
             .map(|obj| get_file_fields(&obj).2);
 
         if let Err(e) = get_sah.and_then(|sah| sah.flush().map_err(OpfsSAHError::Flush)) {
@@ -833,7 +833,6 @@ fn io_methods() -> sqlite3_io_methods {
 
         let get_sah = pool
             .get_o_file_for_s3_file(arg1)
-            .ok_or_else(|| OpfsSAHError::Custom("open file not exists".into()))
             .map(|obj| get_file_fields(&obj).2);
 
         if let Err(e) = get_sah.and_then(|sah| {
@@ -851,7 +850,7 @@ fn io_methods() -> sqlite3_io_methods {
         arg2: ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int {
         let pool = pool();
-        if let Some(file) = pool.get_o_file_for_s3_file(arg1) {
+        if let Ok(file) = pool.get_o_file_for_s3_file(arg1) {
             // seems unused
             Reflect::set(&file, &JsValue::from("lockType"), &JsValue::from(arg2)).unwrap();
         }
@@ -868,9 +867,7 @@ fn io_methods() -> sqlite3_io_methods {
         pool.store_err(None, None);
 
         let f = || {
-            let file = pool
-                .get_o_file_for_s3_file(arg1)
-                .ok_or_else(|| OpfsSAHError::Custom("open file not exists".into()))?;
+            let file = pool.get_o_file_for_s3_file(arg1)?;
             let (_, _, sah) = get_file_fields(&file);
             let slice = std::slice::from_raw_parts(arg2.cast::<u8>(), iAmt as usize);
 
