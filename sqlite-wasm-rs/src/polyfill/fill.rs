@@ -159,11 +159,6 @@ pub unsafe extern "C" fn sqlite3_os_init() -> std::os::raw::c_int {
     sqlite3_vfs_register(Box::leak(Box::new(vfs)), 0)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn sqlite3_os_end() -> std::os::raw::c_int {
-    0
-}
-
 /// thread::sleep is available when atomics are enabled
 #[cfg(target_feature = "atomics")]
 unsafe extern "C" fn xSleep(
