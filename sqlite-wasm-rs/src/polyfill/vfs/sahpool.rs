@@ -74,6 +74,8 @@ pub enum OpfsSAHError {
     Flush(JsValue),
     #[error("sah truncate error")]
     Truncate(JsValue),
+    #[error("reflect error")]
+    Reflect(JsValue),
     #[error("custom error")]
     Custom(String),
 }
@@ -94,8 +96,47 @@ fn get_random_name() -> String {
     name
 }
 
-///  Class for managing OPFS-related state for the OPFS
-///  SharedAccessHandle Pool sqlite3_vfs.
+struct FileObject {
+    obj: Object,
+    path: String,
+    flags: i32,
+    sah: FileSystemSyncAccessHandle,
+}
+
+impl FileObject {
+    fn new(obj: Object) -> Result<Self, OpfsSAHError> {
+        let path = Reflect::get(&obj, &JsValue::from("path"))
+            .map_err(OpfsSAHError::Reflect)?
+            .as_string()
+            .ok_or_else(|| OpfsSAHError::Custom("path not string".into()))?;
+
+        let flags = Reflect::get(&obj, &JsValue::from("flags"))
+            .map_err(OpfsSAHError::Reflect)?
+            .as_f64()
+            .ok_or_else(|| OpfsSAHError::Custom("flags not number".into()))?
+            as i32;
+
+        let sah = Reflect::get(&obj, &JsValue::from("sah"))
+            .map_err(OpfsSAHError::Reflect)?
+            .into();
+
+        Ok(Self {
+            obj,
+            path,
+            flags,
+            sah,
+        })
+    }
+
+    fn set_lock(&self, lock: i32) -> Result<(), OpfsSAHError> {
+        Reflect::set(&self.obj, &JsValue::from("lockType"), &JsValue::from(lock))
+            .map_err(OpfsSAHError::Reflect)
+            .map(|_| ())
+    }
+}
+
+/// Class for managing OPFS-related state for the OPFS
+/// SharedAccessHandle Pool sqlite3_vfs.
 struct OpfsSAHPool {
     /// Directory handle to the subdir of vfs root which holds
     /// the randomly-named "opaque" files. This subdir exists in the
@@ -222,7 +263,11 @@ impl OpfsSAHPool {
                 break;
             }
             let sah = FileSystemSyncAccessHandle::from(sah);
-            let name = self.map_sah_to_name.get(&sah).as_string().unwrap();
+
+            let name = self.map_sah_to_name.get(&sah);
+            assert!(!name.is_undefined(), "name must exists");
+            let name = name.as_string().unwrap();
+
             sah.close();
             JsFuture::from(self.dh_opaque.remove_entry(&name))
                 .await
@@ -383,10 +428,9 @@ impl OpfsSAHPool {
             let key = array.get(0);
             let value = array.get(1);
             let kind = Reflect::get(&value, &JsValue::from("kind"))
-                .unwrap()
-                .as_string()
-                .unwrap();
-            if kind == "file" {
+                .map_err(OpfsSAHError::Reflect)?
+                .as_string();
+            if kind.as_deref() == Some("file") {
                 files.push((key, FileSystemFileHandle::from(value)));
             }
         }
@@ -457,12 +501,15 @@ impl OpfsSAHPool {
 
     /// Given an (sqlite3_file*), returns the mapped
     /// xOpen file object.
-    fn get_o_file_for_s3_file(&self, p_file: *mut sqlite3_file) -> Result<Object, OpfsSAHError> {
+    fn get_o_file_for_s3_file(
+        &self,
+        p_file: *mut sqlite3_file,
+    ) -> Result<FileObject, OpfsSAHError> {
         let file = self.map_s3_file_to_o_file.get(&JsValue::from(p_file));
         if file.is_undefined() {
             return Err(OpfsSAHError::Custom("open file not exists".into()));
         }
-        Ok(file.into())
+        FileObject::new(file.into())
     }
 
     /// Maps or unmaps (if file is falsy) the given (sqlite3_file*)
@@ -689,20 +736,6 @@ fn read_write_options(at: f64) -> FileSystemReadWriteOptions {
     options
 }
 
-// (path, flags, sah)
-fn get_file_fields(obj: &Object) -> (String, i32, FileSystemSyncAccessHandle) {
-    let path: String = Reflect::get(&obj, &JsValue::from("path"))
-        .unwrap()
-        .as_string()
-        .unwrap();
-    let flags: i32 = Reflect::get(&obj, &JsValue::from("flags"))
-        .unwrap()
-        .as_f64()
-        .unwrap() as i32;
-    let sah: FileSystemSyncAccessHandle = Reflect::get(&obj, &JsValue::from("sah")).unwrap().into();
-    (path, flags, sah)
-}
-
 fn io_methods() -> sqlite3_io_methods {
     unsafe extern "C" fn xCheckReservedLock(
         _arg1: *mut sqlite3_file,
@@ -718,11 +751,9 @@ fn io_methods() -> sqlite3_io_methods {
         let pool = pool();
         let f = || {
             if let Ok(file) = pool.get_o_file_for_s3_file(arg1) {
-                pool.map_s3_file_to_o_file(arg1, None);
-                let (path, flags, sah) = get_file_fields(&file);
-                sah.flush().map_err(OpfsSAHError::Flush)?;
-                if (flags & SQLITE_OPEN_DELETEONCLOSE) != 0 {
-                    pool.delete_path(&path)?;
+                file.sah.flush().map_err(OpfsSAHError::Flush)?;
+                if (file.flags & SQLITE_OPEN_DELETEONCLOSE) != 0 {
+                    pool.delete_path(&file.path)?;
                 }
             }
             Ok::<_, OpfsSAHError>(())
@@ -751,8 +782,7 @@ fn io_methods() -> sqlite3_io_methods {
     ) -> ::std::os::raw::c_int {
         let pool = pool();
         if let Ok(file) = pool.get_o_file_for_s3_file(arg1) {
-            let (_, _, sah) = get_file_fields(&file);
-            let size = sah.get_size().unwrap() as i64 - HEADER_OFFSET_DATA as i64;
+            let size = file.sah.get_size().unwrap() as i64 - HEADER_OFFSET_DATA as i64;
             *pSize = size;
         }
         0
@@ -764,10 +794,9 @@ fn io_methods() -> sqlite3_io_methods {
     ) -> ::std::os::raw::c_int {
         let pool = pool();
         pool.pop_err();
-        if let Ok(file) = pool.get_o_file_for_s3_file(arg1) {
-            // seems unused
-            Reflect::set(&file, &JsValue::from("lockType"), &JsValue::from(arg2)).unwrap();
-        }
+        let _ = pool
+            .get_o_file_for_s3_file(arg1)
+            .and_then(|file| file.set_lock(arg2));
         0
     }
 
@@ -781,10 +810,10 @@ fn io_methods() -> sqlite3_io_methods {
         pool.pop_err();
         let f = || {
             let file = pool.get_o_file_for_s3_file(arg1)?;
-            let (_, _, sah) = get_file_fields(&file);
             let slice = std::slice::from_raw_parts_mut(arg2.cast::<u8>(), iAmt as usize);
 
-            let n_read = sah
+            let n_read = file
+                .sah
                 .read_with_u8_array_and_options(
                     slice,
                     &read_write_options((HEADER_OFFSET_DATA as i64 + iOfst) as f64),
@@ -815,11 +844,10 @@ fn io_methods() -> sqlite3_io_methods {
         let pool = pool();
         pool.pop_err();
 
-        let get_sah = pool
+        if let Err(e) = pool
             .get_o_file_for_s3_file(arg1)
-            .map(|obj| get_file_fields(&obj).2);
-
-        if let Err(e) = get_sah.and_then(|sah| sah.flush().map_err(OpfsSAHError::Flush)) {
+            .and_then(|file| file.sah.flush().map_err(OpfsSAHError::Flush))
+        {
             return pool.store_err(&e, Some(SQLITE_IOERR));
         }
 
@@ -833,12 +861,9 @@ fn io_methods() -> sqlite3_io_methods {
         let pool = pool();
         pool.pop_err();
 
-        let get_sah = pool
-            .get_o_file_for_s3_file(arg1)
-            .map(|obj| get_file_fields(&obj).2);
-
-        if let Err(e) = get_sah.and_then(|sah| {
-            sah.truncate_with_f64((HEADER_OFFSET_DATA as i64 + size) as f64)
+        if let Err(e) = pool.get_o_file_for_s3_file(arg1).and_then(|file| {
+            file.sah
+                .truncate_with_f64((HEADER_OFFSET_DATA as i64 + size) as f64)
                 .map_err(OpfsSAHError::Truncate)
         }) {
             return pool.store_err(&e, Some(SQLITE_IOERR));
@@ -852,10 +877,9 @@ fn io_methods() -> sqlite3_io_methods {
         arg2: ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int {
         let pool = pool();
-        if let Ok(file) = pool.get_o_file_for_s3_file(arg1) {
-            // seems unused
-            Reflect::set(&file, &JsValue::from("lockType"), &JsValue::from(arg2)).unwrap();
-        }
+        let _ = pool
+            .get_o_file_for_s3_file(arg1)
+            .and_then(|file| file.set_lock(arg2));
         0
     }
 
@@ -870,10 +894,10 @@ fn io_methods() -> sqlite3_io_methods {
 
         let f = || {
             let file = pool.get_o_file_for_s3_file(arg1)?;
-            let (_, _, sah) = get_file_fields(&file);
             let slice = std::slice::from_raw_parts(arg2.cast::<u8>(), iAmt as usize);
 
-            let n_write = sah
+            let n_write = file
+                .sah
                 .write_with_u8_array_and_options(
                     slice,
                     &read_write_options((HEADER_OFFSET_DATA as i64 + iOfst) as f64),
