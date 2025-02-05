@@ -1,3 +1,7 @@
+//! opfs-sahpool vfs implementation, ported from sqlite-wasm
+//!
+//! <https://github.com/sqlite/sqlite/blob/master/ext/wasm/api/sqlite3-vfs-opfs-sahpool.c-pp.js>
+
 use crate::export::*;
 
 use crate::fragile::FragileComfirmed;

@@ -16,7 +16,6 @@ mod vfs;
 
 /// These exported APIs are stable and will not have breaking changes.
 pub mod export {
-
     // Some sqlite types copied from libsqlite3-sys
     pub use super::libsqlite3::*;
     pub use super::vfs::sahpool::{
@@ -27,6 +26,8 @@ pub mod export {
     pub struct SQLite;
 
     impl SQLite {
+        /// Register `opfs-sahpool` vfs and return a utility object which can be used
+        /// to perform basic administration of the file pool
         #[deprecated = "use install_opfs_sahpool directly in polyfill feature"]
         pub async fn install_opfs_sahpool(
             &self,
@@ -36,6 +37,7 @@ pub mod export {
         }
     }
 
+    /// Empty implementation
     #[deprecated = "init_sqlite() is not needed in polyfill feature"]
     pub async fn init_sqlite() -> Result<SQLite, ()> {
         Ok(SQLite)

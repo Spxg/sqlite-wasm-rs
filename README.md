@@ -1,8 +1,53 @@
 # SQLite Wasm Rust
 
-Wrap the official [`sqlite-wasm`](https://github.com/sqlite/sqlite-wasm), and expect to provide a usable C-like API.
+Provide sqlite solution for `wasm32-unknown-unknown` target.
 
-## Usage
+## Polyfill Usage
+
+```toml
+[dependencies]
+sqlite-wasm-rs = { version = "0.2", default-features = false, features = ["polyfill"] }
+```
+
+```rust
+use sqlite_wasm_rs::export::*;
+
+async fn open_db() -> anyhow::Result<()> {
+    let mut db = std::ptr::null_mut();
+    // open with memory vfs
+    let ret = unsafe {
+        ffi::sqlite3_open_v2(
+            c"mydb".as_ptr().cast(),
+            &mut db as *mut _,
+            ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
+            std::ptr::null()
+        )
+    };
+    assert_eq!(ffi::SQLITE_OK, ret);
+
+    // install opfs-sahpool persistent vfs and set as default vfs
+    install_opfs_sahpool(None, true).await?;
+
+    // open with opfs-sahpool vfs
+    let mut db = std::ptr::null_mut();
+    let ret = unsafe {
+        ffi::sqlite3_open_v2(
+            c"opfs-sahpool".as_ptr().cast(),
+            &mut db as *mut _,
+            ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
+            std::ptr::null()
+        )
+    };
+    assert_eq!(ffi::SQLITE_OK, ret);
+}
+```
+
+## Wrapper Usage
+
+```toml
+[dependencies]
+sqlite-wasm-rs = { version = "0.2", default-features = false, features = ["wrapper"] }
+```
 
 ```rust
 use sqlite_wasm_rs::export as ffi;
@@ -57,6 +102,39 @@ async fn open_db() -> anyhow::Result<()> {
 }
 ```
 
+## Polyfill VS Wrapper
+
+### Wrapper
+
+Wrap the official [`sqlite-wasm`](https://github.com/sqlite/sqlite-wasm), and expect to provide a usable C-like API.
+
+Advantages
+* There are a variety of official persistent VFS implementations to choose from. (opfs, opfs-sahpool, kvvfs)
+
+Disadvantages
+* Interacting with `sqlite-wam` requires memory copies and additional memory management,
+which can affect performance in some scenarios.
+* New interfaces need to be added manually, it only wraps some commonly used C-API for now, but it is enough.
+
+### Polyfill
+
+Compile sqlite with `-DSQLITE_OS_OTHER`, linking and implement the external functions required by `sqlite` (malloc, realloc, sqlite3_init_os etc..). And because the `wasm32-unknown-unknown` target does not have libc, string functions such as `strcmp` need to be implemented. Finally, some web platform-specific functions need to be implemented, such as time-related functions.
+
+Given that sqlite mainly supports emscripten, linking emscripten to `wasm32-unknown-unknown` is the best approach (otherwise you need to implement some methods of libc yourself). But here is a question, are the ABIs of `wasm32-unknown-unknown` and `wasm32-unknown-emscripten` compatible?
+
+The rustwasm team has done a lot of work and is now compatible with the `-Zwasm-c-abi` compiler flag, see <https://github.com/rustwasm/wasm-bindgen/issues/3454>. But it doesn't mean that there will be problems if you don't use the `-Zwasm-c-abi` flags, see <https://github.com/rustwasm/wasm-bindgen/pull/2209>. At least after testing, it works without `-Zwasm-c-abi`.
+
+Advantages
+* No wrapper for `sqlite-wasm`, providing the highest performance
+* No need for init_sqlite() before use
+
+Disadvantages
+* Requires additional VFS implementation, currently opfs-sahpool has been implemented
+* More time is needed to confirm whether polyfill works properly
+
+## Multithreading
+
+When atomics target_feature is enabled, `sqlite-wasm-rs` support multithreading, see <https://github.com/Spxg/sqlite-wasm-rs/tree/master/examples/multithreading>.
 
 ## Why vendor sqlite-wasm
 
