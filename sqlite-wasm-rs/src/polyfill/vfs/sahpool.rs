@@ -551,10 +551,10 @@ impl OpfsSAHPool {
         Ok(data)
     }
 
-    fn import_db(&self, name: &str, bytes: &[u8]) -> Result<(), OpfsSAHError> {
+    fn import_db(&self, path: &str, bytes: &[u8]) -> Result<(), OpfsSAHError> {
         const HEADER: &str = "SQLite format 3";
 
-        let sah = self.map_filename_to_sah.get(&JsValue::from(name));
+        let sah = self.map_filename_to_sah.get(&JsValue::from(path));
         let sah = if sah.is_undefined() {
             self.next_available_sah()
                 .ok_or_else(|| OpfsSAHError::Custom("No available handles to import to.".into()))?
@@ -589,7 +589,7 @@ impl OpfsSAHPool {
             &read_write_options((HEADER_OFFSET_DATA + 18) as f64),
         )
         .map_err(OpfsSAHError::Write)?;
-        self.set_associated_path(&sah, name, SQLITE_OPEN_MAIN_DB)?;
+        self.set_associated_path(&sah, path, SQLITE_OPEN_MAIN_DB)?;
 
         Ok(())
     }
@@ -653,8 +653,13 @@ impl OpfsSAHPoolUtil {
 
     /// Imports the contents of an SQLite database, provided as a byte array or ArrayBuffer,
     /// under the given name, overwriting any existing content.
-    pub fn import_db(&self, name: &str, bytes: &[u8]) -> Result<(), OpfsSAHError> {
-        self.pool.import_db(name, bytes)
+    ///
+    /// path must start with '/'
+    pub fn import_db(&self, path: &str, bytes: &[u8]) -> Result<(), OpfsSAHError> {
+        if !path.starts_with('/') {
+            return Err(OpfsSAHError::Custom("path must start with '/'".into()));
+        }
+        self.pool.import_db(path, bytes)
     }
 
     /// Clears all client-defined state of all SAHs and makes all of them available
