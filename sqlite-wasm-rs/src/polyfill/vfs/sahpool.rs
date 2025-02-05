@@ -4,11 +4,7 @@ use crate::fragile::FragileComfirmed;
 use js_sys::{
     Array, DataView, IteratorNext, Map, Math, Number, Object, Reflect, Set, Uint32Array, Uint8Array,
 };
-use std::{
-    ffi::{CStr, CString},
-    sync::Mutex,
-    usize,
-};
+use std::{ffi::CStr, sync::Mutex, usize};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
@@ -118,6 +114,8 @@ struct OpfsSAHPool {
     /// Maps (sqlite3_file*) to xOpen's file objects
     map_s3_file_to_o_file: Map,
     /// Store last_error
+    ///
+    /// Never poison, unwrap `lock()` is fine
     last_error: Mutex<Option<(i32, String)>>,
 }
 
@@ -416,7 +414,7 @@ impl OpfsSAHPool {
         };
 
         if let Err(e) = fut.await {
-            self.store_err(Some(&e), None);
+            self.store_err(&e, None);
             self.release_access_handles();
             return Err(e);
         }
@@ -448,10 +446,7 @@ impl OpfsSAHPool {
     /// falsy (or no) value to clear it. If code is truthy it is
     /// assumed to be an SQLITE_xxx result code, defaulting to
     /// SQLITE_IOERR if code is falsy.
-    fn store_err(&self, err: Option<&OpfsSAHError>, code: Option<i32>) -> i32 {
-        if err.is_none() {
-            self.last_error.lock().unwrap().take();
-        }
+    fn store_err(&self, err: &OpfsSAHError, code: Option<i32>) -> i32 {
         let code = code.unwrap_or(SQLITE_IOERR);
         self.last_error
             .lock()
@@ -714,7 +709,7 @@ fn io_methods() -> sqlite3_io_methods {
         pResOut: *mut ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int {
         let pool = pool();
-        pool.store_err(None, None);
+        pool.pop_err();
         *pResOut = 1;
         0
     }
@@ -733,7 +728,7 @@ fn io_methods() -> sqlite3_io_methods {
             Ok::<_, OpfsSAHError>(())
         };
         if let Err(e) = f() {
-            return pool.store_err(Some(&e), Some(SQLITE_IOERR));
+            return pool.store_err(&e, Some(SQLITE_IOERR));
         }
         0
     }
@@ -768,7 +763,7 @@ fn io_methods() -> sqlite3_io_methods {
         arg2: ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int {
         let pool = pool();
-        pool.store_err(None, None);
+        pool.pop_err();
         if let Ok(file) = pool.get_o_file_for_s3_file(arg1) {
             // seems unused
             Reflect::set(&file, &JsValue::from("lockType"), &JsValue::from(arg2)).unwrap();
@@ -783,7 +778,7 @@ fn io_methods() -> sqlite3_io_methods {
         iOfst: sqlite3_int64,
     ) -> ::std::os::raw::c_int {
         let pool = pool();
-        pool.store_err(None, None);
+        pool.pop_err();
         let f = || {
             let file = pool.get_o_file_for_s3_file(arg1)?;
             let (_, _, sah) = get_file_fields(&file);
@@ -805,7 +800,7 @@ fn io_methods() -> sqlite3_io_methods {
         };
         match f() {
             Ok(ret) => ret,
-            Err(e) => pool.store_err(Some(&e), Some(SQLITE_IOERR)),
+            Err(e) => pool.store_err(&e, Some(SQLITE_IOERR)),
         }
     }
 
@@ -818,14 +813,14 @@ fn io_methods() -> sqlite3_io_methods {
         _flags: ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int {
         let pool = pool();
-        pool.store_err(None, None);
+        pool.pop_err();
 
         let get_sah = pool
             .get_o_file_for_s3_file(arg1)
             .map(|obj| get_file_fields(&obj).2);
 
         if let Err(e) = get_sah.and_then(|sah| sah.flush().map_err(OpfsSAHError::Flush)) {
-            return pool.store_err(Some(&e), Some(SQLITE_IOERR));
+            return pool.store_err(&e, Some(SQLITE_IOERR));
         }
 
         0
@@ -836,7 +831,7 @@ fn io_methods() -> sqlite3_io_methods {
         size: sqlite3_int64,
     ) -> ::std::os::raw::c_int {
         let pool = pool();
-        pool.store_err(None, None);
+        pool.pop_err();
 
         let get_sah = pool
             .get_o_file_for_s3_file(arg1)
@@ -846,7 +841,7 @@ fn io_methods() -> sqlite3_io_methods {
             sah.truncate_with_f64((HEADER_OFFSET_DATA as i64 + size) as f64)
                 .map_err(OpfsSAHError::Truncate)
         }) {
-            return pool.store_err(Some(&e), Some(SQLITE_IOERR));
+            return pool.store_err(&e, Some(SQLITE_IOERR));
         }
 
         0
@@ -871,7 +866,7 @@ fn io_methods() -> sqlite3_io_methods {
         iOfst: sqlite3_int64,
     ) -> ::std::os::raw::c_int {
         let pool = pool();
-        pool.store_err(None, None);
+        pool.pop_err();
 
         let f = || {
             let file = pool.get_o_file_for_s3_file(arg1)?;
@@ -895,7 +890,7 @@ fn io_methods() -> sqlite3_io_methods {
         };
         match f() {
             Ok(ret) => ret,
-            Err(e) => pool.store_err(Some(&e), Some(SQLITE_IOERR)),
+            Err(e) => pool.store_err(&e, Some(SQLITE_IOERR)),
         }
     }
 
@@ -930,7 +925,7 @@ fn vfs() -> sqlite3_vfs {
         pResOut: *mut ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int {
         let pool = pool();
-        pool.store_err(None, None);
+        pool.pop_err();
         *pResOut = match pool.get_path(zName) {
             Ok(s) => i32::from(pool.has_filename(&s)),
             Err(_) => 0,
@@ -944,10 +939,10 @@ fn vfs() -> sqlite3_vfs {
         _syncDir: ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int {
         let pool = pool();
-        pool.store_err(None, None);
+        pool.pop_err();
 
         if let Err(e) = pool.get_path(zName).map(|name| pool.delete_path(&name)) {
-            return pool.store_err(Some(&e), Some(SQLITE_IOERR_DELETE));
+            return pool.store_err(&e, Some(SQLITE_IOERR_DELETE));
         }
         0
     }
@@ -969,8 +964,8 @@ fn vfs() -> sqlite3_vfs {
     ) -> ::std::os::raw::c_int {
         let pool = pool();
         if let Some((_, msg)) = pool.pop_err() {
-            let cstr = CString::new(msg).unwrap();
-            cstr.as_ptr().copy_to(arg3, arg2 as usize);
+            msg.as_ptr()
+                .copy_to(arg3.cast(), msg.len().min(arg2 as usize));
             std::ptr::write(arg3.add(arg2 as usize - 1), 0);
         }
         0
@@ -1021,7 +1016,7 @@ fn vfs() -> sqlite3_vfs {
         };
         match f() {
             Ok(ret) => ret,
-            Err(e) => pool.store_err(Some(&e), Some(SQLITE_CANTOPEN)),
+            Err(e) => pool.store_err(&e, Some(SQLITE_CANTOPEN)),
         }
     }
 
