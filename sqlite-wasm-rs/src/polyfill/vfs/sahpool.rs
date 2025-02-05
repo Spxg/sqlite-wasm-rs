@@ -463,10 +463,9 @@ impl OpfsSAHPool {
 
     /// Given an (sqlite3_file*), returns the mapped
     /// xOpen file object.
-    fn get_o_file_for_s3_file(&self, p_file: *mut sqlite3_file) -> Object {
-        self.map_s3_file_to_o_file
-            .get(&JsValue::from(p_file))
-            .into()
+    fn get_o_file_for_s3_file(&self, p_file: *mut sqlite3_file) -> Option<Object> {
+        let file = self.map_s3_file_to_o_file.get(&JsValue::from(p_file));
+        (!file.is_undefined()).then(|| file.into())
     }
 
     /// Maps or unmaps (if file is falsy) the given (sqlite3_file*)
@@ -707,9 +706,8 @@ fn io_methods() -> sqlite3_io_methods {
 
     unsafe extern "C" fn xClose(arg1: *mut sqlite3_file) -> ::std::os::raw::c_int {
         let pool = pool();
-        let file = pool.get_o_file_for_s3_file(arg1);
         let f = || {
-            if !file.is_undefined() {
+            if let Some(file) = pool.get_o_file_for_s3_file(arg1) {
                 pool.map_s3_file_to_o_file(arg1, None);
                 let (path, flags, sah) = get_file_fields(&file);
                 sah.flush().map_err(OpfsSAHError::Flush)?;
@@ -742,9 +740,11 @@ fn io_methods() -> sqlite3_io_methods {
         pSize: *mut sqlite3_int64,
     ) -> ::std::os::raw::c_int {
         let pool = pool();
-        let (_, _, sah) = get_file_fields(&pool.get_o_file_for_s3_file(arg1));
-        let size = sah.get_size().unwrap() as i64 - HEADER_OFFSET_DATA as i64;
-        *pSize = size;
+        if let Some(file) = pool.get_o_file_for_s3_file(arg1) {
+            let (_, _, sah) = get_file_fields(&file);
+            let size = sah.get_size().unwrap() as i64 - HEADER_OFFSET_DATA as i64;
+            *pSize = size;
+        }
         0
     }
 
@@ -754,9 +754,10 @@ fn io_methods() -> sqlite3_io_methods {
     ) -> ::std::os::raw::c_int {
         let pool = pool();
         pool.store_err(None, None);
-        let file = pool.get_o_file_for_s3_file(arg1);
-        // seems unused
-        Reflect::set(&file, &JsValue::from("lockType"), &JsValue::from(arg2)).unwrap();
+        if let Some(file) = pool.get_o_file_for_s3_file(arg1) {
+            // seems unused
+            Reflect::set(&file, &JsValue::from("lockType"), &JsValue::from(arg2)).unwrap();
+        }
         0
     }
 
@@ -768,11 +769,13 @@ fn io_methods() -> sqlite3_io_methods {
     ) -> ::std::os::raw::c_int {
         let pool = pool();
         pool.store_err(None, None);
-        let file = pool.get_o_file_for_s3_file(arg1);
-        let (_, _, sah) = get_file_fields(&file);
-        let slice = std::slice::from_raw_parts_mut(arg2.cast::<u8>(), iAmt as usize);
+        let f = || {
+            let file = pool
+                .get_o_file_for_s3_file(arg1)
+                .ok_or_else(|| OpfsSAHError::Custom("open file not exists".into()))?;
+            let (_, _, sah) = get_file_fields(&file);
+            let slice = std::slice::from_raw_parts_mut(arg2.cast::<u8>(), iAmt as usize);
 
-        let mut f = || {
             let n_read = sah
                 .read_with_u8_array_and_options(
                     slice,
@@ -780,16 +783,15 @@ fn io_methods() -> sqlite3_io_methods {
                 )
                 .map_err(OpfsSAHError::Read)?;
 
-            Ok::<u32, OpfsSAHError>(n_read as u32)
+            if (n_read as i32) < iAmt {
+                slice[n_read as usize..iAmt as usize].fill(0);
+                return Ok(SQLITE_IOERR_SHORT_READ);
+            }
+
+            Ok::<i32, OpfsSAHError>(0)
         };
         match f() {
-            Ok(n_read) => {
-                if (n_read as i32) < iAmt {
-                    slice[n_read as usize..iAmt as usize].fill(0);
-                    return SQLITE_IOERR_SHORT_READ;
-                }
-                0
-            }
+            Ok(ret) => ret,
             Err(e) => pool.store_err(Some(&e), Some(SQLITE_IOERR)),
         }
     }
@@ -804,10 +806,16 @@ fn io_methods() -> sqlite3_io_methods {
     ) -> ::std::os::raw::c_int {
         let pool = pool();
         pool.store_err(None, None);
-        let (_, _, sah) = get_file_fields(&pool.get_o_file_for_s3_file(arg1));
-        if let Err(e) = sah.flush().map_err(OpfsSAHError::Flush) {
+
+        let get_sah = pool
+            .get_o_file_for_s3_file(arg1)
+            .ok_or_else(|| OpfsSAHError::Custom("open file not exists".into()))
+            .map(|obj| get_file_fields(&obj).2);
+
+        if let Err(e) = get_sah.and_then(|sah| sah.flush().map_err(OpfsSAHError::Flush)) {
             return pool.store_err(Some(&e), Some(SQLITE_IOERR));
         }
+
         0
     }
 
@@ -817,13 +825,19 @@ fn io_methods() -> sqlite3_io_methods {
     ) -> ::std::os::raw::c_int {
         let pool = pool();
         pool.store_err(None, None);
-        let (_, _, sah) = get_file_fields(&pool.get_o_file_for_s3_file(arg1));
-        if let Err(e) = sah
-            .truncate_with_f64((HEADER_OFFSET_DATA as i64 + size) as f64)
-            .map_err(OpfsSAHError::Truncate)
-        {
+
+        let get_sah = pool
+            .get_o_file_for_s3_file(arg1)
+            .ok_or_else(|| OpfsSAHError::Custom("open file not exists".into()))
+            .map(|obj| get_file_fields(&obj).2);
+
+        if let Err(e) = get_sah.and_then(|sah| {
+            sah.truncate_with_f64((HEADER_OFFSET_DATA as i64 + size) as f64)
+                .map_err(OpfsSAHError::Truncate)
+        }) {
             return pool.store_err(Some(&e), Some(SQLITE_IOERR));
         }
+
         0
     }
 
@@ -832,9 +846,10 @@ fn io_methods() -> sqlite3_io_methods {
         arg2: ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int {
         let pool = pool();
-        let file = pool.get_o_file_for_s3_file(arg1);
-        // seems unused
-        Reflect::set(&file, &JsValue::from("lockType"), &JsValue::from(arg2)).unwrap();
+        if let Some(file) = pool.get_o_file_for_s3_file(arg1) {
+            // seems unused
+            Reflect::set(&file, &JsValue::from("lockType"), &JsValue::from(arg2)).unwrap();
+        }
         0
     }
 
@@ -847,11 +862,13 @@ fn io_methods() -> sqlite3_io_methods {
         let pool = pool();
         pool.store_err(None, None);
 
-        let file = pool.get_o_file_for_s3_file(arg1);
-        let (_, _, sah) = get_file_fields(&file);
-        let slice = std::slice::from_raw_parts(arg2.cast::<u8>(), iAmt as usize);
-
         let f = || {
+            let file = pool
+                .get_o_file_for_s3_file(arg1)
+                .ok_or_else(|| OpfsSAHError::Custom("open file not exists".into()))?;
+            let (_, _, sah) = get_file_fields(&file);
+            let slice = std::slice::from_raw_parts(arg2.cast::<u8>(), iAmt as usize);
+
             let n_write = sah
                 .write_with_u8_array_and_options(
                     slice,
@@ -859,16 +876,16 @@ fn io_methods() -> sqlite3_io_methods {
                 )
                 .map_err(OpfsSAHError::Read)?;
 
-            Ok::<u32, OpfsSAHError>(n_write as u32)
+            let ret = if iAmt == n_write as i32 {
+                0
+            } else {
+                SQLITE_ERROR
+            };
+
+            Ok::<i32, OpfsSAHError>(ret)
         };
         match f() {
-            Ok(n_write) => {
-                if iAmt == n_write as i32 {
-                    0
-                } else {
-                    SQLITE_ERROR
-                }
-            }
+            Ok(ret) => ret,
             Err(e) => pool.store_err(Some(&e), Some(SQLITE_IOERR)),
         }
     }
@@ -979,21 +996,24 @@ fn vfs() -> sqlite3_vfs {
         let name = CStr::from_ptr(zName).to_str().unwrap();
         let f = || {
             let name = pool.get_path(&name)?;
-            let mut sah = pool.get_sah_for_path(&name);
-            if sah.is_none() && (flags & SQLITE_OPEN_CREATE) != 0 {
-                if pool.get_file_count() >= pool.get_capacity() {
-                    return Ok(SQLITE_ERROR);
+            let sah = match pool.get_sah_for_path(&name) {
+                Some(sah) => sah,
+                None => {
+                    if flags & SQLITE_OPEN_CREATE == 0 {
+                        return Ok(SQLITE_ERROR);
+                    }
+                    if let Some(sah) = pool.next_available_sah() {
+                        pool.set_associated_path(&sah, &name, flags)?;
+                        sah
+                    } else {
+                        return Ok(SQLITE_ERROR);
+                    }
                 }
-                sah = pool.next_available_sah();
-                pool.set_associated_path(sah.as_ref().unwrap(), &name, flags)?;
-            }
-            if sah.is_none() {
-                return Ok(SQLITE_ERROR);
-            }
+            };
             let file = Object::new();
             Reflect::set(&file, &JsValue::from("path"), &JsValue::from(name)).unwrap();
             Reflect::set(&file, &JsValue::from("flags"), &JsValue::from(flags)).unwrap();
-            Reflect::set(&file, &JsValue::from("sah"), &JsValue::from(sah.unwrap())).unwrap();
+            Reflect::set(&file, &JsValue::from("sah"), &JsValue::from(sah)).unwrap();
             Reflect::set(
                 &file,
                 &JsValue::from("lockType"),
