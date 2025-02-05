@@ -14,12 +14,13 @@ keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "javascript"]
 fragile = "2.0.0"
 js-sys = "0.3.76"
 once_cell = "1.20.2"
-serde = { version = "1.0.216", features = ["derive"] }
-serde-wasm-bindgen = "0.6.5"
 tokio = { version = "1.42.0", features = ["sync"] }
 wasm-bindgen = "0.2.99"
 wasm-bindgen-futures = "0.4.49"
-web-sys = { version = "0.3.77", features = [
+
+serde = { version = "1.0.216", features = ["derive"], optional = true }
+serde-wasm-bindgen = { version = "0.6.5", optional = true }
+web-sys = { version = "0.3.77", optional = true, features = [
   "Performance",
   "Window",
   "Navigator",
@@ -36,13 +37,12 @@ web-sys = { version = "0.3.77", features = [
   "FileSystemFileHandle",
   "Url",
 ]}
-thiserror = "2.0.11"
-wasm-bindgen-test = "0.3.49"
+thiserror = { version = "2.0.11", optional = true }
 
 [features]
 default = ["polyfill"]
-wrapper = []
-polyfill = []
+wrapper = ["serde", "serde-wasm-bindgen"]
+polyfill = ["web-sys", "thiserror"]
 
 [target.'cfg(target_feature = "atomics")'.dependencies]
 sqlite-wasm-macro = { path = "../sqlite-wasm-macro", version = "0.1.1" }
