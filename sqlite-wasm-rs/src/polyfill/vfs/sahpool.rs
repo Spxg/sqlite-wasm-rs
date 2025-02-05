@@ -808,6 +808,9 @@ unsafe extern "C" fn xClose(arg1: *mut sqlite3_file) -> ::std::os::raw::c_int {
     if let Err(e) = f() {
         return pool.store_err(&e, Some(SQLITE_IOERR));
     }
+
+    // free io_methods
+    drop(Box::from_raw((*arg1).pMethods.cast_mut()));
     0
 }
 
@@ -1066,8 +1069,7 @@ unsafe extern "C" fn xOpen(
         .unwrap();
         pool.map_s3_file_to_o_file(arg2, Some(file));
 
-        let io_method = Box::leak(Box::new(io_methods()));
-        (*arg2).pMethods = io_method;
+        (*arg2).pMethods = Box::leak(Box::new(io_methods()));
         *pOutFlags = flags;
 
         Ok::<i32, OpfsSAHError>(0)
