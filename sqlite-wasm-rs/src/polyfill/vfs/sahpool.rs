@@ -2,8 +2,7 @@ use crate::export::*;
 
 use crate::fragile::FragileComfirmed;
 use js_sys::{
-    Array, DataView, Date, IteratorNext, Map, Math, Number, Object, Reflect, Set, Uint32Array,
-    Uint8Array,
+    Array, DataView, IteratorNext, Map, Math, Number, Object, Reflect, Set, Uint32Array, Uint8Array,
 };
 use std::{
     ffi::{CStr, CString},
@@ -932,22 +931,6 @@ fn vfs() -> sqlite3_vfs {
         0
     }
 
-    unsafe extern "C" fn xCurrentTime(
-        _arg1: *mut sqlite3_vfs,
-        arg2: *mut f64,
-    ) -> ::std::os::raw::c_int {
-        *arg2 = 2440587.5 + (Date::new_0().get_time() / 86400000.0);
-        0
-    }
-
-    unsafe extern "C" fn xCurrentTimeInt64(
-        _arg1: *mut sqlite3_vfs,
-        arg2: *mut sqlite3_int64,
-    ) -> ::std::os::raw::c_int {
-        *arg2 = ((2440587.5 * 86400000.0) + Date::new_0().get_time()) as sqlite3_int64;
-        0
-    }
-
     unsafe extern "C" fn xDelete(
         _arg1: *mut sqlite3_vfs,
         zName: *const ::std::os::raw::c_char,
@@ -1036,23 +1019,11 @@ fn vfs() -> sqlite3_vfs {
         }
     }
 
-    unsafe extern "C" fn xSleep(
-        _arg1: *mut sqlite3_vfs,
-        _microseconds: ::std::os::raw::c_int,
-    ) -> ::std::os::raw::c_int {
-        0
-    }
-
-    unsafe extern "C" fn xRandomness(
-        _arg1: *mut sqlite3_vfs,
-        nByte: ::std::os::raw::c_int,
-        zOut: *mut ::std::os::raw::c_char,
-    ) -> ::std::os::raw::c_int {
-        for i in 0..nByte {
-            *zOut.offset(i as isize) = ((Math::random() * 255000.0) as u8 & 0xFF) as _;
-        }
-        nByte
-    }
+    let default_vfs = unsafe { sqlite3_vfs_find(std::ptr::null()) };
+    let xRandomness = unsafe { (*default_vfs).xRandomness };
+    let xSleep = unsafe { (*default_vfs).xSleep };
+    let xCurrentTime = unsafe { (*default_vfs).xCurrentTime };
+    let xCurrentTimeInt64 = unsafe { (*default_vfs).xCurrentTimeInt64 };
 
     sqlite3_vfs {
         iVersion: 1,
@@ -1069,11 +1040,11 @@ fn vfs() -> sqlite3_vfs {
         xDlError: None,
         xDlSym: None,
         xDlClose: None,
-        xRandomness: Some(xRandomness),
-        xSleep: Some(xSleep),
-        xCurrentTime: Some(xCurrentTime),
+        xRandomness,
+        xSleep,
+        xCurrentTime,
         xGetLastError: Some(xGetLastError),
-        xCurrentTimeInt64: Some(xCurrentTimeInt64),
+        xCurrentTimeInt64,
         xSetSystemCall: None,
         xGetSystemCall: None,
         xNextSystemCall: None,
