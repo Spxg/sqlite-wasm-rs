@@ -1063,19 +1063,19 @@ fn vfs() -> sqlite3_vfs {
 pub async fn install_opfs_sahpool(
     options: Option<&OpfsSAHPoolCfg>,
 ) -> Result<OpfsSAHPoolUtil, OpfsSAHError> {
-    let ret = unsafe { sqlite3_vfs_register(Box::leak(Box::new(vfs())), 1) };
-    if ret != SQLITE_OK {
-        return Err(OpfsSAHError::Custom(
-            "register opfs-sahpool vfs failed".into(),
-        ));
-    }
-
     let pool = POOL
         .get_or_try_init(|| async {
             let pool = OpfsSAHPool::new(options).await?;
             Ok(FragileComfirmed::new(pool))
         })
         .await?;
+
+    let ret = unsafe { sqlite3_vfs_register(Box::leak(Box::new(vfs())), 1) };
+    if ret != SQLITE_OK {
+        return Err(OpfsSAHError::Custom(
+            "register opfs-sahpool vfs failed".into(),
+        ));
+    }
 
     let util = OpfsSAHPoolUtil { pool };
 
