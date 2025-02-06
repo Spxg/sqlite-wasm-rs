@@ -120,7 +120,7 @@ which can affect performance in some scenarios.
 
 Compile sqlite with `-DSQLITE_OS_OTHER`, linking and implement the external functions required by `sqlite` (malloc, realloc, sqlite3_init_os etc..). And because the `wasm32-unknown-unknown` target does not have libc, string functions such as `strcmp` need to be implemented. Finally, some web platform-specific functions need to be implemented, such as time-related functions.
 
-Given that sqlite mainly supports emscripten, linking emscripten to `wasm32-unknown-unknown` is the best approach (otherwise you need to implement some methods of libc yourself). But here is a question, are the ABIs of `wasm32-unknown-unknown` and `wasm32-unknown-emscripten` compatible?
+Given that sqlite mainly supports emscripten, linking emscripten to `wasm32-unknown-unknown` is the best approach (otherwise you need to implement some methods of libc yourself). But here is a question, is wasm32-unknown-unknown now C-ABI compatible?
 
 The rustwasm team has done a lot of work and is now compatible with the `-Zwasm-c-abi` compiler flag, see <https://github.com/rustwasm/wasm-bindgen/issues/3454>. But it doesn't mean that there will be problems if you don't use the `-Zwasm-c-abi` flags, see <https://github.com/rustwasm/wasm-bindgen/pull/2209>. At least after testing, it works without `-Zwasm-c-abi`.
 
@@ -134,7 +134,7 @@ Disadvantages
 
 ## Multithreading
 
-When atomics target_feature is enabled, `sqlite-wasm-rs` support multithreading, see <https://github.com/Spxg/sqlite-wasm-rs/tree/master/examples/multithreading>.
+When `target-feature=+atomics` is enabled, `sqlite-wasm-rs` support multithreading, see [`multithread example`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/examples/multithreading).
 
 ## Why vendor sqlite-wasm
 
