@@ -112,8 +112,7 @@ Advantages
 * There are a variety of official persistent VFS implementations to choose from. (opfs, opfs-sahpool, kvvfs)
 
 Disadvantages
-* Interacting with `sqlite-wam` requires memory copies and additional memory management,
-which can affect performance in some scenarios.
+* Interacting with `sqlite-wam` requires memory copies and additional memory management, which can affect performance in some scenarios.
 * New interfaces need to be added manually, it only wraps some commonly used C-API for now, but it is enough.
 
 ### Polyfill
