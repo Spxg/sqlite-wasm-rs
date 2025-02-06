@@ -13,11 +13,11 @@ sqlite-wasm-rs = { version = "0.2", default-features = false, features = ["polyf
 use sqlite_wasm_rs::export::*;
 
 async fn open_db() -> anyhow::Result<()> {
-    let mut db = std::ptr::null_mut();
     // open with memory vfs
+    let mut db = std::ptr::null_mut();
     let ret = unsafe {
         ffi::sqlite3_open_v2(
-            c"mydb".as_ptr().cast(),
+            c"mem.db".as_ptr().cast(),
             &mut db as *mut _,
             ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
             std::ptr::null()
@@ -32,7 +32,7 @@ async fn open_db() -> anyhow::Result<()> {
     let mut db = std::ptr::null_mut();
     let ret = unsafe {
         ffi::sqlite3_open_v2(
-            c"opfs-sahpool".as_ptr().cast(),
+            c"opfs-sahpool.db".as_ptr().cast(),
             &mut db as *mut _,
             ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
             std::ptr::null()
@@ -60,22 +60,14 @@ async fn open_db() -> anyhow::Result<()> {
     // the life of the program.
     let sqlite = ffi::init_sqlite().await?;
 
+    // open with memory vfs
     let mut db = std::ptr::null_mut();
-    let filename = CString::new("mydb").unwrap();
-    // Persistent Storage is supported, use opfs vfs.
-    // This support is only available when sqlite is loaded from a
-    // Worker thread, whether it's loaded in its own dedicated worker
-    // or in a worker together with client code.
-    //
-    // See <https://sqlite.org/wasm/doc/trunk/persistence.md#opfs>
-    let vfs = CString::new("opfs").unwrap();
     let ret = unsafe {
         ffi::sqlite3_open_v2(
-            filename.as_ptr(),
+            c"mem.db".as_ptr().cast(),
             &mut db as *mut _,
             ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
-            // Using std::ptr::null() is a memory DB
-            vfs.as_ptr(),
+            std::ptr::null()
         )
     };
     assert_eq!(ffi::SQLITE_OK, ret);
@@ -85,15 +77,32 @@ async fn open_db() -> anyhow::Result<()> {
     // See <https://sqlite.org/wasm/doc/trunk/persistence.md#vfs-opfs-sahpool>
     sqlite.install_opfs_sahpool(None).await?;
 
+    // open with opfs-sahpool vfs
     let mut db = std::ptr::null_mut();
-    let filename = CString::new("mydb").unwrap();
-    let vfs = CString::new("opfs-sahpool").unwrap();
     let ret = unsafe {
         ffi::sqlite3_open_v2(
-            filename.as_ptr(),
+            c"file:opfs-sahpool.db?vfs=opfs-sahpool".as_ptr().cast(),
             &mut db as *mut _,
             ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
-            vfs.as_ptr(),
+            std::ptr::null()
+        )
+    };
+    assert_eq!(ffi::SQLITE_OK, ret);
+
+    // Persistent Storage is supported, use opfs vfs.
+    // This support is only available when sqlite is loaded from a
+    // Worker thread, whether it's loaded in its own dedicated worker
+    // or in a worker together with client code.
+    //
+    // See <https://sqlite.org/wasm/doc/trunk/persistence.md#opfs>
+    let mut db = std::ptr::null_mut();
+    let ret = unsafe {
+        ffi::sqlite3_open_v2(
+            // equal to "file:opfs.db?vfs=opfs"
+            c"opfs.db".as_ptr().cast(),
+            &mut db as *mut _,
+            ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
+            c"opfs".as_ptr().cast()
         )
     };
     assert_eq!(ffi::SQLITE_OK, ret);
