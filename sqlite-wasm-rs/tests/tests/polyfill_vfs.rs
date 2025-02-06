@@ -12,7 +12,7 @@ fn test_memory_vfs() {
             c"mem.db".as_ptr().cast(),
             &mut db1 as *mut _,
             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-            std::ptr::null_mut(),
+            c"memvfs".as_ptr().cast(),
         )
     };
     assert_eq!(SQLITE_OK, ret);
@@ -24,7 +24,7 @@ fn test_memory_vfs() {
             c"mem.db".as_ptr().cast(),
             &mut db2 as *mut _,
             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-            std::ptr::null_mut(),
+            c"memvfs".as_ptr().cast(),
         )
     };
     assert_eq!(SQLITE_OK, ret);
