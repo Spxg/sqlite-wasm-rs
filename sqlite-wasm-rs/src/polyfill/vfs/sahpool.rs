@@ -5,7 +5,7 @@
 use crate::export::*;
 
 use crate::fragile::FragileComfirmed;
-use crate::lock_api::Mutex;
+use crate::locker::Mutex;
 use js_sys::{
     Array, DataView, IteratorNext, Map, Math, Number, Object, Reflect, Set, Uint32Array, Uint8Array,
 };

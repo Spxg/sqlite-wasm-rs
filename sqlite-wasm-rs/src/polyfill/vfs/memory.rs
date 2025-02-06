@@ -6,7 +6,7 @@ use js_sys::{Date, Math};
 use once_cell::sync::Lazy;
 
 use crate::export::*;
-use crate::lock_api::{Mutex, MutexGuard, RwLock};
+use crate::locker::{Mutex, MutexGuard, RwLock};
 
 /// thread::sleep is available when atomics are enabled
 #[cfg(target_feature = "atomics")]
