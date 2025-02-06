@@ -1,23 +1,25 @@
 [package]
 name = "sqlite-wasm-rs"
-version = "0.1.5"
+version = "0.2.0"
 edition = "2021"
 authors = ["Spxg <unsafe@outlook.es>"]
 readme = "README.md"
 license = "MIT"
 repository = "https://github.com/Spxg/sqlite-wasm-rs"
-description = "Wrap sqlite-wasm, and expect to provide a usable C-like API."
+description = "Provide sqlite solution for wasm32-unknown-unknown target."
 categories = ["development-tools::ffi", "wasm", "database"]
 keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "javascript"]
 
 [dependencies]
 fragile = "2.0.0"
-js-sys = "0.3.76"
 once_cell = "1.20.2"
 tokio = { version = "1.42.0", features = ["sync"] }
+
+js-sys = "0.3.76"
 wasm-bindgen = "0.2.99"
 wasm-bindgen-futures = "0.4.49"
 
+thiserror = { version = "2.0.11", optional = true }
 serde = { version = "1.0.216", features = ["derive"], optional = true }
 serde-wasm-bindgen = { version = "0.6.5", optional = true }
 web-sys = { version = "0.3.77", optional = true, features = [
@@ -37,7 +39,6 @@ web-sys = { version = "0.3.77", optional = true, features = [
   "FileSystemFileHandle",
   "Url",
 ]}
-thiserror = { version = "2.0.11", optional = true }
 
 [features]
 default = ["polyfill"]
