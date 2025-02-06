@@ -1,6 +1,6 @@
 //! This module provides some C-Like interfaces from sqlite-wasm.
 
-use crate::lock_api::{Mutex, MutexGuard};
+use crate::locker::{Mutex, MutexGuard};
 use crate::wrapper::libsqlite3::*;
 use crate::wrapper::SQLite;
 use once_cell::sync::Lazy;
