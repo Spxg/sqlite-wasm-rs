@@ -5,6 +5,34 @@ use wasm_bindgen_test::wasm_bindgen_test;
 
 #[wasm_bindgen_test]
 #[allow(unused)]
+fn test_memory_vfs() {
+    let mut db1 = std::ptr::null_mut();
+    let ret = unsafe {
+        sqlite3_open_v2(
+            c"mem.db".as_ptr().cast(),
+            &mut db1 as *mut _,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(SQLITE_OK, ret);
+    test_vfs(db1);
+
+    let mut db2 = std::ptr::null_mut();
+    let ret = unsafe {
+        sqlite3_open_v2(
+            c"mem.db".as_ptr().cast(),
+            &mut db2 as *mut _,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(SQLITE_OK, ret);
+    test_vfs(db2);
+}
+
+#[wasm_bindgen_test]
+#[allow(unused)]
 async fn test_opfs_sah_vfs_default() {
     install_opfs_sahpool(None, true).await.unwrap();
 

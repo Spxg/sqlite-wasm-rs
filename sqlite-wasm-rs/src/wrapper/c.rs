@@ -1,10 +1,10 @@
 //! This module provides some C-Like interfaces from sqlite-wasm.
 
+use crate::lock_api::{Mutex, MutexGuard};
 use crate::wrapper::libsqlite3::*;
 use crate::wrapper::SQLite;
 use once_cell::sync::Lazy;
 use std::mem::{size_of, ManuallyDrop};
-use std::sync::{Mutex, MutexGuard};
 use std::{
     collections::HashMap,
     ffi::{CStr, CString},
@@ -175,7 +175,7 @@ unsafe impl Send for Ptr {}
 fn allocated() -> MutexGuard<'static, HashMap<Ptr, AllocatedT>> {
     static ALLOCATED: Lazy<Mutex<HashMap<Ptr, AllocatedT>>> =
         Lazy::new(|| Mutex::new(HashMap::new()));
-    ALLOCATED.lock().expect("acquire allocated lock failed")
+    ALLOCATED.lock()
 }
 
 #[derive(Hash, PartialEq, Eq)]
@@ -195,9 +195,7 @@ impl StmtKey {
 fn stmt_with_key_allocated() -> MutexGuard<'static, HashMap<Ptr, HashMap<StmtKey, AllocatedT>>> {
     static STMT_COL_ALLOCATED: Lazy<Mutex<HashMap<Ptr, HashMap<StmtKey, AllocatedT>>>> =
         Lazy::new(|| Mutex::new(HashMap::new()));
-    STMT_COL_ALLOCATED
-        .lock()
-        .expect("acquire stmt with key allocated lock failed")
+    STMT_COL_ALLOCATED.lock()
 }
 
 /// Maintain a list of `aggregate_context` allocated memory
@@ -205,9 +203,7 @@ fn stmt_with_key_allocated() -> MutexGuard<'static, HashMap<Ptr, HashMap<StmtKey
 fn aggregate_allocated() -> MutexGuard<'static, HashMap<Ptr, AllocatedT>> {
     static AGGREGATE_ALLOCATED: Lazy<Mutex<HashMap<Ptr, AllocatedT>>> =
         Lazy::new(|| Mutex::new(HashMap::new()));
-    AGGREGATE_ALLOCATED
-        .lock()
-        .expect("acquire aggregate allocated lock failed")
+    AGGREGATE_ALLOCATED.lock()
 }
 
 /// Maintain a list of stmt's `sqlite3_value` allocated memory
@@ -215,9 +211,7 @@ fn aggregate_allocated() -> MutexGuard<'static, HashMap<Ptr, AllocatedT>> {
 fn stmt_sqlite3_values_allocated() -> MutexGuard<'static, HashMap<Ptr, Vec<Ptr>>> {
     static STMT_SQLITE3_VALUES_ALLOCATED: Lazy<Mutex<HashMap<Ptr, Vec<Ptr>>>> =
         Lazy::new(|| Mutex::new(HashMap::new()));
-    STMT_SQLITE3_VALUES_ALLOCATED
-        .lock()
-        .expect("acquire stmt sqlite3 values allocated lock failed")
+    STMT_SQLITE3_VALUES_ALLOCATED.lock()
 }
 
 /// Maintain a list of `sqlite3_value` allocated memory
@@ -225,9 +219,7 @@ fn stmt_sqlite3_values_allocated() -> MutexGuard<'static, HashMap<Ptr, Vec<Ptr>>
 fn sqlite3_values_allocated() -> MutexGuard<'static, HashMap<Ptr, AllocatedT>> {
     static SQLITE3_VALUES_ALLOCATED: Lazy<Mutex<HashMap<Ptr, AllocatedT>>> =
         Lazy::new(|| Mutex::new(HashMap::new()));
-    SQLITE3_VALUES_ALLOCATED
-        .lock()
-        .expect("acquire sqlite3 values allocated lock failed")
+    SQLITE3_VALUES_ALLOCATED.lock()
 }
 
 /// Convert the dtor function pointer to i32
@@ -1233,10 +1225,7 @@ pub unsafe fn sqlite3_errmsg(db: *mut sqlite3) -> *const ::std::os::raw::c_char 
     let raw = cstring(ret).into_raw();
 
     // Replace value and free previous allocated value
-    ERRMSG
-        .lock()
-        .expect("acquire errmsg lock failed")
-        .replace(AllocatedT::CString(raw));
+    ERRMSG.lock().replace(AllocatedT::CString(raw));
     raw
 }
 

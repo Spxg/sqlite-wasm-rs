@@ -1,7 +1,6 @@
 //! This module fills in the external functions needed to link to `sqlite.o`
 
-use super::export::{sqlite3_int64, sqlite3_vfs, sqlite3_vfs_register};
-use js_sys::{Date, Math};
+use js_sys::Date;
 use wasm_bindgen::JsCast;
 use web_sys::{SharedWorkerGlobalScope, WorkerGlobalScope};
 
@@ -133,90 +132,7 @@ pub unsafe extern "C" fn emscripten_get_now() -> std::os::raw::c_double {
 
 #[no_mangle]
 pub unsafe extern "C" fn sqlite3_os_init() -> std::os::raw::c_int {
-    let vfs = sqlite3_vfs {
-        iVersion: 1,
-        szOsFile: 0,
-        mxPathname: 512,
-        pNext: std::ptr::null_mut(),
-        zName: c"none".as_ptr().cast(),
-        pAppData: std::ptr::null_mut(),
-        xOpen: None,
-        xDelete: None,
-        xAccess: None,
-        xFullPathname: None,
-        xDlOpen: None,
-        xDlError: None,
-        xDlSym: None,
-        xDlClose: None,
-        xRandomness: Some(xRandomness),
-        xSleep: Some(xSleep),
-        xCurrentTime: Some(xCurrentTime),
-        xGetLastError: Some(xGetLastError),
-        xCurrentTimeInt64: Some(xCurrentTimeInt64),
-        xSetSystemCall: None,
-        xGetSystemCall: None,
-        xNextSystemCall: None,
-    };
-
-    sqlite3_vfs_register(Box::leak(Box::new(vfs)), 0)
-}
-
-/// thread::sleep is available when atomics are enabled
-#[cfg(target_feature = "atomics")]
-unsafe extern "C" fn xSleep(
-    _arg1: *mut sqlite3_vfs,
-    microseconds: ::std::os::raw::c_int,
-) -> ::std::os::raw::c_int {
-    use std::{thread, time::Duration};
-
-    thread::sleep(Duration::from_micros(microseconds as u64));
-    0
-}
-
-#[cfg(not(target_feature = "atomics"))]
-unsafe extern "C" fn xSleep(
-    _arg1: *mut sqlite3_vfs,
-    _microseconds: ::std::os::raw::c_int,
-) -> ::std::os::raw::c_int {
-    0
-}
-
-/// https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L951
-unsafe extern "C" fn xRandomness(
-    _arg1: *mut sqlite3_vfs,
-    nByte: ::std::os::raw::c_int,
-    zOut: *mut ::std::os::raw::c_char,
-) -> ::std::os::raw::c_int {
-    for i in 0..nByte {
-        *zOut.offset(i as isize) = (Math::random() * 255000.0) as _;
-    }
-    nByte
-}
-
-/// https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L870
-unsafe extern "C" fn xCurrentTime(
-    _arg1: *mut sqlite3_vfs,
-    arg2: *mut f64,
-) -> ::std::os::raw::c_int {
-    *arg2 = 2440587.5 + (Date::new_0().get_time() / 86400000.0);
-    0
-}
-
-unsafe extern "C" fn xGetLastError(
-    _arg1: *mut sqlite3_vfs,
-    _arg2: ::std::os::raw::c_int,
-    _arg3: *mut ::std::os::raw::c_char,
-) -> ::std::os::raw::c_int {
-    0
-}
-
-/// https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L877
-unsafe extern "C" fn xCurrentTimeInt64(
-    _arg1: *mut sqlite3_vfs,
-    arg2: *mut sqlite3_int64,
-) -> ::std::os::raw::c_int {
-    *arg2 = ((2440587.5 * 86400000.0) + Date::new_0().get_time()) as sqlite3_int64;
-    0
+    super::vfs::memory::install_memory_vfs()
 }
 
 // https://github.com/alexcrichton/dlmalloc-rs/blob/fb116603713825b43b113cc734bb7d663cb64be9/src/dlmalloc.rs#L141

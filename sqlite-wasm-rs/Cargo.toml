@@ -40,12 +40,13 @@ web-sys = { version = "0.3.77", optional = true, features = [
 thiserror = { version = "2.0.11", optional = true }
 
 [features]
-default = ["wrapper"]
+default = ["polyfill"]
 wrapper = ["serde", "serde-wasm-bindgen"]
 polyfill = ["web-sys", "thiserror"]
 
 [target.'cfg(target_feature = "atomics")'.dependencies]
 sqlite-wasm-macro = { path = "../sqlite-wasm-macro", version = "0.1.1" }
+parking_lot = "0.12.3"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.49"
