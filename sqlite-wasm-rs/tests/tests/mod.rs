@@ -3,7 +3,7 @@ mod bind64;
 mod column_metadata;
 mod common;
 mod hook;
-#[cfg(feature = "polyfill")]
+#[cfg(feature = "shim")]
 mod polyfill_vfs;
 mod status;
 #[cfg(feature = "wrapper")]

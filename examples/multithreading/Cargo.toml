@@ -15,6 +15,6 @@ wasmtimer = "0.4.1"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["polyfill"]
+default = ["shim"]
+shim = ["sqlite-wasm-rs/shim"]
 wrapper = ["sqlite-wasm-rs/wrapper"]
-polyfill = ["sqlite-wasm-rs/polyfill"]

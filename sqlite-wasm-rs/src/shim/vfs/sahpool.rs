@@ -38,7 +38,7 @@ mod multithreading {
     use super::*;
     use std::sync::mpsc::Sender;
 
-    include!(concat!(env!("OUT_DIR"), "/polyfill_multi_sahpool.rs"));
+    include!(concat!(env!("OUT_DIR"), "/shim_multi_sahpool.rs"));
 
     pub struct Task {
         req: CApiReq,

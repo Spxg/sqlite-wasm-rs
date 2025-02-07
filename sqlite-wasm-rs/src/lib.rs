@@ -6,11 +6,11 @@ pub(crate) mod locker;
 #[cfg(feature = "wrapper")]
 mod wrapper;
 
-#[cfg(feature = "polyfill")]
-mod polyfill;
+#[cfg(feature = "shim")]
+mod shim;
 
 #[cfg(feature = "wrapper")]
 pub use wrapper::export;
 
-#[cfg(feature = "polyfill")]
-pub use polyfill::export;
+#[cfg(feature = "shim")]
+pub use shim::export;

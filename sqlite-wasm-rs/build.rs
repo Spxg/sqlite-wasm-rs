@@ -7,9 +7,9 @@ fn main() {
     if cfg!(feature = "wrapper") {
         println!("cargo::rerun-if-changed=src/wrapper/c.rs");
         multithread_codegen("src/wrapper/c.rs", "wrapper_multi.rs");
-    } else if cfg!(feature = "polyfill") {
-        println!("cargo::rerun-if-changed=src/polyfill/vfs/sahpool.rs");
-        multithread_codegen("src/polyfill/vfs/sahpool.rs", "polyfill_multi_sahpool.rs");
+    } else if cfg!(feature = "shim") {
+        println!("cargo::rerun-if-changed=src/shim/vfs/sahpool.rs");
+        multithread_codegen("src/shim/vfs/sahpool.rs", "shim_multi_sahpool.rs");
 
         println!("cargo::rerun-if-changed=src/source");
         let path = std::env::current_dir().unwrap().join("source");

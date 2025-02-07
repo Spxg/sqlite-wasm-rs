@@ -43,9 +43,9 @@ web-sys = { version = "0.3.77", optional = true, features = [
 sqlite-wasm-libc = { path = "../sqlite-wasm-libc", version = "0.1.0", optional = true }
 
 [features]
-default = ["polyfill"]
+default = ["shim"]
+shim = ["web-sys", "thiserror"]
 wrapper = ["serde", "serde-wasm-bindgen"]
-polyfill = ["web-sys", "thiserror"]
 custom-libc = ["sqlite-wasm-libc"]
 
 [target.'cfg(target_feature = "atomics")'.dependencies]

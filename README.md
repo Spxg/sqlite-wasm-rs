@@ -4,7 +4,7 @@
 
 Provide sqlite solution for `wasm32-unknown-unknown` target.
 
-## Polyfill Usage
+## Usage
 
 ```toml
 [dependencies]
@@ -51,71 +51,11 @@ async fn open_db() -> anyhow::Result<()> {
 sqlite-wasm-rs = { version = "0.2", default-features = false, features = ["wrapper"] }
 ```
 
-```rust
-use sqlite_wasm_rs::export as ffi;
-use std::ffi::CString;
+See [`Wrapper Usage`](https://github.com/Spxg/sqlite-wasm-rs/blob/bc5285fe6d2f3a4e5eb946f5d0500fa26714f5ab/README.md)
 
-async fn open_db() -> anyhow::Result<()> {
-    // Before using CAPI, you must initialize sqlite.
-    //
-    // Initializing the database is a one-time operation during
-    // the life of the program.
-    let sqlite = ffi::init_sqlite().await?;
+## Shim VS Wrapper
 
-    // open with memory vfs
-    let mut db = std::ptr::null_mut();
-    let ret = unsafe {
-        ffi::sqlite3_open_v2(
-            c"mem.db".as_ptr().cast(),
-            &mut db as *mut _,
-            ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
-            std::ptr::null()
-        )
-    };
-    assert_eq!(ffi::SQLITE_OK, ret);
-
-    // support `opfs-sahpool` vfs
-    //
-    // See <https://sqlite.org/wasm/doc/trunk/persistence.md#vfs-opfs-sahpool>
-    sqlite.install_opfs_sahpool(None).await?;
-
-    // open with opfs-sahpool vfs
-    let mut db = std::ptr::null_mut();
-    let ret = unsafe {
-        ffi::sqlite3_open_v2(
-            c"file:opfs-sahpool.db?vfs=opfs-sahpool".as_ptr().cast(),
-            &mut db as *mut _,
-            ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
-            std::ptr::null()
-        )
-    };
-    assert_eq!(ffi::SQLITE_OK, ret);
-
-    // Persistent Storage is supported, use opfs vfs.
-    // This support is only available when sqlite is loaded from a
-    // Worker thread, whether it's loaded in its own dedicated worker
-    // or in a worker together with client code.
-    //
-    // See <https://sqlite.org/wasm/doc/trunk/persistence.md#opfs>
-    let mut db = std::ptr::null_mut();
-    let ret = unsafe {
-        ffi::sqlite3_open_v2(
-            // equal to "file:opfs.db?vfs=opfs"
-            c"opfs.db".as_ptr().cast(),
-            &mut db as *mut _,
-            ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
-            c"opfs".as_ptr().cast()
-        )
-    };
-    assert_eq!(ffi::SQLITE_OK, ret);
-
-    Ok(())
-}
-```
-
-## Polyfill VS Wrapper
-
-### Polyfill
+### Shim
 
 Compile sqlite with `-DSQLITE_OS_OTHER`, linking and implement the external functions required by `sqlite` (`malloc`, `realloc`, `sqlite3_init_os` etc..). And because the `wasm32-unknown-unknown` target does not have `libc`, string functions such as `strcmp` need to be implemented. Finally, some web platform-specific functions need to be implemented, such as time-related functions.
 
