@@ -4,7 +4,6 @@ SQLITE_OPT.common := \
   -DSQLITE_OS_OTHER \
   -DSQLITE_ENABLE_MATH_FUNCTIONS \
   -DSQLITE_USE_URI=1 \
-  -DSQLITE_C=$(sqlite3.c) \
   -DSQLITE_OMIT_DEPRECATED \
   -DSQLITE_OMIT_UTF16 \
   -DSQLITE_OMIT_LOAD_EXTENSION \
@@ -28,7 +27,7 @@ SQLITE_OPT := \
     $(SQLITE_OPT.common) \
     $(SQLITE_OPT.full-featured)
 
-build:
-	emcc $(SQLITE_OPT) sqlite3.c -o sqlite3.o -r -Oz -lc
+default:
+	emcc $(SQLITE_OPT) sqlite3.c wasm-shim.c -o sqlite3.o -I. -r -Oz -lc
 	emar rcs libsqlite3.a sqlite3.o
 	rm sqlite3.o

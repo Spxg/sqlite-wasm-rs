@@ -44,7 +44,7 @@ fn yday_from_date(date: &Date) -> u32 {
 
 /// https://github.com/sqlite/sqlite-wasm/blob/7c1b309c3bd07d8e6d92f82344108cebbd14f161/sqlite-wasm/jswasm/sqlite3-bundler-friendly.mjs#L3404
 #[no_mangle]
-pub unsafe extern "C" fn _localtime_js(t: time_t, tm: *mut tm) {
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_localtime_js(t: time_t, tm: *mut tm) {
     assert!(!(INT53_MIN..=INT53_MAX).contains(&t), "wrong time range");
 
     let date = Date::new(&(t * 1000).into());
@@ -71,7 +71,7 @@ pub unsafe extern "C" fn _localtime_js(t: time_t, tm: *mut tm) {
 
 /// https://github.com/sqlite/sqlite-wasm/blob/7c1b309c3bd07d8e6d92f82344108cebbd14f161/sqlite-wasm/jswasm/sqlite3-bundler-friendly.mjs#L3460
 #[no_mangle]
-pub unsafe extern "C" fn _tzset_js(
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_tzset_js(
     timezone: *mut std::os::raw::c_longlong,
     daylight: *mut std::os::raw::c_int,
     std_name: *mut std::os::raw::c_char,
@@ -116,7 +116,7 @@ pub unsafe extern "C" fn _tzset_js(
 
 /// https://github.com/sqlite/sqlite-wasm/blob/7c1b309c3bd07d8e6d92f82344108cebbd14f161/sqlite-wasm/jswasm/sqlite3-bundler-friendly.mjs#L3496
 #[no_mangle]
-pub unsafe extern "C" fn emscripten_get_now() -> std::os::raw::c_double {
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_emscripten_get_now() -> std::os::raw::c_double {
     let performance = if let Some(window) = web_sys::window() {
         window.performance()
     } else if let Ok(worker) = js_sys::global().dyn_into::<WorkerGlobalScope>() {
@@ -139,7 +139,7 @@ pub unsafe extern "C" fn sqlite3_os_init() -> std::os::raw::c_int {
 const ALIGN: usize = std::mem::size_of::<usize>() * 2;
 
 #[no_mangle]
-pub unsafe extern "C" fn malloc(size: usize) -> *mut u8 {
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_malloc(size: usize) -> *mut u8 {
     let layout = std::alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
     let ptr = std::alloc::alloc(layout);
 
@@ -152,7 +152,7 @@ pub unsafe extern "C" fn malloc(size: usize) -> *mut u8 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn free(ptr: *mut u8) {
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_free(ptr: *mut u8) {
     let ptr = ptr.sub(ALIGN);
     let size = *(ptr.cast::<usize>());
 
@@ -161,7 +161,7 @@ pub unsafe extern "C" fn free(ptr: *mut u8) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn realloc(ptr: *mut u8, new_size: usize) -> *mut u8 {
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_realloc(ptr: *mut u8, new_size: usize) -> *mut u8 {
     let ptr = ptr.sub(ALIGN);
     let size = *(ptr.cast::<usize>());
 
