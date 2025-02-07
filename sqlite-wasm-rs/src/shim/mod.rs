@@ -24,13 +24,14 @@ pub mod export {
 
     #[cfg(feature = "custom-libc")]
     pub use sqlite_wasm_libc;
+
     /// Make it behave the same as when wrapper features are enabled
     pub struct SQLite;
 
     impl SQLite {
         /// Register `opfs-sahpool` vfs and return a utility object which can be used
         /// to perform basic administration of the file pool
-        #[deprecated = "use install_opfs_sahpool directly in polyfill feature"]
+        #[deprecated = "use install_opfs_sahpool directly in shim feature"]
         pub async fn install_opfs_sahpool(
             &self,
             options: Option<&OpfsSAHPoolCfg>,
@@ -40,7 +41,7 @@ pub mod export {
     }
 
     /// Empty implementation
-    #[deprecated = "init_sqlite() is not needed in polyfill feature"]
+    #[deprecated = "init_sqlite() is not needed in shim feature"]
     pub async fn init_sqlite() -> Result<SQLite, ()> {
         Ok(SQLite)
     }
