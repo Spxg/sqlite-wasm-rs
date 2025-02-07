@@ -4,7 +4,7 @@
 
 Provide sqlite solution for `wasm32-unknown-unknown` target.
 
-## Usage
+## Shim Usage
 
 ```toml
 [dependencies]
@@ -82,6 +82,17 @@ Disadvantages
 * Interacting with `sqlite-wam` requires memory copies and additional memory management, which can affect performance in some scenarios.
 * New interfaces need to be added manually, it only wraps some commonly used C-API for now, but it is enough.
 * Need for calling `init_sqlite()` before use.
+
+## Use external libc (shim only)
+
+As mentioned above, sqlite is now directly linked to emscripten's libc. But we provide the ability to customize libc.
+
+Cargo provides a [`links`](https://doc.rust-lang.org/cargo/reference/manifest.html#the-links-field) field that can be used to specify which library to link to.
+We created a new [`sqlite-wasm-libc`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-libc) library with no implementation and only a links = "libc" configuration.
+Then with the help of [`Overriding Build Scripts`](https://doc.rust-lang.org/cargo/reference/build-scripts.html#overriding-build-scripts), we can overriding its configuration on the upper layer and link sqlite to our custom libc
+
+More see [`custom-libc example`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/examples/custom-libc).
+
 
 ## Multithreading
 
