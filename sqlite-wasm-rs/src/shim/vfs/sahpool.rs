@@ -1102,7 +1102,7 @@ fn vfs() -> sqlite3_vfs {
     let xCurrentTimeInt64 = unsafe { (*default_vfs).xCurrentTimeInt64 };
 
     sqlite3_vfs {
-        iVersion: 1,
+        iVersion: 2,
         szOsFile: std::mem::size_of::<sqlite3_file>() as i32,
         mxPathname: HEADER_MAX_PATH_SIZE as i32,
         pNext: std::ptr::null_mut(),
