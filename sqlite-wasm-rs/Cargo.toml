@@ -40,10 +40,13 @@ web-sys = { version = "0.3.77", optional = true, features = [
   "Url",
 ]}
 
+sqlite-wasm-libc = { path = "../sqlite-wasm-libc", version = "0.1.0", optional = true }
+
 [features]
 default = ["polyfill"]
 wrapper = ["serde", "serde-wasm-bindgen"]
 polyfill = ["web-sys", "thiserror"]
+custom-libc = ["sqlite-wasm-libc"]
 
 [target.'cfg(target_feature = "atomics")'.dependencies]
 sqlite-wasm-macro = { path = "../sqlite-wasm-macro", version = "0.1.1" }
@@ -60,7 +63,3 @@ prettyplease = "0.2.29"
 
 [package.metadata.docs.rs]
 targets = ["wasm32-unknown-unknown"]
-
-[lib]
-crate-type = ["rlib", "cdylib"]
-

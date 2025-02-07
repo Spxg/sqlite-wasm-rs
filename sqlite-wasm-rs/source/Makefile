@@ -29,5 +29,7 @@ SQLITE_OPT := \
 
 default:
 	emcc $(SQLITE_OPT) sqlite3.c wasm-shim.c -o sqlite3.o -I. -r -Oz -lc
+	emar rcs libsqlite3linked.a sqlite3.o
+	emcc $(SQLITE_OPT) sqlite3.c -o sqlite3.o -I. -r -Oz
 	emar rcs libsqlite3.a sqlite3.o
 	rm sqlite3.o
