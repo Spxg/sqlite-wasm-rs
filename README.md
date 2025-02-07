@@ -51,7 +51,7 @@ async fn open_db() -> anyhow::Result<()> {
 sqlite-wasm-rs = { version = "0.2", default-features = false, features = ["wrapper"] }
 ```
 
-See [`Wrapper Usage`](https://github.com/Spxg/sqlite-wasm-rs/blob/bc5285fe6d2f3a4e5eb946f5d0500fa26714f5ab/README.md)
+Then see [`Wrapper Usage`](https://github.com/Spxg/sqlite-wasm-rs/blob/bc5285fe6d2f3a4e5eb946f5d0500fa26714f5ab/README.md#usage)
 
 ## Shim VS Wrapper
 
