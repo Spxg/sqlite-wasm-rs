@@ -22,6 +22,8 @@ pub mod export {
         install_opfs_sahpool, OpfsSAHError, OpfsSAHPoolCfg, OpfsSAHPoolUtil,
     };
 
+    #[cfg(feature = "custom-libc")]
+    pub use sqlite_wasm_libc;
     /// Make it behave the same as when wrapper features are enabled
     pub struct SQLite;
 
