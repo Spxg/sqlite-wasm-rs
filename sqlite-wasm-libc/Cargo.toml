@@ -3,5 +3,12 @@ name = "sqlite-wasm-libc"
 version = "0.1.0"
 edition = "2021"
 links = "libc"
+authors = ["Spxg <unsafe@outlook.es>"]
+readme = "README.md"
+license = "MIT"
+repository = "https://github.com/Spxg/sqlite-wasm-libc"
+description = "making it possible to link external custom libc"
+categories = ["development-tools::ffi", "wasm", "database"]
+keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "javascript"]
 
 [dependencies]
