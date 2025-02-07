@@ -1,5 +1,6 @@
 use js_sys::Date;
 use wasm_bindgen::JsCast;
+use wasm_bindgen_test::console_log;
 use web_sys::{SharedWorkerGlobalScope, WorkerGlobalScope};
 
 pub type time_t = std::os::raw::c_longlong;
@@ -133,6 +134,8 @@ const ALIGN: usize = std::mem::size_of::<usize>() * 2;
 
 #[no_mangle]
 pub unsafe extern "C" fn malloc(size: usize) -> *mut u8 {
+    console_log!("malloc");
+
     let layout = std::alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
     let ptr = std::alloc::alloc(layout);
 
@@ -146,6 +149,8 @@ pub unsafe extern "C" fn malloc(size: usize) -> *mut u8 {
 
 #[no_mangle]
 pub unsafe extern "C" fn free(ptr: *mut u8) {
+    console_log!("free");
+
     let ptr = ptr.sub(ALIGN);
     let size = *(ptr.cast::<usize>());
 
@@ -155,6 +160,8 @@ pub unsafe extern "C" fn free(ptr: *mut u8) {
 
 #[no_mangle]
 pub unsafe extern "C" fn realloc(ptr: *mut u8, new_size: usize) -> *mut u8 {
+    console_log!("realloc");
+
     let ptr = ptr.sub(ALIGN);
     let size = *(ptr.cast::<usize>());
 
