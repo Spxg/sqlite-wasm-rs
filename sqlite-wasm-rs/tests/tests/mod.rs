@@ -4,7 +4,7 @@ mod column_metadata;
 mod common;
 mod hook;
 #[cfg(feature = "shim")]
-mod polyfill_vfs;
+mod shim_vfs;
 mod status;
 #[cfg(feature = "wrapper")]
 mod wrapper_vfs;

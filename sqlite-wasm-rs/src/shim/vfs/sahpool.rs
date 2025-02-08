@@ -1161,11 +1161,26 @@ pub async fn install_opfs_sahpool(
     options: Option<&OpfsSAHPoolCfg>,
     default_vfs: bool,
 ) -> Result<OpfsSAHPoolUtil, OpfsSAHError> {
+    let register_vfs = || {
+        let vfs = Box::leak(Box::new(vfs()));
+        let ret = unsafe { sqlite3_vfs_register(vfs, i32::from(default_vfs)) };
+        if ret != SQLITE_OK {
+            unsafe {
+                drop(Box::from_raw(vfs));
+            }
+            return Err(OpfsSAHError::Custom(
+                "register opfs-sahpool vfs failed".into(),
+            ));
+        }
+        Ok(())
+    };
+
     #[cfg(target_feature = "atomics")]
     let opfs_sah = OPFS_SAH
         .get_or_try_init(|| async {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let opfs_sah = OpfsSAH::new(OpfsSAHPool::new(options).await?, tx);
+            register_vfs()?;
 
             wasm_bindgen_futures::spawn_local(async move {
                 while let Some(req) = rx.recv().await {
@@ -1181,16 +1196,10 @@ pub async fn install_opfs_sahpool(
     let opfs_sah = OPFS_SAH
         .get_or_try_init(|| async {
             let pool = OpfsSAHPool::new(options).await?;
+            register_vfs()?;
             Ok(OpfsSAH::new(pool))
         })
         .await?;
-
-    let ret = unsafe { sqlite3_vfs_register(Box::leak(Box::new(vfs())), i32::from(default_vfs)) };
-    if ret != SQLITE_OK {
-        return Err(OpfsSAHError::Custom(
-            "register opfs-sahpool vfs failed".into(),
-        ));
-    }
 
     let util = OpfsSAHPoolUtil {
         pool: &opfs_sah.pool,
