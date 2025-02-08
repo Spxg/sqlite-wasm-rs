@@ -347,5 +347,5 @@ fn vfs() -> sqlite3_vfs {
 }
 
 pub(crate) fn install_memory_vfs() -> ::std::os::raw::c_int {
-    unsafe { sqlite3_vfs_register(Box::leak(Box::new(vfs())), 0) }
+    unsafe { sqlite3_vfs_register(Box::leak(Box::new(vfs())), 1) }
 }

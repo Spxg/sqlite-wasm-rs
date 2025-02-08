@@ -1185,7 +1185,7 @@ pub async fn install_opfs_sahpool(
         })
         .await?;
 
-    let ret = unsafe { sqlite3_vfs_register(Box::leak(Box::new(vfs())), i32::from(!default_vfs)) };
+    let ret = unsafe { sqlite3_vfs_register(Box::leak(Box::new(vfs())), i32::from(default_vfs)) };
     if ret != SQLITE_OK {
         return Err(OpfsSAHError::Custom(
             "register opfs-sahpool vfs failed".into(),
