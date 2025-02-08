@@ -13,9 +13,11 @@ rustup target add wasm32-unknown-unknown
 cargo install wasm-pack
 # Install the wasm-pack toolchain
 
+wasm-pack build --target web
+# Build wasm with shim
+
 wasm-pack build --target web --features wrapper
-wasm-pack build --target web --features polyfill
-# Build wasm
+# Build wasm with wrapper
 
 python3 server.py
 # Start server

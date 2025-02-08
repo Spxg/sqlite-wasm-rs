@@ -12,7 +12,7 @@ sqlite-wasm-rs = "0.2"
 ```
 
 ```rust
-use sqlite_wasm_rs::export::*;
+use sqlite_wasm_rs::export::{self as ffi, install_opfs_sahpool};
 
 async fn open_db() -> anyhow::Result<()> {
     // open with memory vfs
@@ -55,13 +55,13 @@ Then see [`Wrapper Usage`](https://github.com/Spxg/sqlite-wasm-rs/blob/bc5285fe6
 
 ## Use external libc (shim only)
 
-As mentioned above, sqlite is now directly linked to emscripten's libc. But we provide the ability to customize libc.
+As mentioned below, sqlite is now directly linked to emscripten's libc. But we provide the ability to customize libc.
 
 Cargo provides a [`links`](https://doc.rust-lang.org/cargo/reference/manifest.html#the-links-field) field that can be used to specify which library to link to.
 
 We created a new [`sqlite-wasm-libc`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-libc) library with no implementation and only a `links = "libc"` configuration.
 
-Then with the help of [`Overriding Build Scripts`](https://doc.rust-lang.org/cargo/reference/build-scripts.html#overriding-build-scripts), you can overriding its configuration on the upper layer and link sqlite to your custom libc.
+Then with the help of [`Overriding Build Scripts`](https://doc.rust-lang.org/cargo/reference/build-scripts.html#overriding-build-scripts), you can overriding its configuration in your crate and link sqlite to your custom libc.
 
 More see [`custom-libc example`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/examples/custom-libc).
 
@@ -102,7 +102,7 @@ Advantages
 
 Disadvantages
 * Asynchronous initialization is required before using sqlite (because sqlite.wasm needs to be initialized), which is inconvenient to use.
-* The C interface needs to be maintained manually, which is prone to errors.
+* The C interface needs to be added manually, which is prone to errors.
 * Interaction with `sqlite.wasm` requires memory copying and memory management, which affects performance in some scenarios.
 
 ## Why vendor sqlite-wasm
