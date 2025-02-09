@@ -52,6 +52,48 @@ async fn test_opfs_sah_vfs_default() {
 
 #[wasm_bindgen_test]
 #[allow(unused)]
+async fn test_opfs_sah_vfs_custom() {
+    let cfg = OpfsSAHPoolCfgBuilder::new()
+        .vfs_name("test-vfs-1")
+        .directory("custom/jjehewhjfbhjwe")
+        .build();
+    install_opfs_sahpool(Some(&cfg), false).await.unwrap();
+
+    let filename = cstr("test_opfs_sah_vfs_custom.db");
+    let mut db = std::ptr::null_mut();
+    let ret = unsafe {
+        sqlite3_open_v2(
+            filename.as_ptr(),
+            &mut db as *mut _,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+            c"test-vfs-1".as_ptr().cast(),
+        )
+    };
+    assert_eq!(SQLITE_OK, ret);
+    test_vfs(db);
+}
+
+#[wasm_bindgen_test]
+#[allow(unused)]
+async fn test_opfs_sah_vfs_default_error() {
+    install_opfs_sahpool(None, true).await.unwrap();
+
+    let filename = cstr("test_opfs_sah_vfs_default_error.db");
+    let mut db = std::ptr::null_mut();
+    let ret = unsafe {
+        sqlite3_open_v2(
+            filename.as_ptr(),
+            &mut db as *mut _,
+            SQLITE_OPEN_READWRITE,
+            std::ptr::null_mut(),
+        )
+    };
+
+    assert_eq!(SQLITE_CANTOPEN, ret);
+}
+
+#[wasm_bindgen_test]
+#[allow(unused)]
 async fn test_opfs_sah_util() {
     let cfg = OpfsSAHPoolCfgBuilder::new()
         .vfs_name("test-vfs")
