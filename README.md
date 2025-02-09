@@ -53,6 +53,27 @@ sqlite-wasm-rs = { version = "0.2", default-features = false, features = ["wrapp
 
 Then see [`Wrapper Usage`](https://github.com/Spxg/sqlite-wasm-rs/blob/bc5285fe6d2f3a4e5eb946f5d0500fa26714f5ab/README.md#usage)
 
+## Multithreading
+
+When `target-feature=+atomics` is enabled, `sqlite-wasm-rs` support multithreading, see [`multithread example`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/examples/multithreading).
+
+## Shim VS Wrapper
+
+### Shim
+
+Provides the highest performance by linking to sqlite3.
+
+The following vfs have been implemented:
+
+* [`memory-vfs`](https://github.com/Spxg/sqlite-wasm-rs/blob/master/sqlite-wasm-rs/src/shim/vfs/memory.rs): as the default vfs, no additional conditions are required, just use.
+* [`opfs-sahpool`](https://github.com/Spxg/sqlite-wasm-rs/blob/master/sqlite-wasm-rs/src/shim/vfs/sahpool.rs): ported from sqlite-wasm, it provides the best performance persistent storage method.
+
+See <https://github.com/Spxg/sqlite-wasm-rs/blob/master/VFS.md>
+
+### Wrapper
+
+Wrap the official [`sqlite-wasm`](https://github.com/sqlite/sqlite-wasm), and expect to provide a usable C-like API. There are a variety of official persistent VFS implementations to choose from. (memvfs, opfs, opfs-sahpool, kvvfs).
+
 ## Use external libc (shim only)
 
 As mentioned below, sqlite is now directly linked to emscripten's libc. But we provide the ability to customize libc.
@@ -64,46 +85,6 @@ We created a new [`sqlite-wasm-libc`](https://github.com/Spxg/sqlite-wasm-rs/tre
 Then with the help of [`Overriding Build Scripts`](https://doc.rust-lang.org/cargo/reference/build-scripts.html#overriding-build-scripts), you can overriding its configuration in your crate and link sqlite to your custom libc.
 
 More see [`custom-libc example`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/examples/custom-libc).
-
-
-## Multithreading
-
-When `target-feature=+atomics` is enabled, `sqlite-wasm-rs` support multithreading, see [`multithread example`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/examples/multithreading).
-
-
-## Shim VS Wrapper
-
-### Shim
-
-Compile sqlite with `-DSQLITE_OS_OTHER`, linking and implement the external functions required by `sqlite` (`malloc`, `realloc`, `sqlite3_os_init` etc..). And because the `wasm32-unknown-unknown` target does not have `libc`, string functions such as `strcmp` need to be implemented. Finally, some web platform-specific functions need to be implemented, such as time-related functions.
-
-Given that sqlite mainly supports emscripten, linking emscripten to `wasm32-unknown-unknown` is the best approach (otherwise you need to implement some methods of `libc` yourself). But here is a question, is `wasm32-unknown-unknown` now C-ABI compatible?
-
-The rustwasm team has done a lot of work and is now compatible with the `-Zwasm-c-abi` compiler flag, see <https://github.com/rustwasm/wasm-bindgen/issues/3454>. But it doesn't mean that there will be problems if you don't use the `-Zwasm-c-abi` flags, see <https://github.com/rustwasm/wasm-bindgen/pull/2209>. At least after testing, it works without `-Zwasm-c-abi`.
-
-Advantages
-* No additional wrapper, providing the highest performance.
-* The C interface does not require manual maintenance, just bindgen.
-* No need to `init_sqlite()` before use.
-
-Disadvantages
-
-The only disvantage is that VFS needs to be implemented manually, but I have implemented two pure rust version of vfs:
-* [`memory-vfs`](https://github.com/Spxg/sqlite-wasm-rs/blob/master/sqlite-wasm-rs/src/shim/vfs/memory.rs): as the default vfs, no additional conditions are required, just use.
-* [`opfs-sahpool`](https://github.com/Spxg/sqlite-wasm-rs/blob/master/sqlite-wasm-rs/src/shim/vfs/sahpool.rs): ported from sqlite-wasm, it provides the best performance persistent storage method.
-
-
-### Wrapper
-
-Wrap the official [`sqlite-wasm`](https://github.com/sqlite/sqlite-wasm), and expect to provide a usable C-like API.
-
-Advantages
-* There are a variety of official persistent VFS implementations to choose from. (memvfs, opfs, opfs-sahpool, kvvfs).
-
-Disadvantages
-* Asynchronous initialization is required before using sqlite (because sqlite.wasm needs to be initialized), which is inconvenient to use.
-* The C interface needs to be added manually, which is prone to errors.
-* Interaction with `sqlite.wasm` requires memory copying and memory management, which affects performance in some scenarios.
 
 ## Why vendor sqlite-wasm
 
