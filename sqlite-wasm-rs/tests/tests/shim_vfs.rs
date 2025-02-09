@@ -53,18 +53,14 @@ async fn test_opfs_sah_vfs_default() {
 #[wasm_bindgen_test]
 #[allow(unused)]
 async fn test_opfs_sah_util() {
-    let util = install_opfs_sahpool(
-        Some(&OpfsSAHPoolCfg {
-            clear_on_init: true,
-            initial_capacity: 6,
-        }),
-        false,
-    )
-    .await
-    .unwrap();
+    let cfg = OpfsSAHPoolCfgBuilder::new()
+        .vfs_name("test-vfs")
+        .directory("custom/ndjwndjw")
+        .build();
+    let util = install_opfs_sahpool(Some(&cfg), false).await.unwrap();
 
     let filename = cstr("test_opfs_sah_util.db");
-    let vfs = CString::new("opfs-sahpool").unwrap();
+    let vfs = CString::new("test-vfs").unwrap();
 
     let mut db = std::ptr::null_mut();
     let ret = unsafe {

@@ -2,14 +2,16 @@
 //!
 //! <https://github.com/sqlite/sqlite/blob/master/ext/wasm/api/sqlite3-vfs-opfs-sahpool.c-pp.js>
 
-use crate::export::*;
+use crate::{export::*, locker::RwLock};
 
 use crate::fragile::FragileComfirmed;
 use crate::locker::Mutex;
 use js_sys::{
     Array, DataView, IteratorNext, Map, Math, Number, Object, Reflect, Set, Uint32Array, Uint8Array,
 };
-use std::ffi::CStr;
+use std::ffi::CString;
+use std::sync::Arc;
+use std::{collections::HashMap, ffi::CStr};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
@@ -19,15 +21,7 @@ use web_sys::{
 };
 
 #[cfg(target_feature = "atomics")]
-use sqlite_wasm_macro::multithread;
-
-#[cfg(target_feature = "atomics")]
-type SQLite = OpfsSAH;
-
-#[cfg(target_feature = "atomics")]
-fn sqlite() -> &'static OpfsSAH {
-    &OPFS_SAH.get().expect("init pool first")
-}
+use sqlite_wasm_macro::multithread_v2;
 
 #[cfg(target_feature = "atomics")]
 use multithreading::{call, CApiReq, CApiResp};
@@ -55,17 +49,19 @@ mod multithreading {
     }
 
     /// Send a task to the main thread and wait for it to return synchronously.
-    pub fn call(sqlite: &SQLite, req: CApiReq) -> CApiResp {
+    pub fn call(sah: Arc<OpfsSAH>, req: CApiReq) -> CApiResp {
         let (tx, rx) = std::sync::mpsc::channel();
-        sqlite
-            .tx
+        sah.tx
             .send(Task { req, tx })
             .expect("recv channel never disconnect");
         rx.recv().expect("send channel never disconnect")
     }
 }
 
-const DEFAULT_VFS_DIR: &str = ".opfs-sahpool";
+#[cfg(target_feature = "atomics")]
+fn get_handle(vfs: *mut sqlite3_vfs) -> Arc<OpfsSAH> {
+    CONTROL.vfs2sah.read().get(&(vfs as usize)).unwrap().clone()
+}
 
 const SECTOR_SIZE: usize = 4096;
 const HEADER_MAX_PATH_SIZE: usize = 512;
@@ -79,10 +75,24 @@ const HEADER_OFFSET_DATA: usize = SECTOR_SIZE;
 const PERSISTENT_FILE_TYPES: i32 =
     SQLITE_OPEN_MAIN_DB | SQLITE_OPEN_MAIN_JOURNAL | SQLITE_OPEN_SUPER_JOURNAL | SQLITE_OPEN_WAL;
 
-static OPFS_SAH: tokio::sync::OnceCell<OpfsSAH> = tokio::sync::OnceCell::const_new();
+struct Control {
+    name2vfs: Mutex<HashMap<String, usize>>,
+    vfs2sah: RwLock<HashMap<usize, Arc<OpfsSAH>>>,
+}
 
-fn pool() -> &'static FragileComfirmed<OpfsSAHPool> {
-    &OPFS_SAH.get().expect("init pool first").pool
+static CONTROL: once_cell::sync::Lazy<Control> = once_cell::sync::Lazy::new(|| Control {
+    name2vfs: Mutex::new(HashMap::new()),
+    vfs2sah: RwLock::new(HashMap::new()),
+});
+
+fn pool(vfs: *mut sqlite3_vfs) -> Arc<FragileComfirmed<OpfsSAHPool>> {
+    CONTROL
+        .vfs2sah
+        .read()
+        .get(&(vfs as usize))
+        .unwrap()
+        .pool
+        .clone()
 }
 
 fn read_write_options(at: f64) -> FileSystemReadWriteOptions {
@@ -91,21 +101,79 @@ fn read_write_options(at: f64) -> FileSystemReadWriteOptions {
     options
 }
 
+unsafe fn file2vfs(file: *mut sqlite3_file) -> *mut sqlite3_vfs {
+    (*(file.cast::<OpfsFile>())).vfs
+}
+
+#[repr(C)]
+struct OpfsFile {
+    io_methods: sqlite3_file,
+    vfs: *mut sqlite3_vfs,
+}
+
+/// Build `OpfsSAHPoolCfg`
+pub struct OpfsSAHPoolCfgBuilder(OpfsSAHPoolCfg);
+
+impl OpfsSAHPoolCfgBuilder {
+    pub fn new() -> Self {
+        Self(OpfsSAHPoolCfg::default())
+    }
+
+    /// The SQLite VFS name under which this pool's VFS is registered.
+    pub fn vfs_name(mut self, name: &str) -> Self {
+        self.0.vfs_name = name.into();
+        self
+    }
+
+    /// Specifies the OPFS directory name in which to store metadata for the `vfs_name`
+    pub fn directory(mut self, directory: &str) -> Self {
+        self.0.directory = directory.into();
+        self
+    }
+
+    /// If truthy, contents and filename mapping are removed from each SAH
+    /// as it is acquired during initalization of the VFS, leaving the VFS's
+    /// storage in a pristine state. Use this only for databases which need not
+    /// survive a page reload.
+    pub fn clear_on_init(mut self, set: bool) -> Self {
+        self.0.clear_on_init = set;
+        self
+    }
+
+    /// Specifies the default capacity of the VFS, i.e. the number of files
+    /// it may contain.
+    pub fn initial_capacity(mut self, cap: u32) -> Self {
+        self.0.initial_capacity = cap;
+        self
+    }
+
+    /// Build OpfsSAHPoolCfg
+    pub fn build(self) -> OpfsSAHPoolCfg {
+        self.0
+    }
+}
+
 /// `OpfsSAHPool` options
 pub struct OpfsSAHPoolCfg {
-    // If truthy, contents and filename mapping are removed from each SAH
-    // as it is acquired during initalization of the VFS, leaving the VFS's
-    // storage in a pristine state. Use this only for databases which need not
-    // survive a page reload.
+    /// The SQLite VFS name under which this pool's VFS is registered.
+    pub vfs_name: String,
+    /// Specifies the OPFS directory name in which to store metadata for the `vfs_name`
+    pub directory: String,
+    /// If truthy, contents and filename mapping are removed from each SAH
+    /// as it is acquired during initalization of the VFS, leaving the VFS's
+    /// storage in a pristine state. Use this only for databases which need not
+    /// survive a page reload.
     pub clear_on_init: bool,
-    // Specifies the default capacity of the VFS, i.e. the number of files
-    // it may contain.
+    /// Specifies the default capacity of the VFS, i.e. the number of files
+    /// it may contain.
     pub initial_capacity: u32,
 }
 
 impl Default for OpfsSAHPoolCfg {
     fn default() -> Self {
         Self {
+            vfs_name: "opfs-sahpool".into(),
+            directory: ".opfs-sahpool".into(),
             clear_on_init: false,
             initial_capacity: 6,
         }
@@ -224,13 +292,10 @@ struct OpfsSAHPool {
 }
 
 impl OpfsSAHPool {
-    async fn new(options: Option<&OpfsSAHPoolCfg>) -> Result<OpfsSAHPool, OpfsSAHError> {
+    async fn new(options: &OpfsSAHPoolCfg) -> Result<OpfsSAHPool, OpfsSAHError> {
         const OPAQUE_DIR_NAME: &str = ".opaque";
 
-        let default_options = OpfsSAHPoolCfg::default();
-        let options = options.unwrap_or(&default_options);
-
-        let vfs_dir = DEFAULT_VFS_DIR;
+        let vfs_dir = &options.directory;
         let capacity = options.initial_capacity;
         let clear_files = options.clear_on_init;
 
@@ -706,7 +771,7 @@ impl OpfsSAHPool {
 /// object and allowing for some semantic changes compared to that
 /// class.
 pub struct OpfsSAHPoolUtil {
-    pool: &'static FragileComfirmed<OpfsSAHPool>,
+    pool: Arc<FragileComfirmed<OpfsSAHPool>>,
 }
 
 impl OpfsSAHPoolUtil {
@@ -777,20 +842,24 @@ impl OpfsSAHPoolUtil {
     }
 }
 
-#[cfg_attr(target_feature = "atomics", multithread)]
+#[cfg_attr(target_feature = "atomics", multithread_v2("file2vfs(pFile)"))]
 unsafe extern "C" fn xCheckReservedLock(
-    _pFile: *mut sqlite3_file,
+    pFile: *mut sqlite3_file,
     pResOut: *mut ::std::os::raw::c_int,
 ) -> ::std::os::raw::c_int {
-    let pool = pool();
+    let vfs = file2vfs(pFile);
+    let pool = pool(vfs);
+
     pool.pop_err();
     *pResOut = 1;
     SQLITE_OK
 }
 
-#[cfg_attr(target_feature = "atomics", multithread)]
+#[cfg_attr(target_feature = "atomics", multithread_v2("file2vfs(pFile)"))]
 unsafe extern "C" fn xClose(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
-    let pool = pool();
+    let vfs = file2vfs(pFile);
+    let pool = pool(vfs);
+
     let f = || {
         if let Ok(file) = pool.get_o_file_for_s3_file(pFile) {
             file.sah.flush().map_err(OpfsSAHError::Flush)?;
@@ -818,12 +887,14 @@ unsafe extern "C" fn xFileControl(
     SQLITE_NOTFOUND
 }
 
-#[cfg_attr(target_feature = "atomics", multithread)]
+#[cfg_attr(target_feature = "atomics", multithread_v2("file2vfs(pFile)"))]
 unsafe extern "C" fn xFileSize(
     pFile: *mut sqlite3_file,
     pSize: *mut sqlite3_int64,
 ) -> ::std::os::raw::c_int {
-    let pool = pool();
+    let vfs = file2vfs(pFile);
+    let pool = pool(vfs);
+
     if let Ok(file) = pool.get_o_file_for_s3_file(pFile) {
         let size = file.sah.get_size().unwrap() as i64 - HEADER_OFFSET_DATA as i64;
         *pSize = size;
@@ -831,12 +902,14 @@ unsafe extern "C" fn xFileSize(
     SQLITE_OK
 }
 
-#[cfg_attr(target_feature = "atomics", multithread)]
+#[cfg_attr(target_feature = "atomics", multithread_v2("file2vfs(pFile)"))]
 unsafe extern "C" fn xLock(
     pFile: *mut sqlite3_file,
     eLock: ::std::os::raw::c_int,
 ) -> ::std::os::raw::c_int {
-    let pool = pool();
+    let vfs = file2vfs(pFile);
+    let pool = pool(vfs);
+
     pool.pop_err();
     let _ = pool
         .get_o_file_for_s3_file(pFile)
@@ -844,14 +917,16 @@ unsafe extern "C" fn xLock(
     SQLITE_OK
 }
 
-#[cfg_attr(target_feature = "atomics", multithread)]
+#[cfg_attr(target_feature = "atomics", multithread_v2("file2vfs(pFile)"))]
 unsafe extern "C" fn xRead(
     pFile: *mut sqlite3_file,
     zBuf: *mut ::std::os::raw::c_void,
     iAmt: ::std::os::raw::c_int,
     iOfst: sqlite3_int64,
 ) -> ::std::os::raw::c_int {
-    let pool = pool();
+    let vfs = file2vfs(pFile);
+    let pool = pool(vfs);
+
     pool.pop_err();
     let f = || {
         let file = pool.get_o_file_for_s3_file(pFile)?;
@@ -882,14 +957,15 @@ unsafe extern "C" fn xSectorSize(_pFile: *mut sqlite3_file) -> ::std::os::raw::c
     SECTOR_SIZE as i32
 }
 
-#[cfg_attr(target_feature = "atomics", multithread)]
+#[cfg_attr(target_feature = "atomics", multithread_v2("file2vfs(pFile)"))]
 unsafe extern "C" fn xSync(
     pFile: *mut sqlite3_file,
     _flags: ::std::os::raw::c_int,
 ) -> ::std::os::raw::c_int {
-    let pool = pool();
-    pool.pop_err();
+    let vfs = file2vfs(pFile);
+    let pool = pool(vfs);
 
+    pool.pop_err();
     if let Err(e) = pool
         .get_o_file_for_s3_file(pFile)
         .and_then(|file| file.sah.flush().map_err(OpfsSAHError::Flush))
@@ -900,12 +976,14 @@ unsafe extern "C" fn xSync(
     SQLITE_OK
 }
 
-#[cfg_attr(target_feature = "atomics", multithread)]
+#[cfg_attr(target_feature = "atomics", multithread_v2("file2vfs(pFile)"))]
 unsafe extern "C" fn xTruncate(
     pFile: *mut sqlite3_file,
     size: sqlite3_int64,
 ) -> ::std::os::raw::c_int {
-    let pool = pool();
+    let vfs = file2vfs(pFile);
+    let pool = pool(vfs);
+
     pool.pop_err();
 
     if let Err(e) = pool.get_o_file_for_s3_file(pFile).and_then(|file| {
@@ -919,26 +997,30 @@ unsafe extern "C" fn xTruncate(
     SQLITE_OK
 }
 
-#[cfg_attr(target_feature = "atomics", multithread)]
+#[cfg_attr(target_feature = "atomics", multithread_v2("file2vfs(pFile)"))]
 unsafe extern "C" fn xUnlock(
     pFile: *mut sqlite3_file,
     eLock: ::std::os::raw::c_int,
 ) -> ::std::os::raw::c_int {
-    let pool = pool();
+    let vfs = file2vfs(pFile);
+    let pool = pool(vfs);
+
     let _ = pool
         .get_o_file_for_s3_file(pFile)
         .and_then(|file| file.set_lock(eLock));
     SQLITE_OK
 }
 
-#[cfg_attr(target_feature = "atomics", multithread)]
+#[cfg_attr(target_feature = "atomics", multithread_v2("file2vfs(pFile)"))]
 unsafe extern "C" fn xWrite(
     pFile: *mut sqlite3_file,
     zBuf: *const ::std::os::raw::c_void,
     iAmt: ::std::os::raw::c_int,
     iOfst: sqlite3_int64,
 ) -> ::std::os::raw::c_int {
-    let pool = pool();
+    let vfs = file2vfs(pFile);
+    let pool = pool(vfs);
+
     pool.pop_err();
 
     let f = || {
@@ -967,14 +1049,15 @@ unsafe extern "C" fn xWrite(
     }
 }
 
-#[cfg_attr(target_feature = "atomics", multithread)]
+#[cfg_attr(target_feature = "atomics", multithread_v2("pVfs"))]
 unsafe extern "C" fn xAccess(
-    _pVfs: *mut sqlite3_vfs,
+    pVfs: *mut sqlite3_vfs,
     zName: *const ::std::os::raw::c_char,
     _flags: ::std::os::raw::c_int,
     pResOut: *mut ::std::os::raw::c_int,
 ) -> ::std::os::raw::c_int {
-    let pool = pool();
+    let pool = pool(pVfs);
+
     pool.pop_err();
     *pResOut = match pool.get_path(zName) {
         Ok(s) => i32::from(pool.has_filename(&s)),
@@ -983,13 +1066,13 @@ unsafe extern "C" fn xAccess(
     SQLITE_OK
 }
 
-#[cfg_attr(target_feature = "atomics", multithread)]
+#[cfg_attr(target_feature = "atomics", multithread_v2("pVfs"))]
 unsafe extern "C" fn xDelete(
-    _pVfs: *mut sqlite3_vfs,
+    pVfs: *mut sqlite3_vfs,
     zName: *const ::std::os::raw::c_char,
     _syncDir: ::std::os::raw::c_int,
 ) -> ::std::os::raw::c_int {
-    let pool = pool();
+    let pool = pool(pVfs);
     pool.pop_err();
 
     if let Err(e) = pool.get_path(zName).map(|name| pool.delete_path(&name)) {
@@ -1008,13 +1091,13 @@ unsafe extern "C" fn xFullPathname(
     SQLITE_OK
 }
 
-#[cfg_attr(target_feature = "atomics", multithread)]
+#[cfg_attr(target_feature = "atomics", multithread_v2("pVfs"))]
 unsafe extern "C" fn xGetLastError(
-    _pVfs: *mut sqlite3_vfs,
+    pVfs: *mut sqlite3_vfs,
     nOut: ::std::os::raw::c_int,
     zOut: *mut ::std::os::raw::c_char,
 ) -> ::std::os::raw::c_int {
-    let pool = pool();
+    let pool = pool(pVfs);
     if let Some((_, msg)) = pool.pop_err() {
         msg.as_ptr()
             .copy_to(zOut.cast(), msg.len().min(nOut as usize));
@@ -1023,15 +1106,15 @@ unsafe extern "C" fn xGetLastError(
     SQLITE_OK
 }
 
-#[cfg_attr(target_feature = "atomics", multithread)]
+#[cfg_attr(target_feature = "atomics", multithread_v2("pVfs"))]
 unsafe extern "C" fn xOpen(
-    _pVfs: *mut sqlite3_vfs,
+    pVfs: *mut sqlite3_vfs,
     zName: sqlite3_filename,
     pFile: *mut sqlite3_file,
     flags: ::std::os::raw::c_int,
     pOutFlags: *mut ::std::os::raw::c_int,
 ) -> ::std::os::raw::c_int {
-    let pool = pool();
+    let pool = pool(pVfs);
 
     let f = || {
         let name = pool.get_path(zName)?;
@@ -1060,6 +1143,7 @@ unsafe extern "C" fn xOpen(
         )
         .unwrap();
         pool.map_s3_file_to_o_file(pFile, Some(file));
+        (*(pFile.cast::<OpfsFile>())).vfs = pVfs;
 
         (*pFile).pMethods = &IO_METHODS;
         *pOutFlags = flags;
@@ -1094,7 +1178,7 @@ static IO_METHODS: sqlite3_io_methods = sqlite3_io_methods {
     xUnfetch: None,
 };
 
-fn vfs() -> sqlite3_vfs {
+fn vfs(name: *const ::std::os::raw::c_char) -> sqlite3_vfs {
     let default_vfs = unsafe { sqlite3_vfs_find(std::ptr::null()) };
     let xRandomness = unsafe { (*default_vfs).xRandomness };
     let xSleep = unsafe { (*default_vfs).xSleep };
@@ -1103,10 +1187,10 @@ fn vfs() -> sqlite3_vfs {
 
     sqlite3_vfs {
         iVersion: 2,
-        szOsFile: std::mem::size_of::<sqlite3_file>() as i32,
+        szOsFile: std::mem::size_of::<OpfsFile>() as i32,
         mxPathname: HEADER_MAX_PATH_SIZE as i32,
         pNext: std::ptr::null_mut(),
-        zName: c"opfs-sahpool".as_ptr().cast(),
+        zName: name,
         pAppData: std::ptr::null_mut(),
         xOpen: Some(xOpen),
         xDelete: Some(xDelete),
@@ -1128,7 +1212,7 @@ fn vfs() -> sqlite3_vfs {
 }
 
 struct OpfsSAH {
-    pool: FragileComfirmed<OpfsSAHPool>,
+    pool: Arc<FragileComfirmed<OpfsSAHPool>>,
     #[cfg(target_feature = "atomics")]
     tx: tokio::sync::mpsc::UnboundedSender<multithreading::Task>,
 }
@@ -1141,7 +1225,7 @@ impl OpfsSAH {
         >,
     ) -> Self {
         Self {
-            pool: FragileComfirmed::new(pool),
+            pool: Arc::new(FragileComfirmed::new(pool)),
             #[cfg(target_feature = "atomics")]
             tx,
         }
@@ -1161,49 +1245,70 @@ pub async fn install_opfs_sahpool(
     options: Option<&OpfsSAHPoolCfg>,
     default_vfs: bool,
 ) -> Result<OpfsSAHPoolUtil, OpfsSAHError> {
+    let default_options = OpfsSAHPoolCfg::default();
+    let options = options.unwrap_or(&default_options);
+    let vfs_name = &options.vfs_name;
+
+    #[cfg(not(target_feature = "atomics"))]
+    let create_pool = async {
+        let pool = OpfsSAHPool::new(options).await?;
+        Ok(OpfsSAH::new(pool))
+    };
+
+    #[cfg(target_feature = "atomics")]
+    let create_pool = async {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let pool = OpfsSAHPool::new(options).await?;
+        let sah = OpfsSAH::new(pool, tx);
+
+        wasm_bindgen_futures::spawn_local(async move {
+            while let Some(req) = rx.recv().await {
+                req.run();
+            }
+        });
+
+        Ok(sah)
+    };
+
     let register_vfs = || {
-        let vfs = Box::leak(Box::new(vfs()));
+        let name =
+            CString::new(vfs_name.clone()).map_err(|e| OpfsSAHError::Custom(format!("{e:?}")))?;
+        let vfs = Box::leak(Box::new(vfs(name.into_raw())));
+
         let ret = unsafe { sqlite3_vfs_register(vfs, i32::from(default_vfs)) };
         if ret != SQLITE_OK {
             unsafe {
                 drop(Box::from_raw(vfs));
             }
-            return Err(OpfsSAHError::Custom(
-                "register opfs-sahpool vfs failed".into(),
-            ));
+            return Err(OpfsSAHError::Custom(format!(
+                "register {vfs_name} vfs failed",
+            )));
         }
-        Ok(())
+
+        Ok(vfs as *mut sqlite3_vfs)
     };
 
-    #[cfg(target_feature = "atomics")]
-    let opfs_sah = OPFS_SAH
-        .get_or_try_init(|| async {
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-            let opfs_sah = OpfsSAH::new(OpfsSAHPool::new(options).await?, tx);
-            register_vfs()?;
-
-            wasm_bindgen_futures::spawn_local(async move {
-                while let Some(req) = rx.recv().await {
-                    req.run();
-                }
-            });
-
-            Ok(opfs_sah)
-        })
-        .await?;
-
-    #[cfg(not(target_feature = "atomics"))]
-    let opfs_sah = OPFS_SAH
-        .get_or_try_init(|| async {
-            let pool = OpfsSAHPool::new(options).await?;
-            register_vfs()?;
-            Ok(OpfsSAH::new(pool))
-        })
-        .await?;
-
-    let util = OpfsSAHPoolUtil {
-        pool: &opfs_sah.pool,
+    let mut name2vfs = CONTROL.name2vfs.lock();
+    let pool = if let Some(vfs) = name2vfs.get(vfs_name) {
+        CONTROL.vfs2sah.read().get(vfs).unwrap().pool.clone()
+    } else {
+        let opfs_sah = create_pool.await?;
+        let vfs = register_vfs()?;
+        name2vfs.insert(vfs_name.clone(), vfs as usize);
+        CONTROL
+            .vfs2sah
+            .write()
+            .insert(vfs as usize, Arc::new(opfs_sah));
+        CONTROL
+            .vfs2sah
+            .read()
+            .get(&(vfs as usize))
+            .unwrap()
+            .pool
+            .clone()
     };
+
+    let util = OpfsSAHPoolUtil { pool };
 
     Ok(util)
 }

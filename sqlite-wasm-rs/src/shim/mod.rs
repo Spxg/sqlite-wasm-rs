@@ -19,7 +19,7 @@ pub mod export {
     // Some sqlite types copied from libsqlite3-sys
     pub use super::libsqlite3::*;
     pub use super::vfs::sahpool::{
-        install_opfs_sahpool, OpfsSAHError, OpfsSAHPoolCfg, OpfsSAHPoolUtil,
+        install_opfs_sahpool, OpfsSAHError, OpfsSAHPoolCfg, OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil,
     };
 
     #[cfg(feature = "custom-libc")]

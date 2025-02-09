@@ -112,7 +112,9 @@ fn parse_fn(path: &str) -> Vec<Signature> {
                     let nested = x
                         .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
                         .unwrap();
-                    nested.iter().any(|x| x.path().is_ident("multithread"))
+                    nested.iter().any(|x| {
+                        x.path().is_ident("multithread") || x.path().is_ident("multithread_v2")
+                    })
                 }
             }) {
                 result.push(f.sig);
