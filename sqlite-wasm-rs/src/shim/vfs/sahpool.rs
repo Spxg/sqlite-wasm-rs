@@ -76,7 +76,7 @@ const PERSISTENT_FILE_TYPES: i32 =
     SQLITE_OPEN_MAIN_DB | SQLITE_OPEN_MAIN_JOURNAL | SQLITE_OPEN_SUPER_JOURNAL | SQLITE_OPEN_WAL;
 
 struct Control {
-    name2vfs: Mutex<HashMap<String, usize>>,
+    name2vfs: Mutex<HashMap<String, Arc<OpfsSAH>>>,
     vfs2sah: RwLock<HashMap<usize, Arc<OpfsSAH>>>,
 }
 
@@ -105,113 +105,6 @@ unsafe fn file2vfs(file: *mut sqlite3_file) -> *mut sqlite3_vfs {
     (*(file.cast::<OpfsFile>())).vfs
 }
 
-#[repr(C)]
-struct OpfsFile {
-    io_methods: sqlite3_file,
-    vfs: *mut sqlite3_vfs,
-}
-
-/// Build `OpfsSAHPoolCfg`
-pub struct OpfsSAHPoolCfgBuilder(OpfsSAHPoolCfg);
-
-impl OpfsSAHPoolCfgBuilder {
-    pub fn new() -> Self {
-        Self(OpfsSAHPoolCfg::default())
-    }
-
-    /// The SQLite VFS name under which this pool's VFS is registered.
-    pub fn vfs_name(mut self, name: &str) -> Self {
-        self.0.vfs_name = name.into();
-        self
-    }
-
-    /// Specifies the OPFS directory name in which to store metadata for the `vfs_name`
-    pub fn directory(mut self, directory: &str) -> Self {
-        self.0.directory = directory.into();
-        self
-    }
-
-    /// If truthy, contents and filename mapping are removed from each SAH
-    /// as it is acquired during initalization of the VFS, leaving the VFS's
-    /// storage in a pristine state. Use this only for databases which need not
-    /// survive a page reload.
-    pub fn clear_on_init(mut self, set: bool) -> Self {
-        self.0.clear_on_init = set;
-        self
-    }
-
-    /// Specifies the default capacity of the VFS, i.e. the number of files
-    /// it may contain.
-    pub fn initial_capacity(mut self, cap: u32) -> Self {
-        self.0.initial_capacity = cap;
-        self
-    }
-
-    /// Build OpfsSAHPoolCfg
-    pub fn build(self) -> OpfsSAHPoolCfg {
-        self.0
-    }
-}
-
-/// `OpfsSAHPool` options
-pub struct OpfsSAHPoolCfg {
-    /// The SQLite VFS name under which this pool's VFS is registered.
-    pub vfs_name: String,
-    /// Specifies the OPFS directory name in which to store metadata for the `vfs_name`
-    pub directory: String,
-    /// If truthy, contents and filename mapping are removed from each SAH
-    /// as it is acquired during initalization of the VFS, leaving the VFS's
-    /// storage in a pristine state. Use this only for databases which need not
-    /// survive a page reload.
-    pub clear_on_init: bool,
-    /// Specifies the default capacity of the VFS, i.e. the number of files
-    /// it may contain.
-    pub initial_capacity: u32,
-}
-
-impl Default for OpfsSAHPoolCfg {
-    fn default() -> Self {
-        Self {
-            vfs_name: "opfs-sahpool".into(),
-            directory: ".opfs-sahpool".into(),
-            clear_on_init: false,
-            initial_capacity: 6,
-        }
-    }
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum OpfsSAHError {
-    #[error("this vfs is only available in workers")]
-    NotSuported,
-    #[error("get directory handle error")]
-    GetDirHandle(JsValue),
-    #[error("get file handle error")]
-    GetFileHandle(JsValue),
-    #[error("create sync access handle error")]
-    CreateSyncAccessHandle(JsValue),
-    #[error("iterate handle error")]
-    IterHandle(JsValue),
-    #[error("get path error")]
-    GetPath(JsValue),
-    #[error("remove entity error")]
-    RemoveEntity(JsValue),
-    #[error("get size error")]
-    GetSize(JsValue),
-    #[error("sah read error")]
-    Read(JsValue),
-    #[error("sah write error")]
-    Write(JsValue),
-    #[error("sah flush error")]
-    Flush(JsValue),
-    #[error("sah truncate error")]
-    Truncate(JsValue),
-    #[error("reflect error")]
-    Reflect(JsValue),
-    #[error("custom error")]
-    Custom(String),
-}
-
 // this function only return [0, 0] for now
 //
 // https://github.com/sqlite/sqlite-wasm/issues/97
@@ -225,6 +118,12 @@ fn compute_digest(_byte_array: &Uint8Array) -> Uint32Array {
 fn get_random_name() -> String {
     let random = Number::from(Math::random()).to_string(36).unwrap();
     random.slice(2, random.length()).as_string().unwrap()
+}
+
+#[repr(C)]
+struct OpfsFile {
+    io_methods: sqlite3_file,
+    vfs: *mut sqlite3_vfs,
 }
 
 struct FileObject {
@@ -766,82 +665,6 @@ impl OpfsSAHPool {
     }
 }
 
-/// A OpfsSAHPoolUtil instance is exposed to clients in order to
-/// manipulate an OpfsSAHPool object without directly exposing that
-/// object and allowing for some semantic changes compared to that
-/// class.
-pub struct OpfsSAHPoolUtil {
-    pool: Arc<FragileComfirmed<OpfsSAHPool>>,
-}
-
-impl OpfsSAHPoolUtil {
-    /// Adds n entries to the current pool.
-    pub async fn add_capacity(&self, n: u32) -> Result<u32, OpfsSAHError> {
-        self.pool.add_capacity(n).await
-    }
-
-    /// Removes up to n entries from the pool, with the caveat that
-    /// it can only remove currently-unused entries.
-    pub async fn reduce_capacity(&self, n: u32) -> Result<u32, OpfsSAHError> {
-        self.pool.reduce_capacity(n).await
-    }
-
-    /// Returns the number of files currently contained in the SAH pool.
-    pub fn get_capacity(&self) -> u32 {
-        self.pool.get_capacity()
-    }
-
-    /// Returns the number of files from the pool currently allocated to VFS slots.
-    pub fn get_file_count(&self) -> u32 {
-        self.pool.get_file_count()
-    }
-
-    /// Returns an array of the names of the files currently allocated to VFS slots.
-    pub fn get_file_names(&self) -> Vec<String> {
-        self.pool.get_file_names()
-    }
-
-    /// Removes up to n entries from the pool, with the caveat that it can only
-    /// remove currently-unused entries.
-    pub async fn reserve_minimum_capacity(&self, min: u32) -> Result<(), OpfsSAHError> {
-        let now = self.pool.get_capacity();
-        if min > now {
-            self.pool.add_capacity(min - now).await?;
-        }
-        Ok(())
-    }
-
-    /// If a virtual file exists with the given name, disassociates it
-    /// from the pool and returns true, else returns false without side effects.
-    pub fn unlink(&self, name: &str) -> Result<bool, OpfsSAHError> {
-        self.pool.delete_path(name)
-    }
-
-    /// Synchronously reads the contents of the given file into a Uint8Array and returns it.
-    pub fn export_file(&self, name: &str) -> Result<Vec<u8>, OpfsSAHError> {
-        self.pool.export_file(name)
-    }
-
-    /// Imports the contents of an SQLite database, provided as a byte array or ArrayBuffer,
-    /// under the given name, overwriting any existing content.
-    ///
-    /// path must start with '/'
-    pub fn import_db(&self, path: &str, bytes: &[u8]) -> Result<(), OpfsSAHError> {
-        if !path.starts_with('/') {
-            return Err(OpfsSAHError::Custom("path must start with '/'".into()));
-        }
-        self.pool.import_db(path, bytes)
-    }
-
-    /// Clears all client-defined state of all SAHs and makes all of them available
-    /// for re-use by the pool.
-    pub async fn wipe_files(&self) -> Result<(), OpfsSAHError> {
-        self.pool.release_access_handles();
-        self.pool.acquire_access_handles(true).await?;
-        Ok(())
-    }
-}
-
 #[cfg_attr(target_feature = "atomics", multithread_v2("file2vfs(pFile)"))]
 unsafe extern "C" fn xCheckReservedLock(
     pFile: *mut sqlite3_file,
@@ -1239,6 +1062,183 @@ impl OpfsSAH {
     }
 }
 
+/// Build `OpfsSAHPoolCfg`
+pub struct OpfsSAHPoolCfgBuilder(OpfsSAHPoolCfg);
+
+impl OpfsSAHPoolCfgBuilder {
+    pub fn new() -> Self {
+        Self(OpfsSAHPoolCfg::default())
+    }
+
+    /// The SQLite VFS name under which this pool's VFS is registered.
+    pub fn vfs_name(mut self, name: &str) -> Self {
+        self.0.vfs_name = name.into();
+        self
+    }
+
+    /// Specifies the OPFS directory name in which to store metadata for the `vfs_name`
+    pub fn directory(mut self, directory: &str) -> Self {
+        self.0.directory = directory.into();
+        self
+    }
+
+    /// If truthy, contents and filename mapping are removed from each SAH
+    /// as it is acquired during initalization of the VFS, leaving the VFS's
+    /// storage in a pristine state. Use this only for databases which need not
+    /// survive a page reload.
+    pub fn clear_on_init(mut self, set: bool) -> Self {
+        self.0.clear_on_init = set;
+        self
+    }
+
+    /// Specifies the default capacity of the VFS, i.e. the number of files
+    /// it may contain.
+    pub fn initial_capacity(mut self, cap: u32) -> Self {
+        self.0.initial_capacity = cap;
+        self
+    }
+
+    /// Build OpfsSAHPoolCfg
+    pub fn build(self) -> OpfsSAHPoolCfg {
+        self.0
+    }
+}
+
+/// `OpfsSAHPool` options
+pub struct OpfsSAHPoolCfg {
+    /// The SQLite VFS name under which this pool's VFS is registered.
+    pub vfs_name: String,
+    /// Specifies the OPFS directory name in which to store metadata for the `vfs_name`
+    pub directory: String,
+    /// If truthy, contents and filename mapping are removed from each SAH
+    /// as it is acquired during initalization of the VFS, leaving the VFS's
+    /// storage in a pristine state. Use this only for databases which need not
+    /// survive a page reload.
+    pub clear_on_init: bool,
+    /// Specifies the default capacity of the VFS, i.e. the number of files
+    /// it may contain.
+    pub initial_capacity: u32,
+}
+
+impl Default for OpfsSAHPoolCfg {
+    fn default() -> Self {
+        Self {
+            vfs_name: "opfs-sahpool".into(),
+            directory: ".opfs-sahpool".into(),
+            clear_on_init: false,
+            initial_capacity: 6,
+        }
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum OpfsSAHError {
+    #[error("this vfs is only available in workers")]
+    NotSuported,
+    #[error("get directory handle error")]
+    GetDirHandle(JsValue),
+    #[error("get file handle error")]
+    GetFileHandle(JsValue),
+    #[error("create sync access handle error")]
+    CreateSyncAccessHandle(JsValue),
+    #[error("iterate handle error")]
+    IterHandle(JsValue),
+    #[error("get path error")]
+    GetPath(JsValue),
+    #[error("remove entity error")]
+    RemoveEntity(JsValue),
+    #[error("get size error")]
+    GetSize(JsValue),
+    #[error("sah read error")]
+    Read(JsValue),
+    #[error("sah write error")]
+    Write(JsValue),
+    #[error("sah flush error")]
+    Flush(JsValue),
+    #[error("sah truncate error")]
+    Truncate(JsValue),
+    #[error("reflect error")]
+    Reflect(JsValue),
+    #[error("custom error")]
+    Custom(String),
+}
+
+/// A OpfsSAHPoolUtil instance is exposed to clients in order to
+/// manipulate an OpfsSAHPool object without directly exposing that
+/// object and allowing for some semantic changes compared to that
+/// class.
+pub struct OpfsSAHPoolUtil {
+    pool: Arc<FragileComfirmed<OpfsSAHPool>>,
+}
+
+impl OpfsSAHPoolUtil {
+    /// Adds n entries to the current pool.
+    pub async fn add_capacity(&self, n: u32) -> Result<u32, OpfsSAHError> {
+        self.pool.add_capacity(n).await
+    }
+
+    /// Removes up to n entries from the pool, with the caveat that
+    /// it can only remove currently-unused entries.
+    pub async fn reduce_capacity(&self, n: u32) -> Result<u32, OpfsSAHError> {
+        self.pool.reduce_capacity(n).await
+    }
+
+    /// Returns the number of files currently contained in the SAH pool.
+    pub fn get_capacity(&self) -> u32 {
+        self.pool.get_capacity()
+    }
+
+    /// Returns the number of files from the pool currently allocated to VFS slots.
+    pub fn get_file_count(&self) -> u32 {
+        self.pool.get_file_count()
+    }
+
+    /// Returns an array of the names of the files currently allocated to VFS slots.
+    pub fn get_file_names(&self) -> Vec<String> {
+        self.pool.get_file_names()
+    }
+
+    /// Removes up to n entries from the pool, with the caveat that it can only
+    /// remove currently-unused entries.
+    pub async fn reserve_minimum_capacity(&self, min: u32) -> Result<(), OpfsSAHError> {
+        let now = self.pool.get_capacity();
+        if min > now {
+            self.pool.add_capacity(min - now).await?;
+        }
+        Ok(())
+    }
+
+    /// If a virtual file exists with the given name, disassociates it
+    /// from the pool and returns true, else returns false without side effects.
+    pub fn unlink(&self, name: &str) -> Result<bool, OpfsSAHError> {
+        self.pool.delete_path(name)
+    }
+
+    /// Synchronously reads the contents of the given file into a Uint8Array and returns it.
+    pub fn export_file(&self, name: &str) -> Result<Vec<u8>, OpfsSAHError> {
+        self.pool.export_file(name)
+    }
+
+    /// Imports the contents of an SQLite database, provided as a byte array or ArrayBuffer,
+    /// under the given name, overwriting any existing content.
+    ///
+    /// path must start with '/'
+    pub fn import_db(&self, path: &str, bytes: &[u8]) -> Result<(), OpfsSAHError> {
+        if !path.starts_with('/') {
+            return Err(OpfsSAHError::Custom("path must start with '/'".into()));
+        }
+        self.pool.import_db(path, bytes)
+    }
+
+    /// Clears all client-defined state of all SAHs and makes all of them available
+    /// for re-use by the pool.
+    pub async fn wipe_files(&self) -> Result<(), OpfsSAHError> {
+        self.pool.release_access_handles();
+        self.pool.acquire_access_handles(true).await?;
+        Ok(())
+    }
+}
+
 /// Register `opfs-sahpool` vfs and return a utility object which can be used
 /// to perform basic administration of the file pool
 pub async fn install_opfs_sahpool(
@@ -1289,23 +1289,17 @@ pub async fn install_opfs_sahpool(
     };
 
     let mut name2vfs = CONTROL.name2vfs.lock();
-    let pool = if let Some(vfs) = name2vfs.get(vfs_name) {
-        CONTROL.vfs2sah.read().get(vfs).unwrap().pool.clone()
+    let pool = if let Some(sah) = name2vfs.get(vfs_name) {
+        sah.pool.clone()
     } else {
-        let opfs_sah = create_pool.await?;
+        let opfs_sah = Arc::new(create_pool.await?);
         let vfs = register_vfs()?;
-        name2vfs.insert(vfs_name.clone(), vfs as usize);
+        name2vfs.insert(vfs_name.clone(), Arc::clone(&opfs_sah));
         CONTROL
             .vfs2sah
             .write()
-            .insert(vfs as usize, Arc::new(opfs_sah));
-        CONTROL
-            .vfs2sah
-            .read()
-            .get(&(vfs as usize))
-            .unwrap()
-            .pool
-            .clone()
+            .insert(vfs as usize, Arc::clone(&opfs_sah));
+        Arc::clone(&opfs_sah.pool)
     };
 
     let util = OpfsSAHPoolUtil { pool };
