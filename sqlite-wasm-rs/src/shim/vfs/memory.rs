@@ -75,7 +75,6 @@ fn name2file() -> MutexGuard<'static, HashMap<String, Arc<RwLock<MemFile>>>> {
 }
 
 /// An open file
-#[repr(C)]
 struct MemFile {
     // filename
     name: String,
