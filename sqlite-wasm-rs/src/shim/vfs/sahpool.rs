@@ -9,6 +9,7 @@ use crate::locker::Mutex;
 use js_sys::{
     Array, DataView, IteratorNext, Map, Math, Number, Object, Reflect, Set, Uint32Array, Uint8Array,
 };
+use once_cell::sync::Lazy;
 use std::ffi::CString;
 use std::sync::Arc;
 use std::{collections::HashMap, ffi::CStr};
@@ -60,7 +61,7 @@ mod multithreading {
 
 #[cfg(target_feature = "atomics")]
 fn get_handle(vfs: *mut sqlite3_vfs) -> Arc<OpfsSAH> {
-    CONTROL.vfs2sah.read().get(&(vfs as usize)).unwrap().clone()
+    VFS2SAH.read().get(&(vfs as usize)).unwrap().clone()
 }
 
 const SECTOR_SIZE: usize = 4096;
@@ -75,24 +76,11 @@ const HEADER_OFFSET_DATA: usize = SECTOR_SIZE;
 const PERSISTENT_FILE_TYPES: i32 =
     SQLITE_OPEN_MAIN_DB | SQLITE_OPEN_MAIN_JOURNAL | SQLITE_OPEN_SUPER_JOURNAL | SQLITE_OPEN_WAL;
 
-struct Control {
-    name2vfs: Mutex<HashMap<String, Arc<OpfsSAH>>>,
-    vfs2sah: RwLock<HashMap<usize, Arc<OpfsSAH>>>,
-}
-
-static CONTROL: once_cell::sync::Lazy<Control> = once_cell::sync::Lazy::new(|| Control {
-    name2vfs: Mutex::new(HashMap::new()),
-    vfs2sah: RwLock::new(HashMap::new()),
-});
+static VFS2SAH: Lazy<RwLock<HashMap<usize, Arc<OpfsSAH>>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
 
 fn pool(vfs: *mut sqlite3_vfs) -> Arc<FragileComfirmed<OpfsSAHPool>> {
-    CONTROL
-        .vfs2sah
-        .read()
-        .get(&(vfs as usize))
-        .unwrap()
-        .pool
-        .clone()
+    VFS2SAH.read().get(&(vfs as usize)).unwrap().pool.clone()
 }
 
 fn read_write_options(at: f64) -> FileSystemReadWriteOptions {
@@ -1104,6 +1092,12 @@ impl OpfsSAHPoolCfgBuilder {
     }
 }
 
+impl Default for OpfsSAHPoolCfgBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// `OpfsSAHPool` options
 pub struct OpfsSAHPoolCfg {
     /// The SQLite VFS name under which this pool's VFS is registered.
@@ -1288,17 +1282,18 @@ pub async fn install_opfs_sahpool(
         Ok(vfs as *mut sqlite3_vfs)
     };
 
-    let mut name2vfs = CONTROL.name2vfs.lock();
+    static NAME2VFS: Lazy<tokio::sync::Mutex<HashMap<String, Arc<OpfsSAH>>>> =
+        Lazy::new(|| tokio::sync::Mutex::new(HashMap::new()));
+
+    let mut name2vfs = NAME2VFS.lock().await;
+
     let pool = if let Some(sah) = name2vfs.get(vfs_name) {
-        sah.pool.clone()
+        Arc::clone(&sah.pool)
     } else {
         let opfs_sah = Arc::new(create_pool.await?);
         let vfs = register_vfs()?;
         name2vfs.insert(vfs_name.clone(), Arc::clone(&opfs_sah));
-        CONTROL
-            .vfs2sah
-            .write()
-            .insert(vfs as usize, Arc::clone(&opfs_sah));
+        VFS2SAH.write().insert(vfs as usize, Arc::clone(&opfs_sah));
         Arc::clone(&opfs_sah.pool)
     };
 
