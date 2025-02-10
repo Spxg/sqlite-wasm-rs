@@ -76,7 +76,7 @@ Wrap the official [`sqlite-wasm`](https://github.com/sqlite/sqlite-wasm), and ex
 
 ## Use external libc (shim only)
 
-As mentioned below, sqlite is now directly linked to emscripten's libc. But we provide the ability to customize libc.
+As mentioned above, sqlite is now directly linked to emscripten's libc. But we provide the ability to customize libc.
 
 Cargo provides a [`links`](https://doc.rust-lang.org/cargo/reference/manifest.html#the-links-field) field that can be used to specify which library to link to.
 
