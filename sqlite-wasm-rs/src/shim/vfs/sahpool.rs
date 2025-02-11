@@ -887,7 +887,10 @@ unsafe extern "C" fn xGetLastError(
     zOut: *mut ::std::os::raw::c_char,
 ) -> ::std::os::raw::c_int {
     let pool = pool(pVfs);
-    if let Some((_, msg)) = pool.pop_err() {
+    let Some((code, msg)) = pool.pop_err() else {
+        return SQLITE_OK;
+    };
+    if !zOut.is_null() {
         let count = msg.len().min(nOut as usize);
         msg.as_ptr().copy_to(zOut.cast(), count);
         let zero = match count.cmp(&msg.len()) {
@@ -898,7 +901,7 @@ unsafe extern "C" fn xGetLastError(
             std::ptr::write(zOut.add(zero - 1), 0);
         }
     }
-    SQLITE_OK
+    code
 }
 
 #[cfg_attr(target_feature = "atomics", multithread_v2("pVfs"))]
