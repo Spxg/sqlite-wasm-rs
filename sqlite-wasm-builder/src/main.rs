@@ -26,36 +26,41 @@ impl ParseCallbacks for SqliteTypeChooser {
     }
 }
 
+static COMMON: [&str; 8] = [
+    // wasm is single-threaded
+    "-DSQLITE_THREADSAFE=0",
+    "-DSQLITE_TEMP_STORE=2",
+    "-DSQLITE_OS_OTHER",
+    "-DSQLITE_ENABLE_MATH_FUNCTIONS",
+    "-DSQLITE_USE_URI=1",
+    "-DSQLITE_OMIT_DEPRECATED",
+    // there is no dlopen on this platform.
+    "-DSQLITE_OMIT_LOAD_EXTENSION",
+    // -DSQLITE_THREADSAFE=0
+    "-DSQLITE_OMIT_SHARED_CACHE",
+];
+
+static FULL_FEATURED: [&str; 12] = [
+    "-DSQLITE_ENABLE_BYTECODE_VTAB",
+    "-DSQLITE_ENABLE_DBPAGE_VTAB",
+    "-DSQLITE_ENABLE_DBSTAT_VTAB",
+    "-DSQLITE_ENABLE_FTS5",
+    "-DSQLITE_ENABLE_MATH_FUNCTIONS",
+    "-DSQLITE_ENABLE_OFFSET_SQL_FUNC",
+    "-DSQLITE_ENABLE_PREUPDATE_HOOK",
+    "-DSQLITE_ENABLE_RTREE",
+    "-DSQLITE_ENABLE_SESSION",
+    "-DSQLITE_ENABLE_STMTVTAB",
+    "-DSQLITE_ENABLE_UNKNOWN_SQL_FUNCTION",
+    "-DSQLITE_ENABLE_COLUMN_METADATA",
+];
+
 fn main() {
-    let common = [
-        // wasm is single-threaded
-        "-DSQLITE_THREADSAFE=0",
-        "-DSQLITE_TEMP_STORE=2",
-        "-DSQLITE_OS_OTHER",
-        "-DSQLITE_ENABLE_MATH_FUNCTIONS",
-        "-DSQLITE_USE_URI=1",
-        "-DSQLITE_OMIT_DEPRECATED",
-        // there is no dlopen on this platform.
-        "-DSQLITE_OMIT_LOAD_EXTENSION",
-        // -DSQLITE_THREADSAFE=0
-        "-DSQLITE_OMIT_SHARED_CACHE",
-    ];
+    bindgen();
+    compile();
+}
 
-    let full_featured = [
-        "-DSQLITE_ENABLE_BYTECODE_VTAB",
-        "-DSQLITE_ENABLE_DBPAGE_VTAB",
-        "-DSQLITE_ENABLE_DBSTAT_VTAB",
-        "-DSQLITE_ENABLE_FTS5",
-        "-DSQLITE_ENABLE_MATH_FUNCTIONS",
-        "-DSQLITE_ENABLE_OFFSET_SQL_FUNC",
-        "-DSQLITE_ENABLE_PREUPDATE_HOOK",
-        "-DSQLITE_ENABLE_RTREE",
-        "-DSQLITE_ENABLE_SESSION",
-        "-DSQLITE_ENABLE_STMTVTAB",
-        "-DSQLITE_ENABLE_UNKNOWN_SQL_FUNCTION",
-        "-DSQLITE_ENABLE_COLUMN_METADATA",
-    ];
-
+fn bindgen() {
     let mut bindings = bindgen::builder()
         .default_macro_constant_type(bindgen::MacroTypeVariation::Signed)
         .disable_nested_struct_naming()
@@ -108,7 +113,7 @@ fn main() {
         .blocklist_function("sqlite3_create_module")
         .blocklist_function("sqlite3_prepare");
 
-    bindings = bindings.clang_args(full_featured);
+    bindings = bindings.clang_args(FULL_FEATURED);
 
     bindings = bindings
         .blocklist_function("sqlite3_vmprintf")
@@ -130,11 +135,13 @@ fn main() {
     bindings
         .write_to_file("../sqlite-wasm-rs/src/shim/libsqlite3/bindings.rs")
         .unwrap();
+}
 
+fn compile() {
     let mut cmd = Command::new("emcc");
 
-    cmd.args(common)
-        .args(full_featured)
+    cmd.args(COMMON)
+        .args(FULL_FEATURED)
         .arg("source/sqlite3.c")
         .arg("source/wasm-shim.c")
         .arg("-o")
@@ -153,8 +160,8 @@ fn main() {
     cmd.status().unwrap();
 
     let mut cmd = Command::new("emcc");
-    cmd.args(common)
-        .args(full_featured)
+    cmd.args(COMMON)
+        .args(FULL_FEATURED)
         .arg("source/sqlite3.c")
         .arg("-o")
         .arg("sqlite3.o")
