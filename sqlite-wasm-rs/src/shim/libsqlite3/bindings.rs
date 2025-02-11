@@ -998,31 +998,6 @@ extern "C" {
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {
-    pub fn sqlite3_trace(
-        arg1: *mut sqlite3,
-        xTrace: ::std::option::Option<
-            unsafe extern "C" fn(
-                arg1: *mut ::std::os::raw::c_void,
-                arg2: *const ::std::os::raw::c_char,
-            ),
-        >,
-        arg2: *mut ::std::os::raw::c_void,
-    ) -> *mut ::std::os::raw::c_void;
-}
-extern "C" {
-    pub fn sqlite3_profile(
-        arg1: *mut sqlite3,
-        xProfile: ::std::option::Option<
-            unsafe extern "C" fn(
-                arg1: *mut ::std::os::raw::c_void,
-                arg2: *const ::std::os::raw::c_char,
-                arg3: sqlite3_uint64,
-            ),
-        >,
-        arg2: *mut ::std::os::raw::c_void,
-    ) -> *mut ::std::os::raw::c_void;
-}
-extern "C" {
     pub fn sqlite3_trace_v2(
         arg1: *mut sqlite3,
         uMask: ::std::os::raw::c_uint,
@@ -1811,20 +1786,6 @@ extern "C" {
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {
-    pub fn sqlite3_load_extension(
-        db: *mut sqlite3,
-        zFile: *const ::std::os::raw::c_char,
-        zProc: *const ::std::os::raw::c_char,
-        pzErrMsg: *mut *mut ::std::os::raw::c_char,
-    ) -> ::std::os::raw::c_int;
-}
-extern "C" {
-    pub fn sqlite3_enable_load_extension(
-        db: *mut sqlite3,
-        onoff: ::std::os::raw::c_int,
-    ) -> ::std::os::raw::c_int;
-}
-extern "C" {
     pub fn sqlite3_reset_auto_extension();
 }
 #[repr(C)]
@@ -2387,18 +2348,6 @@ extern "C" {
 }
 extern "C" {
     pub fn sqlite3_backup_pagecount(p: *mut sqlite3_backup) -> ::std::os::raw::c_int;
-}
-extern "C" {
-    pub fn sqlite3_unlock_notify(
-        pBlocked: *mut sqlite3,
-        xNotify: ::std::option::Option<
-            unsafe extern "C" fn(
-                apArg: *mut *mut ::std::os::raw::c_void,
-                nArg: ::std::os::raw::c_int,
-            ),
-        >,
-        pNotifyArg: *mut ::std::os::raw::c_void,
-    ) -> ::std::os::raw::c_int;
 }
 extern "C" {
     pub fn sqlite3_stricmp(
@@ -3519,3 +3468,4 @@ pub struct fts5_api {
         ) -> ::std::os::raw::c_int,
     >,
 }
+

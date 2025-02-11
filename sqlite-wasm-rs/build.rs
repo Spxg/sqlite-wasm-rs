@@ -11,8 +11,8 @@ fn main() {
         println!("cargo::rerun-if-changed=src/shim/vfs/sahpool.rs");
         multithread_codegen("src/shim/vfs/sahpool.rs", "shim_multi_sahpool.rs");
 
-        println!("cargo::rerun-if-changed=src/source");
-        let path = std::env::current_dir().unwrap().join("source");
+        println!("cargo::rerun-if-changed=src/library");
+        let path = std::env::current_dir().unwrap().join("library");
         let lib_path = path.to_str().unwrap();
 
         println!("cargo:rustc-link-search=native={lib_path}");
