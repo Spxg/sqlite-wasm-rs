@@ -239,7 +239,9 @@ unsafe extern "C" fn xTruncate(
     let Some(file) = file2file().get(&(pFile as usize)).cloned() else {
         return SQLITE_ERROR;
     };
-    file.write().data.truncate(size as usize);
+    let mut file = file.write();
+    let now = file.data.len();
+    file.data.truncate(now.min(size as usize));
     SQLITE_OK
 }
 
