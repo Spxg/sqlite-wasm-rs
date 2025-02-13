@@ -47,6 +47,7 @@ default = ["shim"]
 shim = ["web-sys", "thiserror"]
 wrapper = ["serde", "serde-wasm-bindgen"]
 custom-libc = ["sqlite-wasm-libc"]
+bundled = []
 
 [target.'cfg(target_feature = "atomics")'.dependencies]
 parking_lot = "0.12.3"
@@ -55,10 +56,8 @@ parking_lot = "0.12.3"
 wasm-bindgen-test = "0.3.49"
 
 [build-dependencies]
-proc-macro2 = "1.0.92"
-quote = "1.0.38"
-syn = "2.0.92"
-prettyplease = "0.2.29"
+bindgen = "0.71"
+xshell = "0.2.7"
 
 [package.metadata.docs.rs]
 targets = ["wasm32-unknown-unknown"]

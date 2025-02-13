@@ -1,6 +1,10 @@
-//! This module is copied from libsqlite-sys for compatibility
-//! with various ORM libraries, such as `diesel`
+//! This module is codegen from build.rs
 
+#[cfg(feature = "bundled")]
+mod bindings {
+    include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+}
+#[cfg(not(feature = "bundled"))]
 mod bindings;
 mod error;
 
