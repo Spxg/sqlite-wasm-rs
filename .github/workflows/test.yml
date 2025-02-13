@@ -1,0 +1,23 @@
+name: Test
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install wasm-pack
+      run: cargo install wasm-pack
+    - name: Run shim
+      run: |
+        cd sqlite-wasm-rs
+        wasm-pack test --chrome --headless
+    - name: Run wrapper
+      run: |
+        cd sqlite-wasm-rs
+        wasm-pack test --chrome --headless --no-default-features --features wrapper
