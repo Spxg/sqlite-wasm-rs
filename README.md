@@ -53,9 +53,12 @@ sqlite-wasm-rs = { version = "0.2", default-features = false, features = ["wrapp
 
 Then see [`Wrapper Usage`](https://github.com/Spxg/sqlite-wasm-rs/blob/bc5285fe6d2f3a4e5eb946f5d0500fa26714f5ab/README.md#usage)
 
-## Multithreading
+## About multithreading
 
-When `target-feature=+atomics` is enabled, `sqlite-wasm-rs` support multithreading, see [`multithread example`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/examples/multithreading).
+This library is not thread-safe:
+
+* `JsValue` is not cross-threaded, see [`Ensure that JsValue isn't considered Send`](https://github.com/rustwasm/wasm-bindgen/pull/955) for details.
+* sqlite is compiled with `-DSQLITE_THREADSAFE=0`
 
 ## Shim VS Wrapper
 

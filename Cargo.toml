@@ -2,10 +2,8 @@
 resolver = "2"
 members = [
   "sqlite-wasm-rs",
-  "sqlite-wasm-macro",
   "sqlite-wasm-libc",
 
   "sqlite-wasm-builder",
-  "examples/multithreading",
   "examples/custom-libc"
 ]

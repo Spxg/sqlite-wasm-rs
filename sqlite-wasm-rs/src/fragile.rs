@@ -20,12 +20,6 @@ impl<T> FragileComfirmed<T> {
             fragile: Fragile::new(t),
         }
     }
-
-    #[allow(unused)]
-    #[cfg(target_feature = "atomics")]
-    pub fn main_thread(&self) -> bool {
-        self.fragile.try_get().is_ok()
-    }
 }
 
 impl<T> Deref for FragileComfirmed<T> {
