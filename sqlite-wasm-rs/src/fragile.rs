@@ -21,6 +21,7 @@ impl<T> FragileComfirmed<T> {
         }
     }
 
+    #[allow(unused)]
     #[cfg(target_feature = "atomics")]
     pub fn main_thread(&self) -> bool {
         self.fragile.try_get().is_ok()

@@ -21,49 +21,6 @@ use web_sys::{
     WorkerGlobalScope,
 };
 
-#[cfg(target_feature = "atomics")]
-use sqlite_wasm_macro::multithread_v2;
-
-#[cfg(target_feature = "atomics")]
-use multithreading::{call, CApiReq, CApiResp};
-
-/// Wrap some multithreading calls
-#[cfg(target_feature = "atomics")]
-mod multithreading {
-    use super::*;
-    use std::sync::mpsc::Sender;
-
-    include!(concat!(env!("OUT_DIR"), "/shim_multi_sahpool.rs"));
-
-    pub struct Task {
-        req: CApiReq,
-        tx: Sender<CApiResp>,
-    }
-
-    impl Task {
-        /// Called by the main thread and sends the result to the child thread.
-        pub fn run(self) {
-            self.tx
-                .send(self.req.call())
-                .expect("recv channel never disconnect");
-        }
-    }
-
-    /// Send a task to the main thread and wait for it to return synchronously.
-    pub fn call(sah: Arc<OpfsSAH>, req: CApiReq) -> CApiResp {
-        let (tx, rx) = std::sync::mpsc::channel();
-        sah.tx
-            .send(Task { req, tx })
-            .expect("recv channel never disconnect");
-        rx.recv().expect("send channel never disconnect")
-    }
-}
-
-#[cfg(target_feature = "atomics")]
-fn get_handle(vfs: *mut sqlite3_vfs) -> Arc<OpfsSAH> {
-    VFS2SAH.read().get(&(vfs as usize)).unwrap().clone()
-}
-
 const SECTOR_SIZE: usize = 4096;
 const HEADER_MAX_PATH_SIZE: usize = 512;
 const HEADER_FLAGS_SIZE: usize = 4;
@@ -641,7 +598,6 @@ impl OpfsSAHPool {
     }
 }
 
-#[cfg_attr(target_feature = "atomics", multithread_v2("file2vfs(pFile)"))]
 unsafe extern "C" fn xCheckReservedLock(
     pFile: *mut sqlite3_file,
     pResOut: *mut ::std::os::raw::c_int,
@@ -654,7 +610,6 @@ unsafe extern "C" fn xCheckReservedLock(
     SQLITE_OK
 }
 
-#[cfg_attr(target_feature = "atomics", multithread_v2("file2vfs(pFile)"))]
 unsafe extern "C" fn xClose(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
     let vfs = file2vfs(pFile);
     let pool = pool(vfs);
@@ -689,7 +644,6 @@ unsafe extern "C" fn xFileControl(
     SQLITE_NOTFOUND
 }
 
-#[cfg_attr(target_feature = "atomics", multithread_v2("file2vfs(pFile)"))]
 unsafe extern "C" fn xFileSize(
     pFile: *mut sqlite3_file,
     pSize: *mut sqlite3_int64,
@@ -711,7 +665,6 @@ unsafe extern "C" fn xLock(
     SQLITE_OK
 }
 
-#[cfg_attr(target_feature = "atomics", multithread_v2("file2vfs(pFile)"))]
 unsafe extern "C" fn xRead(
     pFile: *mut sqlite3_file,
     zBuf: *mut ::std::os::raw::c_void,
@@ -752,7 +705,6 @@ unsafe extern "C" fn xSectorSize(_pFile: *mut sqlite3_file) -> ::std::os::raw::c
     SECTOR_SIZE as i32
 }
 
-#[cfg_attr(target_feature = "atomics", multithread_v2("file2vfs(pFile)"))]
 unsafe extern "C" fn xSync(
     pFile: *mut sqlite3_file,
     _flags: ::std::os::raw::c_int,
@@ -771,7 +723,6 @@ unsafe extern "C" fn xSync(
     SQLITE_OK
 }
 
-#[cfg_attr(target_feature = "atomics", multithread_v2("file2vfs(pFile)"))]
 unsafe extern "C" fn xTruncate(
     pFile: *mut sqlite3_file,
     size: sqlite3_int64,
@@ -798,7 +749,6 @@ unsafe extern "C" fn xUnlock(
     SQLITE_OK
 }
 
-#[cfg_attr(target_feature = "atomics", multithread_v2("file2vfs(pFile)"))]
 unsafe extern "C" fn xWrite(
     pFile: *mut sqlite3_file,
     zBuf: *const ::std::os::raw::c_void,
@@ -836,7 +786,6 @@ unsafe extern "C" fn xWrite(
     }
 }
 
-#[cfg_attr(target_feature = "atomics", multithread_v2("pVfs"))]
 unsafe extern "C" fn xAccess(
     pVfs: *mut sqlite3_vfs,
     zName: *const ::std::os::raw::c_char,
@@ -854,7 +803,6 @@ unsafe extern "C" fn xAccess(
     SQLITE_OK
 }
 
-#[cfg_attr(target_feature = "atomics", multithread_v2("pVfs"))]
 unsafe extern "C" fn xDelete(
     pVfs: *mut sqlite3_vfs,
     zName: *const ::std::os::raw::c_char,
@@ -880,7 +828,6 @@ unsafe extern "C" fn xFullPathname(
     SQLITE_OK
 }
 
-#[cfg_attr(target_feature = "atomics", multithread_v2("pVfs"))]
 unsafe extern "C" fn xGetLastError(
     pVfs: *mut sqlite3_vfs,
     nOut: ::std::os::raw::c_int,
@@ -904,7 +851,6 @@ unsafe extern "C" fn xGetLastError(
     code
 }
 
-#[cfg_attr(target_feature = "atomics", multithread_v2("pVfs"))]
 unsafe extern "C" fn xOpen(
     pVfs: *mut sqlite3_vfs,
     zName: sqlite3_filename,
@@ -1010,29 +956,13 @@ fn vfs(name: *const ::std::os::raw::c_char) -> sqlite3_vfs {
 
 struct OpfsSAH {
     pool: Arc<FragileComfirmed<OpfsSAHPool>>,
-    #[cfg(target_feature = "atomics")]
-    tx: tokio::sync::mpsc::UnboundedSender<multithreading::Task>,
 }
 
 impl OpfsSAH {
-    fn new(
-        pool: OpfsSAHPool,
-        #[cfg(target_feature = "atomics")] tx: tokio::sync::mpsc::UnboundedSender<
-            multithreading::Task,
-        >,
-    ) -> Self {
+    fn new(pool: OpfsSAHPool) -> Self {
         Self {
             pool: Arc::new(FragileComfirmed::new(pool)),
-            #[cfg(target_feature = "atomics")]
-            tx,
         }
-    }
-
-    /// Determine whether sqlite is called in the thread
-    /// that initialized it
-    #[cfg(target_feature = "atomics")]
-    fn main_thread(&self) -> bool {
-        self.pool.main_thread()
     }
 }
 
@@ -1229,25 +1159,9 @@ pub async fn install_opfs_sahpool(
     let options = options.unwrap_or(&default_options);
     let vfs_name = &options.vfs_name;
 
-    #[cfg(not(target_feature = "atomics"))]
     let create_pool = async {
         let pool = OpfsSAHPool::new(options).await?;
         Ok(OpfsSAH::new(pool))
-    };
-
-    #[cfg(target_feature = "atomics")]
-    let create_pool = async {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let pool = OpfsSAHPool::new(options).await?;
-        let sah = OpfsSAH::new(pool, tx);
-
-        wasm_bindgen_futures::spawn_local(async move {
-            while let Some(req) = rx.recv().await {
-                req.run();
-            }
-        });
-
-        Ok(sah)
     };
 
     let register_vfs = || {
