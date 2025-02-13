@@ -15,12 +15,13 @@ fn main() {
     if !cfg!(feature = "shim") {
         return;
     }
-    println!("cargo::rerun-if-changed=source");
 
     let path = std::env::current_dir().unwrap().join("library");
     let lib_path = path.to_str().unwrap();
 
     if cfg!(feature = "bundled") {
+        println!("cargo::rerun-if-changed=source");
+
         let update_prebuild = std::env::var(UPDATE_LIB_ENV).is_ok();
         let output = std::env::var("OUT_DIR").expect("OUT_DIR env not set");
 
@@ -42,6 +43,8 @@ fn main() {
         }
         static_linking(&output);
     } else {
+        println!("cargo::rerun-if-changed=library");
+
         static_linking(lib_path);
     }
 }
