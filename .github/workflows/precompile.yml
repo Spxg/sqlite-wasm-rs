@@ -1,11 +1,6 @@
-name: Precompile
 on:
-  push:
-    branches: [ "master" ]
-  pull_request:
-    branches: [ "master" ]
-env:
-  CARGO_TERM_COLOR: always
+  workflow_dispatch:
+
 jobs:
   precompile:
     runs-on: ubuntu-latest
