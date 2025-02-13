@@ -7,17 +7,21 @@ on:
 env:
   CARGO_TERM_COLOR: always
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
       run: cargo install wasm-pack
-    - name: Run shim
+    - name: Test shim
       run: |
         cd sqlite-wasm-rs
         wasm-pack test --chrome --headless
-    - name: Run wrapper
+    - name: Test wrapper
       run: |
         cd sqlite-wasm-rs
         wasm-pack test --chrome --headless --no-default-features --features wrapper
+    - name: Test custom-libc
+      run: |
+        cd examples/custom-libc
+        RUSTFLAGS="-L $(pwd)" wasm-pack test --chrome --headless
