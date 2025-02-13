@@ -117,7 +117,10 @@ unsafe extern "C" fn xOpen(
     file2file().insert(pFile as usize, mem_file);
 
     (*pFile).pMethods = &IO_METHODS;
-    *pOutFlags = flags;
+
+    if !pOutFlags.is_null() {
+        *pOutFlags = flags;
+    }
 
     SQLITE_OK
 }

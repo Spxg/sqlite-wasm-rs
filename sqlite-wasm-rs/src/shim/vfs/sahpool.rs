@@ -941,7 +941,9 @@ unsafe extern "C" fn xOpen(
         (*(pFile.cast::<OpfsFile>())).vfs = pVfs;
         (*pFile).pMethods = &IO_METHODS;
 
-        *pOutFlags = flags;
+        if !pOutFlags.is_null() {
+            *pOutFlags = flags;
+        }
 
         Ok::<i32, OpfsSAHError>(SQLITE_OK)
     };
