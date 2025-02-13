@@ -26,7 +26,7 @@ impl ParseCallbacks for SqliteTypeChooser {
     }
 }
 
-static COMMON: [&str; 8] = [
+static COMMON: [&str; 7] = [
     // wasm is single-threaded
     "-DSQLITE_THREADSAFE=0",
     "-DSQLITE_TEMP_STORE=2",
@@ -36,8 +36,6 @@ static COMMON: [&str; 8] = [
     "-DSQLITE_OMIT_DEPRECATED",
     // there is no dlopen on this platform.
     "-DSQLITE_OMIT_LOAD_EXTENSION",
-    // -DSQLITE_THREADSAFE=0
-    "-DSQLITE_OMIT_SHARED_CACHE",
 ];
 
 static FULL_FEATURED: [&str; 12] = [
