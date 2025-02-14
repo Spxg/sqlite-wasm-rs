@@ -8,7 +8,16 @@ Provide sqlite solution for `wasm32-unknown-unknown` target.
 
 ```toml
 [dependencies]
+# using precompiled library
 sqlite-wasm-rs = "0.2"
+```
+
+```toml
+[dependencies]
+# `bundled` causes us to automatically compile and link in an up to date
+#
+# requires the emscripten toolchain
+sqlite-wasm-rs = { version = "0.2", features = ["bundled"] }
 ```
 
 ```rust
@@ -44,7 +53,7 @@ async fn open_db() -> anyhow::Result<()> {
 }
 ```
 
-## Wrapper Usage
+## Wrapper Usage (Deprecated)
 
 ```toml
 [dependencies]
@@ -89,10 +98,26 @@ Then with the help of [`Overriding Build Scripts`](https://doc.rust-lang.org/car
 
 More see [`custom-libc example`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/examples/custom-libc).
 
+## Why provide precompiled library
+
+In the `shim` feature, since `wasm32-unknown-unknown` does not have libc, emscripten is used here for compilation, otherwise we need to copy a bunch of c headers required for sqlite3 compilation, which is a bit of a hack for me. If sqlite3 is compiled at compile time, the emscripten toolchain is required, and we cannot assume that all users have it installed. (Believe me, because rust mainly supports the `wasm32-unknown-unknown` target, most people do not have the emscripten toolchain). Considering that wasm is cross-platform, vendor compilation products are acceptable.
+
+About security issues:
+
+* You can specify the bundled feature to compile sqlite locally, which requires the emscripten toolchain.
+* Currently all precompiled products are compiled and committed through Github Actions, which can be tracked, downloaded and compared.
+
+Precompile workflow: <https://github.com/Spxg/sqlite-wasm-rs/blob/master/.github/workflows/precompile.yml>
+
+Change History: <https://github.com/Spxg/sqlite-wasm-rs/commits/master/sqlite-wasm-rs/library>
+
+Actions: <https://github.com/Spxg/sqlite-wasm-rs/actions?query=event%3Aworkflow_dispatch>
+
 ## Why vendor sqlite-wasm
 
 * sqlite-wasm wrap some codes that are very convenient for JS, but difficult to use for rust.
 * Some sqlite C-API are not exported.
+* Compiling sqlite.wasm requires the entire sqlite source code and the emscripten toolchain, which are expensive to introduce into build.rs, see <https://sqlite.org/wasm/doc/trunk/building.md>
 
 Change history: <https://github.com/Spxg/sqlite>
 
