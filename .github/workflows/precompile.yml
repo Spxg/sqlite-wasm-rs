@@ -15,10 +15,10 @@ jobs:
         ./emsdk install latest
         ./emsdk activate latest
         source ./emsdk_env.sh
-        cd ..
+        cd ../sqlite-wasm-rs
         rustup target add wasm32-unknown-unknown
         SQLITE_WASM_RS_UPDATE_PREBUILD=1 cargo build --target wasm32-unknown-unknown --features bundled
-        rm -rf emsdk
+        rm -rf ../emsdk
     - uses: stefanzweifel/git-auto-commit-action@v5
       with:
         commit_message: Upload precompiled library and bindings [skip ci]
