@@ -2,7 +2,7 @@
 
 use js_sys::Date;
 use wasm_bindgen::JsCast;
-use web_sys::{SharedWorkerGlobalScope, WorkerGlobalScope};
+use web_sys::{ServiceWorkerGlobalScope, SharedWorkerGlobalScope, WorkerGlobalScope};
 
 pub type time_t = std::os::raw::c_longlong;
 
@@ -123,8 +123,10 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_emscripten_get_now() -> std::os::
         worker.performance()
     } else if let Ok(worker) = js_sys::global().dyn_into::<SharedWorkerGlobalScope>() {
         worker.performance()
+    } else if let Ok(worker) = js_sys::global().dyn_into::<ServiceWorkerGlobalScope>() {
+        worker.performance()
     } else {
-        panic!("sqlite not run in main_thread, dedicated worker or shared worker");
+        panic!("sqlite not run in main_thread or web worker");
     }
     .expect("performance should be available");
     performance.now()
