@@ -11,13 +11,13 @@ Provide sqlite solution for `wasm32-unknown-unknown` target.
 # using `bundled` default feature causes us to automatically compile and link in an up to date
 #
 # requires the emscripten toolchain
-sqlite-wasm-rs = "0.2"
+sqlite-wasm-rs = "0.3"
 ```
 
 ```toml
 [dependencies]
 # using precompiled binaries
-sqlite-wasm-rs = { version = "0.2", default-features = false, features = ["precompiled"] }
+sqlite-wasm-rs = { version = "0.3", default-features = false, features = ["precompiled"] }
 ```
 
 ```rust
