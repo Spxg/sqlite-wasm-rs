@@ -5,9 +5,7 @@ use wasm_bindgen_test::{console_log, wasm_bindgen_test};
 
 #[wasm_bindgen_test]
 #[allow(unused)]
-async fn test_commit_hook() {
-    init_sqlite().await.unwrap();
-
+fn test_commit_hook() {
     let mut hook_count = 0;
 
     unsafe extern "C" fn commit_hook(cb_arg: *mut ::std::os::raw::c_void) -> ::std::os::raw::c_int {
@@ -53,9 +51,7 @@ async fn test_commit_hook() {
 
 #[wasm_bindgen_test]
 #[allow(unused)]
-async fn test_progress_handler() {
-    init_sqlite().await.unwrap();
-
+fn test_progress_handler() {
     let mut progress_count = 0;
 
     unsafe extern "C" fn progress_handler(
@@ -101,9 +97,7 @@ async fn test_progress_handler() {
 
 #[wasm_bindgen_test]
 #[allow(unused)]
-async fn test_rollback_hook() {
-    init_sqlite().await.unwrap();
-
+fn test_rollback_hook() {
     let mut rollback_count = 0;
 
     unsafe extern "C" fn rollback_hook(cb_arg: *mut ::std::os::raw::c_void) {
@@ -138,9 +132,7 @@ async fn test_rollback_hook() {
 
 #[wasm_bindgen_test]
 #[allow(unused)]
-async fn test_update_hook() {
-    init_sqlite().await.unwrap();
-
+fn test_update_hook() {
     let mut update_count = 0;
 
     unsafe extern "C" fn update_hook(

@@ -6,9 +6,7 @@ use wasm_bindgen_test::{console_log, wasm_bindgen_test};
 
 #[wasm_bindgen_test]
 #[allow(unused)]
-async fn test_sqlite_prepare_v3_tail() {
-    init_sqlite().await.unwrap();
-
+fn test_sqlite_prepare_v3_tail() {
     let db = memory_db();
 
     let sql = "
@@ -67,9 +65,7 @@ async fn test_sqlite_prepare_v3_tail() {
 
 #[wasm_bindgen_test]
 #[allow(unused)]
-async fn test_exec_errmsg() {
-    init_sqlite().await.unwrap();
-
+fn test_exec_errmsg() {
     let db = memory_db();
     let mut errmsg: *mut ::std::os::raw::c_char = std::ptr::null_mut();
     let sql = cstr("SELECT * FROM non_existent_table");

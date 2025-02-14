@@ -5,8 +5,7 @@ use wasm_bindgen_test::wasm_bindgen_test;
 
 #[wasm_bindgen_test]
 #[allow(unused)]
-async fn test_bind_text64() {
-    init_sqlite().await.unwrap();
+fn test_bind_text64() {
     let db = memory_db();
 
     unsafe {
@@ -58,8 +57,7 @@ async fn test_bind_text64() {
 
 #[wasm_bindgen_test]
 #[allow(unused)]
-async fn test_bind_blob64() {
-    init_sqlite().await.unwrap();
+fn test_bind_blob64() {
     let db = memory_db();
 
     unsafe {

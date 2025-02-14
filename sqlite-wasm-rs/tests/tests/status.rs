@@ -3,8 +3,7 @@ use wasm_bindgen_test::{console_log, wasm_bindgen_test};
 
 #[wasm_bindgen_test]
 #[allow(unused)]
-async fn test_memory_used() {
-    init_sqlite().await.unwrap();
+fn test_memory_used() {
     unsafe {
         let used = sqlite3_memory_used();
         console_log!("memory used: {used}");
@@ -14,8 +13,7 @@ async fn test_memory_used() {
 
 #[wasm_bindgen_test]
 #[allow(unused)]
-async fn test_highwater() {
-    init_sqlite().await.unwrap();
+fn test_highwater() {
     unsafe {
         let highwater = sqlite3_memory_highwater(0);
         console_log!("memory highwater: {highwater}");
@@ -25,8 +23,7 @@ async fn test_highwater() {
 
 #[wasm_bindgen_test]
 #[allow(unused)]
-async fn test_status() {
-    init_sqlite().await.unwrap();
+fn test_status() {
     unsafe {
         let mut used = 0;
         let mut highwater = 0;

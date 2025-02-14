@@ -4,7 +4,7 @@
 
 Provide sqlite solution for `wasm32-unknown-unknown` target.
 
-## Shim Usage
+## Usage
 
 ```toml
 [dependencies]
@@ -53,15 +53,6 @@ async fn open_db() -> anyhow::Result<()> {
 }
 ```
 
-## Wrapper Usage (Deprecated)
-
-```toml
-[dependencies]
-sqlite-wasm-rs = { version = "0.2", default-features = false, features = ["wrapper"] }
-```
-
-Then see [`Wrapper Usage`](https://github.com/Spxg/sqlite-wasm-rs/blob/bc5285fe6d2f3a4e5eb946f5d0500fa26714f5ab/README.md#usage)
-
 ## About multithreading
 
 This library is not thread-safe:
@@ -69,11 +60,7 @@ This library is not thread-safe:
 * `JsValue` is not cross-threaded, see [`Ensure that JsValue isn't considered Send`](https://github.com/rustwasm/wasm-bindgen/pull/955) for details.
 * sqlite is compiled with `-DSQLITE_THREADSAFE=0`
 
-## Shim VS Wrapper
-
-### Shim
-
-Provides the highest performance by linking to sqlite3.
+## About VFS
 
 The following vfs have been implemented:
 
@@ -82,11 +69,7 @@ The following vfs have been implemented:
 
 See <https://github.com/Spxg/sqlite-wasm-rs/blob/master/VFS.md>
 
-### Wrapper
-
-Wrap the official [`sqlite-wasm`](https://github.com/sqlite/sqlite-wasm), and expect to provide a usable C-like API. There are a variety of official persistent VFS implementations to choose from. (memvfs, opfs, opfs-sahpool, kvvfs).
-
-## Use external libc (shim only)
+## Use external libc
 
 As mentioned above, sqlite is now directly linked to emscripten's libc. But we provide the ability to customize libc.
 
@@ -112,14 +95,6 @@ Precompile workflow: <https://github.com/Spxg/sqlite-wasm-rs/blob/master/.github
 Change History: <https://github.com/Spxg/sqlite-wasm-rs/commits/master/sqlite-wasm-rs/library>
 
 Actions: <https://github.com/Spxg/sqlite-wasm-rs/actions?query=event%3Aworkflow_dispatch>
-
-## Why vendor sqlite-wasm
-
-* sqlite-wasm wrap some codes that are very convenient for JS, but difficult to use for rust.
-* Some sqlite C-API are not exported.
-* Compiling sqlite.wasm requires the entire sqlite source code and the emscripten toolchain, which are expensive to introduce into build.rs, see <https://sqlite.org/wasm/doc/trunk/building.md>
-
-Change history: <https://github.com/Spxg/sqlite>
 
 ## Related Project
 

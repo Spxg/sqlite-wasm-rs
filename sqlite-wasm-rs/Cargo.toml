@@ -19,10 +19,8 @@ js-sys = "0.3.76"
 wasm-bindgen = "0.2.99"
 wasm-bindgen-futures = "0.4.49"
 
-thiserror = { version = "2.0.11", optional = true }
-serde = { version = "1.0.216", features = ["derive"], optional = true }
-serde-wasm-bindgen = { version = "0.6.5", optional = true }
-web-sys = { version = "0.3.77", optional = true, features = [
+thiserror = "2.0.11"
+web-sys = { version = "0.3.77", features = [
   "Performance",
   "Window",
   "Navigator",
@@ -44,13 +42,9 @@ sqlite-wasm-libc = { path = "../sqlite-wasm-libc", version = "0.1.0", optional =
 
 [features]
 default = ["bundled"]
-bundled = ["shim"]
-precompiled = ["shim"]
-buildtime-bindgen = ["shim"]
-
-shim = ["web-sys", "thiserror"]
-wrapper = ["serde", "serde-wasm-bindgen"]
-
+bundled = ["xshell"]
+buildtime-bindgen = ["bindgen"]
+precompiled = []
 custom-libc = ["sqlite-wasm-libc"]
 
 [target.'cfg(target_feature = "atomics")'.dependencies]
@@ -60,8 +54,8 @@ parking_lot = "0.12.3"
 wasm-bindgen-test = "0.3.49"
 
 [build-dependencies]
-bindgen = "0.71"
-xshell = "0.2.7"
+bindgen = { version = "0.71", optional = true }
+xshell = { version = "0.2.7", optional = true }
 
 [package.metadata.docs.rs]
 targets = ["wasm32-unknown-unknown"]

@@ -6,8 +6,7 @@ use wasm_bindgen_test::{console_log, wasm_bindgen_test};
 
 #[wasm_bindgen_test]
 #[allow(unused)]
-async fn test_aux() {
-    init_sqlite().await.unwrap();
+fn test_aux() {
     let db = memory_db();
 
     unsafe extern "C" fn free(ptr: *mut ::std::os::raw::c_void) {

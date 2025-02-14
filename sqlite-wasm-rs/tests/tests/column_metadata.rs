@@ -5,8 +5,7 @@ use wasm_bindgen_test::{console_log, wasm_bindgen_test};
 
 #[wasm_bindgen_test]
 #[allow(unused)]
-async fn test_column_metadata() {
-    init_sqlite().await.unwrap();
+fn test_column_metadata() {
     let mut db = memory_db();
 
     let sql = "
@@ -68,8 +67,7 @@ async fn test_column_metadata() {
 
 #[wasm_bindgen_test]
 #[allow(unused)]
-async fn test_table_column_metadata() {
-    init_sqlite().await.unwrap();
+fn test_table_column_metadata() {
     let db = memory_db();
 
     unsafe {

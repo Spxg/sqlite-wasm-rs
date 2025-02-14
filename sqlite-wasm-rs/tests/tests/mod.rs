@@ -3,11 +3,8 @@ mod bind64;
 mod column_metadata;
 mod common;
 mod hook;
-#[cfg(feature = "shim")]
-mod shim_vfs;
 mod status;
-#[cfg(feature = "wrapper")]
-mod wrapper_vfs;
+mod vfs;
 
 use sqlite_wasm_rs::export::*;
 use std::ffi::CString;

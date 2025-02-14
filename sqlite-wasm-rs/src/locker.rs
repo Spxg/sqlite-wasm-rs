@@ -5,8 +5,6 @@
 //!
 //! In multithreading, when atomics is enabled, use parking_lot, it will not cause lock poisoning
 
-#![allow(unused)]
-
 #[cfg(target_feature = "atomics")]
 use parking_lot::{Mutex as Mutex0, RwLock as RwLock0};
 
