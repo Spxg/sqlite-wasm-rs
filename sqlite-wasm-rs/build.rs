@@ -190,9 +190,19 @@ fn bindgen(output: &str) {
 }
 
 fn compile(output: &str, build_all: bool) {
+    #[cfg(target_os = "windows")]
+    const CC: &str = "emcc.bat";
+    #[cfg(target_os = "windows")]
+    const AR: &str = "emar.bat";
+
+    #[cfg(not(target_os = "windows"))]
+    const CC: &str = "emcc";
+    #[cfg(not(target_os = "windows"))]
+    const AR: &str = "emar";
+
     let sh = Shell::new().unwrap();
 
-    if cmd!(sh, "emcc -v").read().is_err() {
+    if cmd!(sh, "{CC} -v").read().is_err() {
         panic!("
 It looks like you don't have the emscripten toolchain: https://emscripten.org/docs/getting_started/downloads.html,
 or use the precompiled binaries via the `default-features = false` and `precompiled` feature flag.
@@ -200,11 +210,11 @@ or use the precompiled binaries via the `default-features = false` and `precompi
     }
 
     if !cfg!(feature = "custom-libc") || build_all {
-        cmd!(sh, "emcc {COMMON...} {FULL_FEATURED...} source/sqlite3.c source/wasm-shim.c -o {output}/sqlite3.o -I source -r -Oz -lc").read().unwrap();
+        cmd!(sh, "{CC} {COMMON...} {FULL_FEATURED...} source/sqlite3.c source/wasm-shim.c -o {output}/sqlite3.o -I source -r -Oz -lc").read().unwrap();
 
         cmd!(
             sh,
-            "emar rcs {output}/libsqlite3linked.a {output}/sqlite3.o"
+            "{AR} rcs {output}/libsqlite3linked.a {output}/sqlite3.o"
         )
         .read()
         .unwrap();
@@ -213,12 +223,12 @@ or use the precompiled binaries via the `default-features = false` and `precompi
     if cfg!(feature = "custom-libc") || build_all {
         cmd!(
             sh,
-            "emcc {COMMON...} {FULL_FEATURED...} source/sqlite3.c -o {output}/sqlite3.o -r -Oz"
+            "{CC} {COMMON...} {FULL_FEATURED...} source/sqlite3.c -o {output}/sqlite3.o -r -Oz"
         )
         .read()
         .unwrap();
 
-        cmd!(sh, "emar rcs {output}/libsqlite3.a {output}/sqlite3.o")
+        cmd!(sh, "{AR} rcs {output}/libsqlite3.a {output}/sqlite3.o")
             .read()
             .unwrap();
     }
