@@ -19,7 +19,7 @@ jobs:
     - name: Test shim
       run: |
         cd sqlite-wasm-rs
-        wasm-pack test --chrome --headless
+        wasm-pack test --chrome --headless --no-default-features --features precompiled
     - name: Test wrapper
       run: |
         cd sqlite-wasm-rs

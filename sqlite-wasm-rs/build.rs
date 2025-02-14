@@ -20,26 +20,33 @@ fn main() {
     let lib_path = path.to_str().unwrap();
 
     if cfg!(feature = "bundled") {
+        println!("cargo::rerun-if-env-changed={UPDATE_LIB_ENV}");
         println!("cargo::rerun-if-changed=source");
 
-        let update_prebuild = std::env::var(UPDATE_LIB_ENV).is_ok();
+        let update_precompiled = std::env::var(UPDATE_LIB_ENV).is_ok();
         let output = std::env::var("OUT_DIR").expect("OUT_DIR env not set");
 
-        bindgen(&output);
-        compile(&output, update_prebuild);
+        if cfg!(feature = "buildtime-bindgen") {
+            bindgen(&output);
+        }
 
-        if update_prebuild {
+        compile(&output, update_precompiled);
+
+        if update_precompiled {
             fs::copy(
                 format!("{output}/libsqlite3linked.a"),
                 "library/libsqlite3linked.a",
             )
             .unwrap();
             fs::copy(format!("{output}/libsqlite3.a"), "library/libsqlite3.a").unwrap();
-            fs::copy(
-                format!("{output}/bindings.rs"),
-                "src/shim/libsqlite3/bindings.rs",
-            )
-            .unwrap();
+
+            if cfg!(feature = "buildtime-bindgen") {
+                fs::copy(
+                    format!("{output}/bindings.rs"),
+                    "src/shim/libsqlite3/bindings.rs",
+                )
+                .unwrap();
+            }
         }
         static_linking(&output);
     } else {
@@ -184,6 +191,13 @@ fn bindgen(output: &str) {
 
 fn compile(output: &str, build_all: bool) {
     let sh = Shell::new().unwrap();
+
+    if cmd!(sh, "emcc -v").read().is_err() {
+        panic!("
+It looks like you don't have the emscripten toolchain: https://emscripten.org/docs/getting_started/downloads.html,
+or use the precompiled binaries via the `default-features = false` and `precompiled` feature flag.
+");
+    }
 
     if !cfg!(feature = "custom-libc") || build_all {
         cmd!(sh, "emcc {COMMON...} {FULL_FEATURED...} source/sqlite3.c source/wasm-shim.c -o {output}/sqlite3.o -I source -r -Oz -lc").read().unwrap();

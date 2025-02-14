@@ -1,10 +1,10 @@
 //! This module is codegen from build.rs
 
-#[cfg(feature = "bundled")]
+#[cfg(feature = "buildtime-bindgen")]
 mod bindings {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
-#[cfg(not(feature = "bundled"))]
+#[cfg(not(feature = "buildtime-bindgen"))]
 mod bindings;
 mod error;
 

@@ -5,7 +5,10 @@ jobs:
   precompile:
     runs-on: ubuntu-latest
     permissions:
+      id-token: write
       contents: write
+      attestations: write
+
     steps:
     - uses: actions/checkout@v4
     - name: Precompile library
@@ -17,7 +20,7 @@ jobs:
         source ./emsdk_env.sh
         cd ../sqlite-wasm-rs
         rustup target add wasm32-unknown-unknown
-        SQLITE_WASM_RS_UPDATE_PREBUILD=1 cargo build --target wasm32-unknown-unknown --features bundled
+        SQLITE_WASM_RS_UPDATE_PREBUILD=1 cargo build --target wasm32-unknown-unknown --features bundled,buildtime-bindgen
         rm -rf ../emsdk
 
     - name: Set commit message
@@ -33,6 +36,9 @@ jobs:
       with:
         commit_message: ${{ steps.commit_message_step.outputs.commit_message }}
 
-    - uses: actions/upload-artifact@v4.6.0
+    - name: Generate artifact attestation
+      uses: actions/attest-build-provenance@v2
       with:
-        path: sqlite-wasm-rs/library
+        subject-path: |
+          sqlite-wasm-rs/library/libsqlite3.a
+          sqlite-wasm-rs/library/libsqlite3linked.a
