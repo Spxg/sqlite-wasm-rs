@@ -7,7 +7,37 @@ on:
 env:
   CARGO_TERM_COLOR: always
 jobs:
-  test:
+  test_bundled:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install wasm-pack
+      run: cargo install wasm-pack
+    - name: Test shim (unix)
+      if: matrix.os != 'windows-latest'
+      run: |
+        git clone https://github.com/emscripten-core/emsdk.git
+        cd emsdk
+        ./emsdk install latest
+        ./emsdk activate latest
+        source ./emsdk_env.sh
+        cd ../sqlite-wasm-rs
+        wasm-pack test --chrome --headless
+    - name: Test shim (windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        git clone https://github.com/emscripten-core/emsdk.git
+        cd emsdk
+        .\emsdk install latest
+        .\emsdk activate latest
+        .\emsdk_env
+        cd ../sqlite-wasm-rs
+        wasm-pack test --chrome --headless
+
+  test_precompiled:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
