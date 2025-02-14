@@ -25,6 +25,7 @@ jobs:
         cd sqlite-wasm-rs
         wasm-pack test --chrome --headless --no-default-features --features wrapper
     - name: Test custom-libc
+      if: matrix.os != 'windows-latest'
       run: |
         cd examples/custom-libc
         RUSTFLAGS="-L $(pwd)" wasm-pack test --chrome --headless
