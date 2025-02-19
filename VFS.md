@@ -1,4 +1,4 @@
-# memory
+# Memory db
 
 Data is stored in memory, this is the default vfs
 
@@ -18,7 +18,29 @@ let ret = unsafe {
 assert_eq!(ffi::SQLITE_OK, ret);
 ```
 
-# opfs-sahpool
+# Built-in memory db
+
+SQLite officially provides a memdb vfs
+
+```rust
+use sqlite_wasm_rs::export as ffi;
+
+let mut db = std::ptr::null_mut();
+let ret = unsafe {
+    ffi::sqlite3_open_v2(
+        // The first character of the name must be "/"
+        // or else the object will be a separate memdb object.
+        c"file:/mem.db?vfs=memdb".as_ptr().cast(),
+        &mut db as *mut _,
+        ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
+        std::ptr::null()
+    )
+};
+assert_eq!(ffi::SQLITE_OK, ret);
+
+```
+
+# Opfs-sahpool
 
 Persistent vfs, ported from sqlite-wasm, see <https://sqlite.org/wasm/doc/trunk/persistence.md#vfs-opfs-sahpool> for details
 
