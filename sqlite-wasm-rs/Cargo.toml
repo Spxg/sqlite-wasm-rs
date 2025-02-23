@@ -58,4 +58,6 @@ bindgen = { version = "0.71", optional = true }
 xshell = { version = "0.2.7", optional = true }
 
 [package.metadata.docs.rs]
+no-default-features = true
+features = ["precompiled"]
 targets = ["wasm32-unknown-unknown"]
