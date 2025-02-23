@@ -28,7 +28,7 @@ jobs:
       run: |
         WORKFLOW_URL="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
         echo 'commit_message<<EOF' >> $GITHUB_OUTPUT
-        echo 'Upload precompiled library and bindings [skip ci]' >> $GITHUB_OUTPUT
+        echo 'Upload precompiled library and bindings' >> $GITHUB_OUTPUT
         echo $WORKFLOW_URL >> $GITHUB_OUTPUT
         echo 'EOF' >> $GITHUB_OUTPUT
 
