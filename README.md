@@ -8,15 +8,14 @@ Provide sqlite solution for `wasm32-unknown-unknown` target.
 
 ```toml
 [dependencies]
-# using `bundled` default feature causes us to automatically compile and link in an up to date
-#
-# requires the emscripten toolchain
+# Using `bundled` default feature causes us to automatically compile
+# and link in an up to date, requires the emscripten toolchain
 sqlite-wasm-rs = "0.3"
 ```
 
 ```toml
 [dependencies]
-# using precompiled binaries
+# If you don't have the emscripten toolchain, you can use the `precompiled` feature
 sqlite-wasm-rs = { version = "0.3", default-features = false, features = ["precompiled"] }
 ```
 
@@ -53,13 +52,6 @@ async fn open_db() -> anyhow::Result<()> {
 }
 ```
 
-## About multithreading
-
-This library is not thread-safe:
-
-* `JsValue` is not cross-threaded, see [`Ensure that JsValue isn't considered Send`](https://github.com/rustwasm/wasm-bindgen/pull/955) for details.
-* sqlite is compiled with `-DSQLITE_THREADSAFE=0`
-
 ## About VFS
 
 The following vfs have been implemented:
@@ -69,21 +61,24 @@ The following vfs have been implemented:
 
 See <https://github.com/Spxg/sqlite-wasm-rs/blob/master/VFS.md>
 
+## About multithreading
+
+This library is not thread-safe:
+
+* `JsValue` is not cross-threaded, see <https://github.com/rustwasm/wasm-bindgen/pull/955> for details.
+* sqlite is compiled with `-DSQLITE_THREADSAFE=0`
+
 ## Use external libc
 
-As mentioned above, sqlite is now directly linked to emscripten's libc. But we provide the ability to customize libc.
+As mentioned above, sqlite is now directly linked to emscripten's libc, but we provide the ability to customize libc, cargo provides a [`links`](https://doc.rust-lang.org/cargo/reference/manifest.html#the-links-field) field that can be used to specify which library to link to.
 
-Cargo provides a [`links`](https://doc.rust-lang.org/cargo/reference/manifest.html#the-links-field) field that can be used to specify which library to link to.
-
-We created a new [`sqlite-wasm-libc`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-libc) library with no implementation and only a `links = "libc"` configuration.
-
-Then with the help of [`Overriding Build Scripts`](https://doc.rust-lang.org/cargo/reference/build-scripts.html#overriding-build-scripts), you can overriding its configuration in your crate and link sqlite to your custom libc.
+We created a new [`sqlite-wasm-libc`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-libc) library with no implementation and only a `links = "libc"` configuration, and then with the help of [`overriding build scripts`](https://doc.rust-lang.org/cargo/reference/build-scripts.html#overriding-build-scripts), you can overriding its configuration in your crate and link sqlite to your custom libc.
 
 More see [`custom-libc example`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/examples/custom-libc).
 
 ## Why provide precompiled library
 
-In the `shim` feature, since `wasm32-unknown-unknown` does not have libc, emscripten is used here for compilation, otherwise we need to copy a bunch of c headers required for sqlite3 compilation, which is a bit of a hack for me. If sqlite3 is compiled at compile time, the emscripten toolchain is required, and we cannot assume that all users have it installed. (Believe me, because rust mainly supports the `wasm32-unknown-unknown` target, most people do not have the emscripten toolchain). Considering that wasm is cross-platform, vendor compilation products are acceptable.
+Since `wasm32-unknown-unknown` does not have libc, emscripten is used here for compilation, otherwise we need to copy a bunch of c headers required for sqlite3 compilation, which is a bit of a hack for me. If sqlite3 is compiled at compile time, the emscripten toolchain is required, and we cannot assume that all users have it installed. (Believe me, because rust mainly supports the `wasm32-unknown-unknown` target, most people do not have the emscripten toolchain). Considering that wasm is cross-platform, vendor compilation products are acceptable.
 
 About security issues:
 
@@ -98,6 +93,8 @@ Actions: <https://github.com/Spxg/sqlite-wasm-rs/actions?query=event%3Aworkflow_
 
 ## Related Project
 
+* [`diesel`](https://github.com/diesel-rs/diesel): A safe, extensible ORM and Query Builder for Rust.
+* [`rusqlite`](https://github.com/rusqlite/rusqlite): Ergonomic bindings to SQLite for Rust.
 * [`sqlite-wasm`](https://github.com/sqlite/sqlite-wasm): SQLite Wasm conveniently wrapped as an ES Module.
 * [`sqlite-web-rs`](https://github.com/xmtp/sqlite-web-rs): A SQLite WebAssembly backend for Diesel.
-* [`rusqlite`](https://github.com/rusqlite/rusqlite): Ergonomic bindings to SQLite for Rust.
+* [`wa-sqlite`](https://github.com/rhashimoto/wa-sqlite): WebAssembly SQLite with support for browser storage extensions.
