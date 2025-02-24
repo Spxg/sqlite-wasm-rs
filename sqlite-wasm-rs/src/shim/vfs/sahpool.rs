@@ -33,11 +33,21 @@ const HEADER_OFFSET_DATA: usize = SECTOR_SIZE;
 const PERSISTENT_FILE_TYPES: i32 =
     SQLITE_OPEN_MAIN_DB | SQLITE_OPEN_MAIN_JOURNAL | SQLITE_OPEN_SUPER_JOURNAL | SQLITE_OPEN_WAL;
 
-static VFS2SAH: Lazy<RwLock<HashMap<usize, Arc<OpfsSAH>>>> =
+#[derive(Hash, PartialEq, Eq)]
+struct VfsPtr(*mut sqlite3_vfs);
+
+/// Just be key
+unsafe impl Send for VfsPtr {}
+
+/// Just be key
+unsafe impl Sync for VfsPtr {}
+
+static VFS2POOL: Lazy<RwLock<HashMap<VfsPtr, Arc<FragileComfirmed<OpfsSAHPool>>>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
 fn pool(vfs: *mut sqlite3_vfs) -> Arc<FragileComfirmed<OpfsSAHPool>> {
-    VFS2SAH.read().get(&(vfs as usize)).unwrap().pool.clone()
+    // Already registered vfs will not be unregistered, so this is safe
+    Arc::clone(VFS2POOL.read().get(&VfsPtr(vfs)).unwrap())
 }
 
 fn read_write_options(at: f64) -> FileSystemReadWriteOptions {
@@ -117,9 +127,7 @@ struct OpfsSAHPool {
     map_sah_to_name: Map,
     /// Maps (sqlite3_file*) to xOpen's file objects
     map_s3_file_to_o_file: Map,
-    /// Store last_error
-    ///
-    /// Never poison, unwrap `lock()` is fine
+    /// Store last_error, never poison, unwrap `lock()` is fine
     last_error: Mutex<Option<(i32, String)>>,
 }
 
@@ -179,6 +187,7 @@ impl OpfsSAHPool {
             map_s3_file_to_o_file: Map::new(),
             last_error: Mutex::new(None),
         };
+
         pool.acquire_access_handles(clear_files).await?;
         if pool.get_capacity() == 0 {
             pool.add_capacity(capacity).await?;
@@ -954,18 +963,6 @@ fn vfs(name: *const ::std::os::raw::c_char) -> sqlite3_vfs {
     }
 }
 
-struct OpfsSAH {
-    pool: Arc<FragileComfirmed<OpfsSAHPool>>,
-}
-
-impl OpfsSAH {
-    fn new(pool: OpfsSAHPool) -> Self {
-        Self {
-            pool: Arc::new(FragileComfirmed::new(pool)),
-        }
-    }
-}
-
 /// Build `OpfsSAHPoolCfg`
 pub struct OpfsSAHPoolCfgBuilder(OpfsSAHPoolCfg);
 
@@ -1161,7 +1158,7 @@ pub async fn install_opfs_sahpool(
 
     let create_pool = async {
         let pool = OpfsSAHPool::new(options).await?;
-        Ok(OpfsSAH::new(pool))
+        Ok(FragileComfirmed::new(pool))
     };
 
     let register_vfs = || {
@@ -1182,19 +1179,19 @@ pub async fn install_opfs_sahpool(
         Ok(vfs as *mut sqlite3_vfs)
     };
 
-    static NAME2VFS: Lazy<tokio::sync::Mutex<HashMap<String, Arc<OpfsSAH>>>> =
+    static NAME2VFS: Lazy<tokio::sync::Mutex<HashMap<String, Arc<FragileComfirmed<OpfsSAHPool>>>>> =
         Lazy::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
     let mut name2vfs = NAME2VFS.lock().await;
 
-    let pool = if let Some(sah) = name2vfs.get(vfs_name) {
-        Arc::clone(&sah.pool)
+    let pool = if let Some(pool) = name2vfs.get(vfs_name) {
+        Arc::clone(pool)
     } else {
-        let opfs_sah = Arc::new(create_pool.await?);
+        let pool = Arc::new(create_pool.await?);
         let vfs = register_vfs()?;
-        name2vfs.insert(vfs_name.clone(), Arc::clone(&opfs_sah));
-        VFS2SAH.write().insert(vfs as usize, Arc::clone(&opfs_sah));
-        Arc::clone(&opfs_sah.pool)
+        name2vfs.insert(vfs_name.clone(), Arc::clone(&pool));
+        VFS2POOL.write().insert(VfsPtr(vfs), Arc::clone(&pool));
+        pool
     };
 
     let util = OpfsSAHPoolUtil { pool };

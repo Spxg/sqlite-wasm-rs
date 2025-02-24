@@ -132,11 +132,6 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_emscripten_get_now() -> std::os::
     performance.now()
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn sqlite3_os_init() -> std::os::raw::c_int {
-    super::vfs::memory::install_memory_vfs()
-}
-
 // https://github.com/alexcrichton/dlmalloc-rs/blob/fb116603713825b43b113cc734bb7d663cb64be9/src/dlmalloc.rs#L141
 const ALIGN: usize = std::mem::size_of::<usize>() * 2;
 
@@ -176,4 +171,9 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_realloc(ptr: *mut u8, new_size: u
     *ptr.cast::<usize>() = new_size;
 
     ptr.add(ALIGN)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sqlite3_os_init() -> std::os::raw::c_int {
+    super::vfs::memory::install_memory_vfs()
 }
