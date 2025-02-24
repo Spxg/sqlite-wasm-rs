@@ -531,7 +531,7 @@ impl OpfsSAHPool {
     fn export_file(&self, name: &str) -> Result<Vec<u8>, OpfsSAHError> {
         let sah = self.map_filename_to_sah.get(&JsValue::from(name));
         if sah.is_undefined() {
-            return Err(OpfsSAHError::Custom("File not found:".into()));
+            return Err(OpfsSAHError::Custom(format!("File not found: {name}")));
         }
         let sah = FileSystemSyncAccessHandle::from(sah);
         let n = sah.get_size().map_err(OpfsSAHError::GetSize)? - HEADER_OFFSET_DATA as f64;
