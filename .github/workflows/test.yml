@@ -55,3 +55,19 @@ jobs:
       run: |
         cd examples/custom-libc
         RUSTFLAGS="-L $(pwd)" wasm-pack test --chrome --headless
+
+  test_atomics:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install wasm-pack
+      run: cargo install wasm-pack
+    - name: Test
+      run: |
+        cd sqlite-wasm-rs
+        rustup toolchain install nightly
+        rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
+        RUSTFLAGS='-C target-feature=+atomics,+bulk-memory' rustup run nightly wasm-pack test --chrome --headless --no-default-features --features precompiled -Z build-std=panic_abort,std
