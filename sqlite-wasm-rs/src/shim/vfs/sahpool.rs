@@ -2,14 +2,14 @@
 //!
 //! <https://github.com/sqlite/sqlite/blob/master/ext/wasm/api/sqlite3-vfs-opfs-sahpool.c-pp.js>
 
-use crate::{export::*, locker::RwLock};
+use crate::export::*;
 
 use crate::fragile::FragileComfirmed;
-use crate::locker::Mutex;
 use js_sys::{
     Array, DataView, IteratorNext, Map, Math, Number, Object, Reflect, Set, Uint32Array, Uint8Array,
 };
 use once_cell::sync::Lazy;
+use parking_lot::{Mutex, RwLock};
 use std::ffi::CString;
 use std::sync::Arc;
 use std::{collections::HashMap, ffi::CStr};
