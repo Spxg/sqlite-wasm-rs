@@ -4,6 +4,7 @@ mod column_metadata;
 mod common;
 mod hook;
 mod status;
+mod trigger;
 mod vfs;
 
 use sqlite_wasm_rs::export::*;
