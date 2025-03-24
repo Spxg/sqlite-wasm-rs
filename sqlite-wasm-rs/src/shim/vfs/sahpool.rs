@@ -2,12 +2,10 @@
 //!
 //! <https://github.com/sqlite/sqlite/blob/master/ext/wasm/api/sqlite3-vfs-opfs-sahpool.c-pp.js>
 
-use crate::export::*;
-
 use crate::fragile::FragileComfirmed;
-use js_sys::{
-    Array, DataView, IteratorNext, Map, Math, Number, Object, Reflect, Set, Uint32Array, Uint8Array,
-};
+use crate::shim::libsqlite3::*;
+use crate::shim::vfs::utils::get_random_name;
+use js_sys::{Array, DataView, IteratorNext, Map, Object, Reflect, Set, Uint32Array, Uint8Array};
 use once_cell::sync::Lazy;
 use parking_lot::{Mutex, RwLock};
 use std::ffi::CString;
@@ -68,11 +66,6 @@ fn compute_digest(_byte_array: &Uint8Array) -> Uint32Array {
     u32_array.set_index(0, 0);
     u32_array.set_index(1, 0);
     u32_array
-}
-
-fn get_random_name() -> String {
-    let random = Number::from(Math::random()).to_string(36).unwrap();
-    random.slice(2, random.length()).as_string().unwrap()
 }
 
 #[repr(C)]
@@ -841,7 +834,6 @@ unsafe extern "C" fn xFullPathname(
     if len > nOut as usize {
         return SQLITE_CANTOPEN;
     }
-
     zName.copy_to(zOut, len);
 
     SQLITE_OK
@@ -880,7 +872,11 @@ unsafe extern "C" fn xOpen(
     let pool = pool(pVfs);
 
     let f = || {
-        let name = pool.get_path(zName)?;
+        let name = if zName.is_null() {
+            get_random_name()
+        } else {
+            pool.get_path(zName)?
+        };
         let sah = match pool.get_sah_for_path(&name) {
             Some(sah) => sah,
             None => {
