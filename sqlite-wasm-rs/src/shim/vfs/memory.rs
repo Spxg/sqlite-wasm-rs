@@ -156,7 +156,16 @@ unsafe extern "C" fn xFullPathname(
     nOut: ::std::os::raw::c_int,
     zOut: *mut ::std::os::raw::c_char,
 ) -> ::std::os::raw::c_int {
-    zName.copy_to(zOut, nOut as usize);
+    if zName.is_null() || zOut.is_null() {
+        return SQLITE_CANTOPEN;
+    }
+    let len = CStr::from_ptr(zName).count_bytes() + 1;
+
+    if len > nOut as usize {
+        return SQLITE_CANTOPEN;
+    }
+    zName.copy_to(zOut, len);
+
     SQLITE_OK
 }
 
@@ -286,7 +295,7 @@ unsafe extern "C" fn xCheckReservedLock(
 }
 
 unsafe extern "C" fn xFileControl(
-    _pVfs: *mut sqlite3_file,
+    _pFile: *mut sqlite3_file,
     _op: ::std::os::raw::c_int,
     _pArg: *mut ::std::os::raw::c_void,
 ) -> ::std::os::raw::c_int {
