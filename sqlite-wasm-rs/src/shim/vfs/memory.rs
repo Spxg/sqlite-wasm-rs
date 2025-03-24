@@ -130,6 +130,9 @@ unsafe extern "C" fn xDelete(
     zName: *const ::std::os::raw::c_char,
     _syncDir: ::std::os::raw::c_int,
 ) -> ::std::os::raw::c_int {
+    if zName.is_null() {
+        return SQLITE_IOERR_DELETE;
+    }
     let Ok(s) = CStr::from_ptr(zName).to_str() else {
         return SQLITE_ERROR;
     };
@@ -143,10 +146,14 @@ unsafe extern "C" fn xAccess(
     _flags: ::std::os::raw::c_int,
     pResOut: *mut ::std::os::raw::c_int,
 ) -> ::std::os::raw::c_int {
-    let Ok(s) = CStr::from_ptr(zName).to_str() else {
-        return SQLITE_ERROR;
+    *pResOut = if zName.is_null() {
+        0
+    } else {
+        let Ok(s) = CStr::from_ptr(zName).to_str() else {
+            return SQLITE_ERROR;
+        };
+        i32::from(name2file().contains_key(s))
     };
-    *pResOut = i32::from(name2file().contains_key(s));
     SQLITE_OK
 }
 
