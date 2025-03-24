@@ -1,12 +1,11 @@
 //! Memory VFS, used as the default VFS
 
-use std::{collections::HashMap, ffi::CStr, sync::Arc};
-
+use crate::shim::libsqlite3::*;
+use crate::shim::vfs::utils::get_random_name;
 use js_sys::{Date, Math};
 use once_cell::sync::Lazy;
-
-use crate::export::*;
 use parking_lot::{Mutex, MutexGuard, RwLock};
+use std::{collections::HashMap, ffi::CStr, sync::Arc};
 
 /// thread::sleep is available when atomics are enabled
 #[cfg(target_feature = "atomics")]
@@ -94,23 +93,28 @@ unsafe extern "C" fn xOpen(
     flags: ::std::os::raw::c_int,
     pOutFlags: *mut ::std::os::raw::c_int,
 ) -> ::std::os::raw::c_int {
-    let Ok(s) = CStr::from_ptr(zName).to_str() else {
-        return SQLITE_ERROR;
+    let name = if zName.is_null() {
+        get_random_name()
+    } else {
+        let Ok(s) = CStr::from_ptr(zName).to_str() else {
+            return SQLITE_ERROR;
+        };
+        s.into()
     };
 
     let mut name2file = name2file();
-    let mem_file = if let Some(mem_file) = name2file.get(s) {
+    let mem_file = if let Some(mem_file) = name2file.get(&name) {
         Arc::clone(mem_file)
     } else {
         if flags & SQLITE_OPEN_CREATE == 0 {
             return SQLITE_CANTOPEN;
         }
         let file = Arc::new(RwLock::new(MemFile {
-            name: s.into(),
+            name: name.clone(),
             flags,
             data: Vec::new(),
         }));
-        name2file.insert(s.into(), Arc::clone(&file));
+        name2file.insert(name, Arc::clone(&file));
         file
     };
 
