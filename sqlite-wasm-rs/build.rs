@@ -63,7 +63,7 @@ fn main() {
         #[cfg(feature = "buildtime-bindgen")]
         std::fs::copy(
             format!("{output}/bindings.rs"),
-            "src/shim/libsqlite3/bindings.rs",
+            "src/libsqlite3/bindings.rs",
         )
         .unwrap();
     }

@@ -3,7 +3,7 @@
 Data is stored in memory, this is the default vfs
 
 ```rust
-use sqlite_wasm_rs::export as ffi;
+use sqlite_wasm_rs as ffi;
 
 // open with memory vfs
 let mut db = std::ptr::null_mut();
@@ -23,7 +23,7 @@ assert_eq!(ffi::SQLITE_OK, ret);
 SQLite officially provides a memdb vfs
 
 ```rust
-use sqlite_wasm_rs::export as ffi;
+use sqlite_wasm_rs as ffi;
 
 let mut db = std::ptr::null_mut();
 let ret = unsafe {
@@ -45,7 +45,7 @@ assert_eq!(ffi::SQLITE_OK, ret);
 Persistent vfs, ported from sqlite-wasm, see <https://sqlite.org/wasm/doc/trunk/persistence.md#vfs-opfs-sahpool> for details
 
 ```rust
-use sqlite_wasm_rs::export::{self as ffi, install_opfs_sahpool};
+use sqlite_wasm_rs::{self as ffi, install_opfs_sahpool};
 
 // install opfs-sahpool persistent vfs and set as default vfs
 install_opfs_sahpool(None, true).await?;
@@ -88,7 +88,7 @@ assert_eq!(ffi::SQLITE_OK, ret);
 Support custom vfs and directory
 
 ```rust
-use sqlite_wasm_rs::export::{
+use sqlite_wasm_rs::{
     self as ffi,
     install_opfs_sahpool,
     OpfsSAHPoolCfgBuilder
