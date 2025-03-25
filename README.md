@@ -20,7 +20,7 @@ sqlite-wasm-rs = { version = "0.3", default-features = false, features = ["preco
 ```
 
 ```rust
-use sqlite_wasm_rs::export::{self as ffi, install_opfs_sahpool};
+use sqlite_wasm_rs::{self as ffi, install_opfs_sahpool};
 
 async fn open_db() -> anyhow::Result<()> {
     // open with memory vfs
@@ -56,8 +56,8 @@ async fn open_db() -> anyhow::Result<()> {
 
 The following vfs have been implemented:
 
-* [`memory-vfs`](https://github.com/Spxg/sqlite-wasm-rs/blob/master/sqlite-wasm-rs/src/shim/vfs/memory.rs): as the default vfs, no additional conditions are required, just use.
-* [`opfs-sahpool`](https://github.com/Spxg/sqlite-wasm-rs/blob/master/sqlite-wasm-rs/src/shim/vfs/sahpool.rs): ported from sqlite-wasm, it provides the best performance persistent storage method.
+* [`memory-vfs`](https://github.com/Spxg/sqlite-wasm-rs/blob/master/sqlite-wasm-rs/src/vfs/memory.rs): as the default vfs, no additional conditions are required, just use.
+* [`opfs-sahpool`](https://github.com/Spxg/sqlite-wasm-rs/blob/master/sqlite-wasm-rs/src/vfs/sahpool.rs): ported from sqlite-wasm, it provides the best performance persistent storage method.
 
 See <https://github.com/Spxg/sqlite-wasm-rs/blob/master/VFS.md>
 

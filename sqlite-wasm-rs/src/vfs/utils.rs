@@ -1,5 +1,7 @@
-use crate::shim::libsqlite3::{sqlite3_file, sqlite3_vfs};
+use crate::libsqlite3::{sqlite3_file, sqlite3_vfs};
+use fragile::Fragile;
 use js_sys::{Math, Number};
+use std::ops::{Deref, DerefMut};
 
 /// Wrap the pVfs pointer, which is often used in VFS implementation.
 ///
@@ -10,7 +12,6 @@ use js_sys::{Math, Number};
 pub struct VfsPtr(pub *mut sqlite3_vfs);
 
 unsafe impl Send for VfsPtr {}
-
 unsafe impl Sync for VfsPtr {}
 
 /// Wrap the pFile pointer, which is often used in VFS implementation.
@@ -22,8 +23,39 @@ unsafe impl Sync for VfsPtr {}
 pub struct FilePtr(pub *mut sqlite3_file);
 
 unsafe impl Send for FilePtr {}
-
 unsafe impl Sync for FilePtr {}
+
+/// A [`FragileComfirmed<T>`] wraps a non sendable `T` to be safely send to other threads.
+///
+/// Once the value has been wrapped it can be sent to other threads but access
+/// to the value on those threads will fail.
+pub struct FragileComfirmed<T> {
+    fragile: Fragile<T>,
+}
+
+unsafe impl<T> Send for FragileComfirmed<T> {}
+unsafe impl<T> Sync for FragileComfirmed<T> {}
+
+impl<T> FragileComfirmed<T> {
+    pub fn new(t: T) -> Self {
+        FragileComfirmed {
+            fragile: Fragile::new(t),
+        }
+    }
+}
+
+impl<T> Deref for FragileComfirmed<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        self.fragile.get()
+    }
+}
+
+impl<T> DerefMut for FragileComfirmed<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.fragile.get_mut()
+    }
+}
 
 /// get random name if zFileName is null and other cases
 pub fn get_random_name() -> String {

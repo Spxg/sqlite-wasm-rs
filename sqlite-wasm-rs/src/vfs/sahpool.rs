@@ -2,9 +2,8 @@
 //!
 //! <https://github.com/sqlite/sqlite/blob/master/ext/wasm/api/sqlite3-vfs-opfs-sahpool.c-pp.js>
 
-use crate::fragile::FragileComfirmed;
-use crate::shim::libsqlite3::*;
-use crate::shim::vfs::utils::{get_random_name, VfsPtr};
+use super::utils::{get_random_name, FragileComfirmed, VfsPtr};
+use crate::libsqlite3::*;
 use js_sys::{Array, DataView, IteratorNext, Map, Object, Reflect, Set, Uint32Array, Uint8Array};
 use once_cell::sync::Lazy;
 use parking_lot::{Mutex, RwLock};

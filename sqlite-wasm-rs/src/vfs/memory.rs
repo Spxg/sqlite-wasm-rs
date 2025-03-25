@@ -1,7 +1,7 @@
 //! Memory VFS, used as the default VFS
 
-use crate::shim::libsqlite3::*;
-use crate::shim::vfs::utils::{get_random_name, FilePtr};
+use super::utils::{get_random_name, FilePtr};
+use crate::libsqlite3::*;
 use js_sys::{Date, Math};
 use once_cell::sync::Lazy;
 use parking_lot::{Mutex, MutexGuard, RwLock};
@@ -371,6 +371,6 @@ fn vfs() -> sqlite3_vfs {
     }
 }
 
-pub(crate) fn install_memory_vfs() -> ::std::os::raw::c_int {
+pub fn install_memory_vfs() -> ::std::os::raw::c_int {
     unsafe { sqlite3_vfs_register(Box::leak(Box::new(vfs())), 1) }
 }
