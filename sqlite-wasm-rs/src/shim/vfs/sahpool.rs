@@ -4,7 +4,7 @@
 
 use crate::fragile::FragileComfirmed;
 use crate::shim::libsqlite3::*;
-use crate::shim::vfs::utils::get_random_name;
+use crate::shim::vfs::utils::{get_random_name, VfsPtr};
 use js_sys::{Array, DataView, IteratorNext, Map, Object, Reflect, Set, Uint32Array, Uint8Array};
 use once_cell::sync::Lazy;
 use parking_lot::{Mutex, RwLock};
@@ -30,15 +30,6 @@ const HEADER_OFFSET_DATA: usize = SECTOR_SIZE;
 
 const PERSISTENT_FILE_TYPES: i32 =
     SQLITE_OPEN_MAIN_DB | SQLITE_OPEN_MAIN_JOURNAL | SQLITE_OPEN_SUPER_JOURNAL | SQLITE_OPEN_WAL;
-
-#[derive(Hash, PartialEq, Eq)]
-struct VfsPtr(*mut sqlite3_vfs);
-
-/// Just be key
-unsafe impl Send for VfsPtr {}
-
-/// Just be key
-unsafe impl Sync for VfsPtr {}
 
 static VFS2POOL: Lazy<RwLock<HashMap<VfsPtr, Arc<FragileComfirmed<OpfsSAHPool>>>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
