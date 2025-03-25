@@ -80,7 +80,7 @@ More see [`custom-libc example`](https://github.com/Spxg/sqlite-wasm-rs/tree/mas
 
 Since `wasm32-unknown-unknown` does not have libc, emscripten is used here for compilation, otherwise we need to copy a bunch of c headers required for sqlite3 compilation, which is a bit of a hack for me. If sqlite3 is compiled at compile time, the emscripten toolchain is required, and we cannot assume that all users have it installed. (Believe me, because rust mainly supports the `wasm32-unknown-unknown` target, most people do not have the emscripten toolchain). Considering that wasm is cross-platform, vendor compilation products are acceptable.
 
-About security issues:
+About security:
 
 * You can specify the bundled feature to compile sqlite locally, which requires the emscripten toolchain.
 * Currently all precompiled products are compiled and committed through Github Actions, which can be tracked, downloaded and compared.
