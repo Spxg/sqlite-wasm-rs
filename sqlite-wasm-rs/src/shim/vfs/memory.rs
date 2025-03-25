@@ -83,9 +83,6 @@ struct MemFile {
     data: Vec<u8>,
 }
 
-unsafe impl Send for MemFile {}
-unsafe impl Sync for MemFile {}
-
 unsafe extern "C" fn xOpen(
     _pVfs: *mut sqlite3_vfs,
     zName: sqlite3_filename,
