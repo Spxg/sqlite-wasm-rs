@@ -20,6 +20,9 @@ mod vfs;
 // sqlite3 bindings
 pub use libsqlite3::*;
 
+// indexed db vfs implementation
+pub use vfs::idb;
+
 // opfs vfs implementation
 pub use vfs::sahpool;
 
