@@ -2,7 +2,9 @@
 //!
 //! <https://github.com/sqlite/sqlite/blob/master/ext/wasm/api/sqlite3-vfs-opfs-sahpool.c-pp.js>
 
-use super::utils::{get_random_name, FragileComfirmed, VfsPtr};
+use super::utils::{
+    copy_to_uint8_array_subarray, copy_to_vec, get_random_name, FragileComfirmed, VfsPtr,
+};
 use crate::libsqlite3::*;
 use js_sys::{Array, DataView, IteratorNext, Map, Object, Reflect, Set, Uint32Array, Uint8Array};
 use once_cell::sync::Lazy;
@@ -291,15 +293,9 @@ impl OpfsSAHPool {
                 return Ok(None);
             }
             let path_bytes = self.ap_body.subarray(0, path_size);
-            let mut path = vec![0; path_size as usize];
-            for idx in 0..path_size {
-                // why not `copy_to`?
-                //
-                // see <https://github.com/rustwasm/wasm-bindgen/issues/4395>
-                path[idx as usize] = path_bytes.get_index(idx);
-            }
+            let vec = copy_to_vec(&path_bytes);
             // set_associated_path ensures that it is utf8
-            let path = String::from_utf8(path).unwrap();
+            let path = String::from_utf8(vec).unwrap();
             Ok(Some(path))
         } else {
             self.set_associated_path(sah, "", 0)?;
@@ -320,12 +316,10 @@ impl OpfsSAHPool {
         if HEADER_MAX_PATH_SIZE < path.len() {
             return Err(OpfsSAHError::Custom(format!("Path too long: {path}")));
         }
-        for (idx, byte) in path.bytes().enumerate() {
-            // why not `copy_from`?
-            //
-            // see <https://github.com/rustwasm/wasm-bindgen/issues/4395>
-            self.ap_body.set_index(idx as u32, byte);
-        }
+        copy_to_uint8_array_subarray(
+            path.as_bytes(),
+            &self.ap_body.subarray(0, path.len() as u32),
+        );
 
         self.ap_body
             .fill(0, path.len() as u32, HEADER_MAX_PATH_SIZE as u32);

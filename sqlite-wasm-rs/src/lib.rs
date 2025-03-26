@@ -24,6 +24,9 @@ pub use vfs::sahpool::{
     install_opfs_sahpool, OpfsSAHError, OpfsSAHPoolCfg, OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil,
 };
 
+// some tools for implementing VFS
+pub use vfs::utils;
+
 // `pub use` to avoid optimization
 #[cfg(feature = "custom-libc")]
 pub use sqlite_wasm_libc;
