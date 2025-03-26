@@ -1,6 +1,7 @@
 //! Some tools for implementing VFS
 
 use crate::libsqlite3::{sqlite3_file, sqlite3_vfs};
+
 use fragile::Fragile;
 use js_sys::{Math, Number, Uint8Array, WebAssembly};
 use std::ops::{Deref, DerefMut};

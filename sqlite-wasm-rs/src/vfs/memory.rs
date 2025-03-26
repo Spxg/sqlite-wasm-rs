@@ -1,7 +1,8 @@
 //! Memory VFS, used as the default VFS
 
-use super::utils::{get_random_name, FilePtr};
 use crate::libsqlite3::*;
+use crate::vfs::utils::{get_random_name, FilePtr};
+
 use js_sys::{Date, Math};
 use once_cell::sync::Lazy;
 use parking_lot::{Mutex, MutexGuard, RwLock};

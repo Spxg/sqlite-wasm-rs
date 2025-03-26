@@ -2,10 +2,11 @@
 //!
 //! <https://github.com/sqlite/sqlite/blob/master/ext/wasm/api/sqlite3-vfs-opfs-sahpool.c-pp.js>
 
-use super::utils::{
+use crate::libsqlite3::*;
+use crate::vfs::utils::{
     copy_to_uint8_array_subarray, copy_to_vec, get_random_name, FragileComfirmed, VfsPtr,
 };
-use crate::libsqlite3::*;
+
 use js_sys::{Array, DataView, IteratorNext, Map, Object, Reflect, Set, Uint32Array, Uint8Array};
 use once_cell::sync::Lazy;
 use parking_lot::{Mutex, RwLock};

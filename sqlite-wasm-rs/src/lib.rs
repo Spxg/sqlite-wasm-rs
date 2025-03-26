@@ -11,6 +11,7 @@ mod libsqlite3;
 #[allow(non_snake_case)]
 mod shim;
 
+/// vfs implementation
 #[allow(non_upper_case_globals)]
 #[allow(non_camel_case_types)]
 #[allow(non_snake_case)]
@@ -20,9 +21,7 @@ mod vfs;
 pub use libsqlite3::*;
 
 // opfs vfs implementation
-pub use vfs::sahpool::{
-    install_opfs_sahpool, OpfsSAHError, OpfsSAHPoolCfg, OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil,
-};
+pub use vfs::sahpool;
 
 // some tools for implementing VFS
 pub use vfs::utils;
@@ -33,5 +32,6 @@ pub use sqlite_wasm_libc;
 
 /// To be compatible with previous versions.
 pub mod export {
-    pub use super::*;
+    pub use crate::libsqlite3::*;
+    pub use crate::vfs::sahpool::*;
 }
