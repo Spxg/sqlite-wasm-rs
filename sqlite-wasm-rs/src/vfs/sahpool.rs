@@ -1137,7 +1137,7 @@ impl OpfsSAHPoolUtil {
 
 /// Register `opfs-sahpool` vfs and return a utility object which can be used
 /// to perform basic administration of the file pool
-pub async fn install_opfs_sahpool(
+pub async fn install(
     options: Option<&OpfsSAHPoolCfg>,
     default_vfs: bool,
 ) -> Result<OpfsSAHPoolUtil, OpfsSAHError> {

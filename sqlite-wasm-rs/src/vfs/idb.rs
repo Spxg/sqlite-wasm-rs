@@ -742,7 +742,7 @@ impl IndexedDbUtil {
     }
 }
 
-pub async fn install_idb_vfs(
+pub async fn install(
     vfs_name: &str,
     default_vfs: bool,
     preload: Preload,

@@ -1,8 +1,6 @@
 use super::{cstr, test_vfs};
-use sqlite_wasm_rs::{
-    export::*,
-    idb::{install_idb_vfs, Preload},
-};
+use sqlite_wasm_rs::export::*;
+use sqlite_wasm_rs::idb_vfs::{install as install_idb_vfs, Preload};
 use std::ffi::CString;
 use wasm_bindgen_test::wasm_bindgen_test;
 
