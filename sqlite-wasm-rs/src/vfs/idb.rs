@@ -1,7 +1,7 @@
-use crate::libsqlite3::*;
 use crate::vfs::utils::{
-    copy_to_uint8_array, copy_to_vec, get_random_name, FragileComfirmed, VfsPtr,
+    copy_to_uint8_array, copy_to_vec, get_random_name, FilePtr, FragileComfirmed, VfsPtr,
 };
+use crate::{bail, check_option, check_result, libsqlite3::*};
 
 use indexed_db_futures::database::Database;
 use indexed_db_futures::prelude::*;
@@ -29,7 +29,7 @@ struct IdbCommit {
 
 struct IdbPool {
     idb: FragileComfirmed<Database>,
-    file2name: RwLock<HashMap<usize, String>>,
+    file2name: RwLock<HashMap<FilePtr, String>>,
     name2file: RwLock<HashMap<String, IdbFile>>,
     tx: UnboundedSender<IdbCommit>,
 }
@@ -81,7 +81,7 @@ async fn preload_db_impl(
                 insert_fn(block?);
             }
         }
-        Preload::Specify(items) => {
+        Preload::Paths(items) => {
             for preload in items {
                 for block in blocks
                     .get_all::<JsValue>()
@@ -123,13 +123,14 @@ impl IdbPool {
     }
 
     async fn preload_db(&self, preload: Vec<String>) -> Result<(), IndexedDbError> {
-        let name2file = self.name2file.read();
-        let preload = preload
-            .into_iter()
-            .filter(|x| !name2file.contains_key(x))
-            .collect::<Vec<_>>();
-        drop(name2file);
-        let preload = preload_db_impl(&self.idb, Preload::Specify(preload)).await?;
+        let preload = {
+            let name2file = self.name2file.read();
+            preload
+                .into_iter()
+                .filter(|x| !name2file.contains_key(x))
+                .collect::<Vec<_>>()
+        };
+        let preload = preload_db_impl(&self.idb, Preload::Paths(preload)).await?;
         self.name2file.write().extend(preload);
         Ok(())
     }
@@ -186,7 +187,7 @@ impl IdbPool {
         }
 
         while let Some(commit) = rx.recv().await {
-            if let Err(_) = to_commit(&self, commit).await {
+            if to_commit(&self, commit).await.is_err() {
                 // Todo: and log
             }
         }
@@ -203,7 +204,6 @@ fn get_block(value: JsValue) -> (String, usize, Vec<u8>) {
         .as_f64()
         .unwrap() as usize;
     let data = Reflect::get(&value, &JsValue::from("data")).unwrap();
-    // todo
     let data = copy_to_vec(&Uint8Array::new(&data));
 
     (path, offset, data)
@@ -287,10 +287,7 @@ unsafe extern "C" fn xOpen(
     let name = if zName.is_null() {
         get_random_name()
     } else {
-        let Ok(s) = CStr::from_ptr(zName).to_str() else {
-            return SQLITE_ERROR;
-        };
-        s.into()
+        check_result!(CStr::from_ptr(zName).to_str()).into()
     };
 
     let pool = pool(pVfs);
@@ -306,7 +303,7 @@ unsafe extern "C" fn xOpen(
         name2file.insert(name.clone(), IdbFile::new(flags));
     }
 
-    file2name.insert(pFile as usize, name);
+    file2name.insert(FilePtr(pFile), name);
 
     (*(pFile.cast::<SqliteIdbFile>())).vfs = pVfs;
     (*pFile).pMethods = &IO_METHODS;
@@ -323,9 +320,9 @@ unsafe extern "C" fn xDelete(
     zName: *const ::std::os::raw::c_char,
     _syncDir: ::std::os::raw::c_int,
 ) -> ::std::os::raw::c_int {
-    let Ok(s) = CStr::from_ptr(zName).to_str() else {
-        return SQLITE_ERROR;
-    };
+    bail!(zName.is_null(), SQLITE_IOERR_DELETE);
+    let s = check_result!(CStr::from_ptr(zName).to_str());
+
     let pool = pool(pVfs);
     pool.name2file.write().remove(s);
 
@@ -352,9 +349,7 @@ unsafe extern "C" fn xAccess(
     *pResOut = if zName.is_null() {
         0
     } else {
-        let Ok(s) = CStr::from_ptr(zName).to_str() else {
-            return SQLITE_ERROR;
-        };
+        let s = check_result!(CStr::from_ptr(zName).to_str());
         let pool = pool(pVfs);
         let name2file = pool.name2file.read();
         i32::from(name2file.contains_key(s))
@@ -369,14 +364,12 @@ unsafe extern "C" fn xFullPathname(
     nOut: ::std::os::raw::c_int,
     zOut: *mut ::std::os::raw::c_char,
 ) -> ::std::os::raw::c_int {
-    if zName.is_null() || zOut.is_null() {
-        return SQLITE_CANTOPEN;
-    }
+    bail!(zName.is_null() || zOut.is_null(), SQLITE_CANTOPEN);
+
     let len = CStr::from_ptr(zName).count_bytes() + 1;
 
-    if len > nOut as usize {
-        return SQLITE_CANTOPEN;
-    }
+    bail!(len > nOut as usize, SQLITE_CANTOPEN);
+
     zName.copy_to(zOut, len);
 
     SQLITE_OK
@@ -395,8 +388,8 @@ unsafe extern "C" fn xClose(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
     let mut file2name = pool.file2name.write();
     let mut name2file = pool.name2file.write();
 
-    if let Some(name) = file2name.remove(&(pFile as usize)) {
-        if name2file.get(&name).map_or(false, |x| x.delete_on_close()) {
+    if let Some(name) = file2name.remove(&FilePtr(pFile)) {
+        if name2file.get(&name).is_some_and(|x| x.delete_on_close()) {
             name2file.remove(&name).unwrap();
             if pool
                 .tx
@@ -422,12 +415,9 @@ unsafe extern "C" fn xRead(
     let pool = pool(file2vfs(pFile));
     let file2name = pool.file2name.read();
     let name2file = pool.name2file.read();
-    let Some(name) = file2name.get(&(pFile as usize)) else {
-        return SQLITE_ERROR;
-    };
-    let Some(file) = name2file.get(name) else {
-        return SQLITE_ERROR;
-    };
+
+    let name = check_option!(file2name.get(&FilePtr(pFile)));
+    let file = check_option!(name2file.get(name));
 
     let end = iOfst as usize + iAmt as usize;
     let slice = std::slice::from_raw_parts_mut(zBuf.cast::<u8>(), iAmt as usize);
@@ -504,12 +494,10 @@ unsafe extern "C" fn xWrite(
     let pool = pool(file2vfs(pFile));
     let file2name = pool.file2name.read();
     let mut name2file = pool.name2file.write();
-    let Some(name) = file2name.get(&(pFile as usize)) else {
-        return SQLITE_ERROR;
-    };
-    let Some(file) = name2file.get_mut(name) else {
-        return SQLITE_ERROR;
-    };
+
+    let name = check_option!(file2name.get(&FilePtr(pFile)));
+    let file = check_option!(name2file.get_mut(name));
+
     let end = iOfst as usize + iAmt as usize;
     let slice = std::slice::from_raw_parts(zBuf.cast::<u8>(), iAmt as usize);
     match &mut file.db {
@@ -535,12 +523,9 @@ unsafe extern "C" fn xTruncate(
     let pool = pool(file2vfs(pFile));
     let file2name = pool.file2name.read();
     let mut name2file = pool.name2file.write();
-    let Some(name) = file2name.get(&(pFile as usize)) else {
-        return SQLITE_ERROR;
-    };
-    let Some(file) = name2file.get_mut(name) else {
-        return SQLITE_ERROR;
-    };
+
+    let name = check_option!(file2name.get(&FilePtr(pFile)));
+    let file = check_option!(name2file.get_mut(name));
 
     match &mut file.db {
         Idb::Main(file) => {
@@ -569,12 +554,9 @@ unsafe extern "C" fn xFileSize(
     let pool = pool(file2vfs(pFile));
     let file2name = pool.file2name.read();
     let name2file = pool.name2file.read();
-    let Some(name) = file2name.get(&(pFile as usize)) else {
-        return SQLITE_ERROR;
-    };
-    let Some(file) = name2file.get(name) else {
-        return SQLITE_ERROR;
-    };
+
+    let name = check_option!(file2name.get(&FilePtr(pFile)));
+    let file = check_option!(name2file.get(name));
 
     *pSize = match &file.db {
         Idb::Main(file) => file.file_size as sqlite3_int64,
@@ -614,12 +596,9 @@ unsafe extern "C" fn xFileControl(
     let pool = pool(file2vfs(pFile));
     let file2name = pool.file2name.read();
     let mut name2file = pool.name2file.write();
-    let Some(name) = file2name.get(&(pFile as usize)) else {
-        return SQLITE_ERROR;
-    };
-    let Some(file) = name2file.get_mut(name) else {
-        return SQLITE_ERROR;
-    };
+
+    let name = check_option!(file2name.get(&FilePtr(pFile)));
+    let file = check_option!(name2file.get_mut(name));
 
     let Idb::Main(file) = &mut file.db else {
         return SQLITE_NOTFOUND;
@@ -628,22 +607,23 @@ unsafe extern "C" fn xFileControl(
     match op {
         SQLITE_FCNTL_PRAGMA => {
             let pArg = pArg as *mut *mut c_char;
-            let Ok(key) = CStr::from_ptr(*pArg.add(1)).to_str() else {
-                return SQLITE_NOTFOUND;
-            };
-            let Ok(value) = CStr::from_ptr(*pArg.add(2)).to_str() else {
-                return SQLITE_NOTFOUND;
-            };
+            let name = *pArg.add(1);
+            let value = *pArg.add(2);
+
+            bail!(name.is_null());
+            bail!(value.is_null(), SQLITE_NOTFOUND);
+
+            let key = check_result!(CStr::from_ptr(name).to_str());
+            let value = check_result!(CStr::from_ptr(value).to_str());
+
             match key {
                 "page_size" => {
-                    if let Some(page_size) = value.parse().ok() {
-                        if page_size == file.block_size {
-                            return SQLITE_OK;
-                        } else if file.block_size == 0 {
-                            file.block_size = page_size;
-                        } else {
-                            return SQLITE_ERROR;
-                        }
+                    let page_size = check_result!(value.parse::<usize>());
+
+                    if page_size == file.block_size {
+                        return SQLITE_OK;
+                    } else if file.block_size == 0 {
+                        file.block_size = page_size;
                     } else {
                         return SQLITE_ERROR;
                     }
@@ -750,7 +730,7 @@ pub enum IndexedDbError {
 pub enum Preload {
     All,
     Empty,
-    Specify(Vec<String>),
+    Paths(Vec<String>),
 }
 
 pub struct IndexedDbUtil {
@@ -790,7 +770,7 @@ pub async fn install_idb_vfs(
     let mut name2vfs = NAME2VFS.lock().await;
     if let Some(pool) = name2vfs.get(vfs_name) {
         Ok(IndexedDbUtil {
-            pool: Arc::clone(&pool),
+            pool: Arc::clone(pool),
         })
     } else {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
