@@ -99,7 +99,7 @@ pub fn copy_to_slice(src: &Uint8Array, dst: &mut [u8]) {
 
     let buf = wasm_bindgen::memory();
     let mem = buf.unchecked_ref::<WebAssembly::Memory>();
-    JSUtils::to_slice(&mem, src, dst.as_mut_ptr(), dst.len());
+    JSUtils::to_slice(mem, src, dst.as_mut_ptr(), dst.len());
 }
 
 /// Copy `slice` and return new `Uint8Array`
@@ -112,12 +112,52 @@ pub fn copy_to_uint8_array(src: &[u8]) -> Uint8Array {
 /// Copy `slice` to `Unit8Array`
 pub fn copy_to_uint8_array_subarray(src: &[u8], dst: &Uint8Array) {
     assert!(
-        src.len() as usize == dst.length() as _,
+        src.len() == dst.length() as _,
         "Unit8Array and slice have different sizes"
     );
     let buf = wasm_bindgen::memory();
     let mem = buf.unchecked_ref::<WebAssembly::Memory>();
     JSUtils::to_uint8_array(mem, src.as_ptr(), src.len(), dst)
+}
+
+#[macro_export]
+macro_rules! bail {
+    ($ex:expr) => {
+        bail!($ex, SQLITE_ERROR);
+    };
+    ($ex:expr, $code: expr) => {
+        if $ex {
+            return $code;
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! check_option {
+    ($ex:expr) => {
+        check_option!($ex, SQLITE_ERROR)
+    };
+    ($ex:expr, $code: expr) => {
+        if let Some(v) = $ex {
+            v
+        } else {
+            return $code;
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! check_result {
+    ($ex:expr) => {
+        check_result!($ex, SQLITE_ERROR)
+    };
+    ($ex:expr, $code: expr) => {
+        if let Ok(v) = $ex {
+            v
+        } else {
+            return $code;
+        }
+    };
 }
 
 #[cfg(test)]

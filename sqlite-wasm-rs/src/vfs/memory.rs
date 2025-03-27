@@ -1,7 +1,7 @@
 //! Memory VFS, used as the default VFS
 
-use crate::libsqlite3::*;
 use crate::vfs::utils::{get_random_name, FilePtr};
+use crate::{bail, check_option, check_result, libsqlite3::*};
 
 use js_sys::{Date, Math};
 use once_cell::sync::Lazy;
@@ -98,10 +98,7 @@ unsafe extern "C" fn xOpen(
     let name = if zName.is_null() {
         get_random_name()
     } else {
-        let Ok(s) = CStr::from_ptr(zName).to_str() else {
-            return SQLITE_ERROR;
-        };
-        s.into()
+        check_result!(CStr::from_ptr(zName).to_str()).into()
     };
 
     let mut name2file = name2file();
@@ -136,13 +133,11 @@ unsafe extern "C" fn xDelete(
     zName: *const ::std::os::raw::c_char,
     _syncDir: ::std::os::raw::c_int,
 ) -> ::std::os::raw::c_int {
-    if zName.is_null() {
-        return SQLITE_IOERR_DELETE;
-    }
-    let Ok(s) = CStr::from_ptr(zName).to_str() else {
-        return SQLITE_ERROR;
-    };
+    bail!(zName.is_null(), SQLITE_IOERR_DELETE);
+
+    let s = check_result!(CStr::from_ptr(zName).to_str());
     name2file().remove(s);
+
     SQLITE_OK
 }
 
@@ -155,9 +150,7 @@ unsafe extern "C" fn xAccess(
     *pResOut = if zName.is_null() {
         0
     } else {
-        let Ok(s) = CStr::from_ptr(zName).to_str() else {
-            return SQLITE_ERROR;
-        };
+        let s = check_result!(CStr::from_ptr(zName).to_str());
         i32::from(name2file().contains_key(s))
     };
     SQLITE_OK
@@ -169,14 +162,12 @@ unsafe extern "C" fn xFullPathname(
     nOut: ::std::os::raw::c_int,
     zOut: *mut ::std::os::raw::c_char,
 ) -> ::std::os::raw::c_int {
-    if zName.is_null() || zOut.is_null() {
-        return SQLITE_CANTOPEN;
-    }
+    bail!(zName.is_null() || zOut.is_null(), SQLITE_CANTOPEN);
+
     let len = CStr::from_ptr(zName).count_bytes() + 1;
 
-    if len > nOut as usize {
-        return SQLITE_CANTOPEN;
-    }
+    bail!(len > nOut as usize, SQLITE_CANTOPEN);
+
     zName.copy_to(zOut, len);
 
     SQLITE_OK
@@ -206,9 +197,7 @@ unsafe extern "C" fn xRead(
     iAmt: ::std::os::raw::c_int,
     iOfst: sqlite3_int64,
 ) -> ::std::os::raw::c_int {
-    let Some(file) = mem_file(pFile) else {
-        return SQLITE_ERROR;
-    };
+    let file = check_option!(mem_file(pFile));
     let file = file.read();
     let data = &file.data;
 
@@ -237,11 +226,10 @@ unsafe extern "C" fn xWrite(
     iAmt: ::std::os::raw::c_int,
     iOfst: sqlite3_int64,
 ) -> ::std::os::raw::c_int {
-    let Some(file) = mem_file(pFile) else {
-        return SQLITE_ERROR;
-    };
-    let end = iOfst as usize + iAmt as usize;
+    let file = check_option!(mem_file(pFile));
     let mut file = file.write();
+
+    let end = iOfst as usize + iAmt as usize;
     let data = &mut file.data;
 
     if end > data.len() {
@@ -258,10 +246,9 @@ unsafe extern "C" fn xTruncate(
     pFile: *mut sqlite3_file,
     size: sqlite3_int64,
 ) -> ::std::os::raw::c_int {
-    let Some(file) = mem_file(pFile) else {
-        return SQLITE_ERROR;
-    };
+    let file = check_option!(mem_file(pFile));
     let mut file = file.write();
+
     let now = file.data.len();
     file.data.truncate(now.min(size as usize));
     SQLITE_OK
@@ -278,9 +265,7 @@ unsafe extern "C" fn xFileSize(
     pFile: *mut sqlite3_file,
     pSize: *mut sqlite3_int64,
 ) -> ::std::os::raw::c_int {
-    let Some(file) = mem_file(pFile) else {
-        return SQLITE_ERROR;
-    };
+    let file = check_option!(mem_file(pFile));
     *pSize = file.read().data.len() as sqlite3_int64;
     SQLITE_OK
 }
