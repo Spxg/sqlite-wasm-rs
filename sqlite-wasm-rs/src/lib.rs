@@ -21,10 +21,10 @@ mod vfs;
 pub use libsqlite3::*;
 
 // indexed db vfs implementation
-pub use vfs::idb;
+pub use vfs::idb as idb_vfs;
 
 // opfs vfs implementation
-pub use vfs::sahpool;
+pub use vfs::sahpool as sahpool_vfs;
 
 // some tools for implementing VFS
 pub use vfs::utils;
@@ -36,5 +36,8 @@ pub use sqlite_wasm_libc;
 /// To be compatible with previous versions.
 pub mod export {
     pub use crate::libsqlite3::*;
-    pub use crate::vfs::sahpool::*;
+    pub use crate::vfs::sahpool::{
+        install as install_opfs_sahpool, OpfsSAHError, OpfsSAHPoolCfg, OpfsSAHPoolCfgBuilder,
+        OpfsSAHPoolUtil,
+    };
 }

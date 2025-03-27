@@ -357,6 +357,6 @@ fn vfs() -> sqlite3_vfs {
     }
 }
 
-pub fn install_memory_vfs() -> ::std::os::raw::c_int {
+pub fn install() -> ::std::os::raw::c_int {
     unsafe { sqlite3_vfs_register(Box::leak(Box::new(vfs())), 1) }
 }

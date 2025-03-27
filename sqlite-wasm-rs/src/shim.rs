@@ -175,5 +175,5 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_realloc(ptr: *mut u8, new_size: u
 
 #[no_mangle]
 pub unsafe extern "C" fn sqlite3_os_init() -> std::os::raw::c_int {
-    super::vfs::memory::install_memory_vfs()
+    super::vfs::memory::install()
 }
