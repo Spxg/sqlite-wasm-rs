@@ -3,9 +3,11 @@ mod bind64;
 mod column_metadata;
 mod common;
 mod hook;
+mod idb_vfs;
+mod memory_vfs;
+mod sahpool_vfs;
 mod status;
 mod trigger;
-mod vfs;
 
 use sqlite_wasm_rs::export::*;
 use std::ffi::CString;
