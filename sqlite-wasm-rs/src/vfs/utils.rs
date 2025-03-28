@@ -120,6 +120,9 @@ pub fn copy_to_uint8_array_subarray(src: &[u8], dst: &Uint8Array) {
     JSUtils::to_uint8_array(mem, src.as_ptr(), src.len(), dst)
 }
 
+/// Return error code if expr is true.
+///
+/// The default error code is SQLITE_ERROR.
 #[macro_export]
 macro_rules! bail {
     ($ex:expr) => {
@@ -132,6 +135,11 @@ macro_rules! bail {
     };
 }
 
+/// Unpack Option<T>.
+///
+/// If it is None, return an error code.
+///
+/// The default error code is SQLITE_ERROR.
 #[macro_export]
 macro_rules! check_option {
     ($ex:expr) => {
@@ -146,6 +154,11 @@ macro_rules! check_option {
     };
 }
 
+/// Unpack Ok<T>.
+///
+/// If it is Err, return an error code.
+///
+/// The default err code is SQLITE_ERROR.
 #[macro_export]
 macro_rules! check_result {
     ($ex:expr) => {
