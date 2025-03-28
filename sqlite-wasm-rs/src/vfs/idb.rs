@@ -17,14 +17,14 @@ use std::{
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use wasm_bindgen::JsValue;
 
-enum IdbCommitOp {
-    Sync,
-    Delete,
-}
-
 struct IdbCommit {
     file: String,
     op: IdbCommitOp,
+}
+
+enum IdbCommitOp {
+    Sync,
+    Delete,
 }
 
 struct IdbPool {
@@ -57,21 +57,22 @@ async fn preload_db_impl(
         let (path, offset, data) = get_block(block);
         let IdbFile {
             db: Idb::Main(db), ..
-        } = name2file.entry(path.clone()).or_insert_with(|| IdbFile {
+        } = name2file.entry(path).or_insert_with(|| IdbFile {
             // unknown for now
             flags: 0,
             db: Idb::Main(IdbBlocks {
                 file_size: 0,
-                block_size: data.len(),
+                block_size: data.length() as _,
                 blocks: HashMap::new(),
-                tx_blocks: HashMap::new(),
+                tx_blocks: Vec::new(),
             }),
         })
         else {
             unreachable!();
         };
         db.file_size += db.block_size;
-        db.blocks.insert(offset, data);
+        db.blocks
+            .insert(offset, Buffer::Js(FragileComfirmed::new(data)));
     };
 
     match preload {
@@ -159,20 +160,18 @@ impl IdbPool {
                     };
 
                     let tx_blocks = std::mem::take(&mut idb_blocks.tx_blocks);
-                    let blocks = &mut idb_blocks.blocks;
-                    for (offset, data) in &tx_blocks {
-                        blocks.insert(*offset, data.clone());
-                    }
 
                     let file_size = idb_blocks.file_size;
                     let mut truncated_offset = idb_blocks.file_size;
                     while idb_blocks.blocks.remove(&truncated_offset).is_some() {
                         truncated_offset += idb_blocks.block_size;
                     }
-                    drop(name2file);
 
-                    for (offset, data) in tx_blocks {
-                        store.put(&set_block(&file, offset, data)).build()?;
+                    for offset in tx_blocks {
+                        let Some(Buffer::Rust(buffer)) = idb_blocks.blocks.get(&offset) else {
+                            unreachable!();
+                        };
+                        store.put(&set_block(&file, offset, buffer)).build()?;
                     }
 
                     store.delete(key_range(&file, file_size)).build()?;
@@ -194,7 +193,7 @@ impl IdbPool {
     }
 }
 
-fn get_block(value: JsValue) -> (String, usize, Vec<u8>) {
+fn get_block(value: JsValue) -> (String, usize, Uint8Array) {
     let path = Reflect::get(&value, &JsValue::from("path"))
         .unwrap()
         .as_string()
@@ -204,19 +203,18 @@ fn get_block(value: JsValue) -> (String, usize, Vec<u8>) {
         .as_f64()
         .unwrap() as usize;
     let data = Reflect::get(&value, &JsValue::from("data")).unwrap();
-    let data = copy_to_vec(&Uint8Array::new(&data));
 
-    (path, offset, data)
+    (path, offset, Uint8Array::from(data))
 }
 
-fn set_block(path: &str, offset: usize, data: Vec<u8>) -> JsValue {
+fn set_block(path: &str, offset: usize, data: &[u8]) -> JsValue {
     let block = Object::new();
     Reflect::set(&block, &JsValue::from("path"), &JsValue::from(path)).unwrap();
     Reflect::set(&block, &JsValue::from("offset"), &JsValue::from(offset)).unwrap();
     Reflect::set(
         &block,
         &JsValue::from("data"),
-        &JsValue::from(copy_to_uint8_array(&data)),
+        &JsValue::from(copy_to_uint8_array(data)),
     )
     .unwrap();
     block.into()
@@ -225,18 +223,6 @@ fn set_block(path: &str, offset: usize, data: Vec<u8>) -> JsValue {
 struct IdbFile {
     flags: i32,
     db: Idb,
-}
-
-enum Idb {
-    Main(IdbBlocks),
-    Temp(Vec<u8>),
-}
-
-struct IdbBlocks {
-    file_size: usize,
-    block_size: usize,
-    blocks: HashMap<usize, Vec<u8>>,
-    tx_blocks: HashMap<usize, Vec<u8>>,
 }
 
 impl IdbFile {
@@ -248,7 +234,7 @@ impl IdbFile {
                 file_size: 0,
                 block_size: 0,
                 blocks: HashMap::new(),
-                tx_blocks: HashMap::from([(0, vec![])]),
+                tx_blocks: vec![],
             })
         };
         Self { flags, db }
@@ -256,6 +242,31 @@ impl IdbFile {
 
     fn delete_on_close(&self) -> bool {
         self.flags & SQLITE_OPEN_DELETEONCLOSE != 0
+    }
+}
+
+enum Idb {
+    Main(IdbBlocks),
+    Temp(Vec<u8>),
+}
+
+struct IdbBlocks {
+    file_size: usize,
+    block_size: usize,
+    blocks: HashMap<usize, Buffer>,
+    tx_blocks: Vec<usize>,
+}
+
+enum Buffer {
+    Js(FragileComfirmed<Uint8Array>),
+    Rust(Vec<u8>),
+}
+
+impl Buffer {
+    fn load(&mut self) {
+        if let Buffer::Js(unit) = self {
+            *self = Buffer::Rust(copy_to_vec(unit));
+        }
     }
 }
 
@@ -414,20 +425,21 @@ unsafe extern "C" fn xRead(
 ) -> ::std::os::raw::c_int {
     let pool = pool(file2vfs(pFile));
     let file2name = pool.file2name.read();
-    let name2file = pool.name2file.read();
+    let mut name2file = pool.name2file.write();
 
     let name = check_option!(file2name.get(&FilePtr(pFile)));
-    let file = check_option!(name2file.get(name));
+    let file = check_option!(name2file.get_mut(name));
 
     let end = iOfst as usize + iAmt as usize;
     let slice = std::slice::from_raw_parts_mut(zBuf.cast::<u8>(), iAmt as usize);
 
-    match &file.db {
+    match &mut file.db {
         Idb::Main(file) => {
             if file.block_size == 0 {
                 slice.fill(0);
                 return SQLITE_IOERR_SHORT_READ;
             }
+
             let mut bytes_read = 0;
             let mut p_data_offset = 0;
             let p_data_length = iAmt as usize;
@@ -440,12 +452,13 @@ unsafe extern "C" fn xRead(
                 let block_offset = file_offset % block_size;
                 let block_addr = block_idx * file.block_size;
 
-                let Some(block) = file
-                    .tx_blocks
-                    .get(&block_addr)
-                    .or_else(|| file.blocks.get(&block_addr))
-                else {
+                let Some(buffer) = file.blocks.get_mut(&block_addr) else {
                     break;
+                };
+                buffer.load();
+
+                let Buffer::Rust(block) = &*buffer else {
+                    unreachable!()
                 };
 
                 if block.len() < block_offset {
@@ -502,7 +515,9 @@ unsafe extern "C" fn xWrite(
     let slice = std::slice::from_raw_parts(zBuf.cast::<u8>(), iAmt as usize);
     match &mut file.db {
         Idb::Main(file) => {
-            file.tx_blocks.insert(iOfst as usize, slice.to_vec());
+            file.blocks
+                .insert(iOfst as usize, Buffer::Rust(slice.to_vec()));
+            file.tx_blocks.push(iOfst as usize);
             file.file_size = file.file_size.max(iOfst as usize + iAmt as usize);
             file.block_size = iAmt as usize;
         }
