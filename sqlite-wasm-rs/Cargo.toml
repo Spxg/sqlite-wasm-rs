@@ -50,6 +50,7 @@ custom-libc = ["sqlite-wasm-libc"]
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.49"
+web-time = "1.1.0"
 
 [build-dependencies]
 bindgen = { version = "0.71", optional = true }
