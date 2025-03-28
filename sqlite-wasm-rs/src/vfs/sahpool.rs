@@ -33,6 +33,8 @@ const HEADER_OFFSET_DATA: usize = SECTOR_SIZE;
 const PERSISTENT_FILE_TYPES: i32 =
     SQLITE_OPEN_MAIN_DB | SQLITE_OPEN_MAIN_JOURNAL | SQLITE_OPEN_SUPER_JOURNAL | SQLITE_OPEN_WAL;
 
+type Result<T> = std::result::Result<T, OpfsSAHError>;
+
 static VFS2POOL: Lazy<RwLock<HashMap<VfsPtr, Arc<FragileComfirmed<OpfsSAHPool>>>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
@@ -74,7 +76,7 @@ struct FileObject {
 }
 
 impl FileObject {
-    fn new(obj: Object) -> Result<Self, OpfsSAHError> {
+    fn new(obj: Object) -> Result<Self> {
         let path = Reflect::get(&obj, &JsValue::from("path"))
             .map_err(OpfsSAHError::Reflect)?
             .as_string()
@@ -118,7 +120,7 @@ struct OpfsSAHPool {
 }
 
 impl OpfsSAHPool {
-    async fn new(options: &OpfsSAHPoolCfg) -> Result<OpfsSAHPool, OpfsSAHError> {
+    async fn new(options: &OpfsSAHPoolCfg) -> Result<OpfsSAHPool> {
         const OPAQUE_DIR_NAME: &str = ".opaque";
 
         let vfs_dir = &options.directory;
@@ -185,7 +187,7 @@ impl OpfsSAHPool {
     /// Adds n files to the pool's capacity. This change is
     /// persistent across settings. Returns a Promise which resolves
     /// to the new capacity.
-    async fn add_capacity(&self, n: u32) -> Result<u32, OpfsSAHError> {
+    async fn add_capacity(&self, n: u32) -> Result<u32> {
         for _ in 0..n {
             let name = get_random_name();
             let handle: FileSystemFileHandle =
@@ -211,7 +213,7 @@ impl OpfsSAHPool {
     /// Reduce capacity by n, but can only reduce up to the limit
     /// of currently-available SAHs. Returns a Promise which resolves
     /// to the number of slots really removed.
-    async fn reduce_capacity(&self, n: u32) -> Result<u32, OpfsSAHError> {
+    async fn reduce_capacity(&self, n: u32) -> Result<u32> {
         let mut result = 0;
         for sah in Array::from(&self.available_sah) {
             if result == n || self.get_capacity() == self.get_file_count() {
@@ -258,10 +260,7 @@ impl OpfsSAHPool {
     /// that file by extracting it from the SAH's header.
     /// On error, it disassociates SAH from the pool and
     /// returns an empty string.
-    fn get_associated_path(
-        &self,
-        sah: &FileSystemSyncAccessHandle,
-    ) -> Result<Option<String>, OpfsSAHError> {
+    fn get_associated_path(&self, sah: &FileSystemSyncAccessHandle) -> Result<Option<String>> {
         sah.read_with_buffer_source_and_options(&self.ap_body, &read_write_options(0.0))
             .map_err(OpfsSAHError::Read)?;
         let flags = self.dv_body.get_uint32(HEADER_OFFSET_FLAGS);
@@ -313,7 +312,7 @@ impl OpfsSAHPool {
         sah: &FileSystemSyncAccessHandle,
         path: &str,
         flags: i32,
-    ) -> Result<(), OpfsSAHError> {
+    ) -> Result<()> {
         if HEADER_MAX_PATH_SIZE < path.len() {
             return Err(OpfsSAHError::Custom(format!("Path too long: {path}")));
         }
@@ -358,7 +357,7 @@ impl OpfsSAHPool {
     /// If clearFiles is true, the client-stored state of each file is
     /// cleared when its handle is acquired, including its name, flags,
     /// and any data stored after the metadata block.
-    async fn acquire_access_handles(&self, clear_files: bool) -> Result<(), OpfsSAHError> {
+    async fn acquire_access_handles(&self, clear_files: bool) -> Result<()> {
         let mut files = vec![];
         let iter = self.dh_opaque.entries();
         while let Ok(future) = iter.next() {
@@ -439,10 +438,7 @@ impl OpfsSAHPool {
 
     /// Given an (sqlite3_file*), returns the mapped
     /// xOpen file object.
-    fn get_o_file_for_s3_file(
-        &self,
-        p_file: *mut sqlite3_file,
-    ) -> Result<FileObject, OpfsSAHError> {
+    fn get_o_file_for_s3_file(&self, p_file: *mut sqlite3_file) -> Result<FileObject> {
         let file = self.map_s3_file_to_o_file.get(&JsValue::from(p_file));
         if file.is_undefined() {
             return Err(OpfsSAHError::Custom("open file not exists".into()));
@@ -464,7 +460,7 @@ impl OpfsSAHPool {
     /// Removes the association of the given client-specified file
     /// name (JS string) from the pool. Returns true if a mapping
     /// is found, else false.
-    fn delete_path(&self, path: &str) -> Result<bool, OpfsSAHError> {
+    fn delete_path(&self, path: &str) -> Result<bool> {
         let sah = self.map_filename_to_sah.get(&JsValue::from(path));
         let found = !sah.is_undefined();
         if found {
@@ -477,7 +473,7 @@ impl OpfsSAHPool {
 
     /// All "../" parts and duplicate slashes are resolve/removed from
     /// the returned result.
-    fn get_path(&self, name: *const ::std::os::raw::c_char) -> Result<String, OpfsSAHError> {
+    fn get_path(&self, name: *const ::std::os::raw::c_char) -> Result<String> {
         if name.is_null() {
             return Err(OpfsSAHError::Custom("name is null ptr".into()));
         }
@@ -515,7 +511,7 @@ impl OpfsSAHPool {
             .map(|x| x.value().into())
     }
 
-    fn export_file(&self, name: &str) -> Result<Vec<u8>, OpfsSAHError> {
+    fn export_file(&self, name: &str) -> Result<Vec<u8>> {
         let sah = self.map_filename_to_sah.get(&JsValue::from(name));
         if sah.is_undefined() {
             return Err(OpfsSAHError::Custom(format!("File not found: {name}")));
@@ -541,7 +537,7 @@ impl OpfsSAHPool {
         Ok(data)
     }
 
-    fn import_db(&self, path: &str, bytes: &[u8]) -> Result<(), OpfsSAHError> {
+    fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
         const HEADER: &str = "SQLite format 3";
 
         let sah = self.map_filename_to_sah.get(&JsValue::from(path));
@@ -1069,13 +1065,13 @@ pub struct OpfsSAHPoolUtil {
 
 impl OpfsSAHPoolUtil {
     /// Adds n entries to the current pool.
-    pub async fn add_capacity(&self, n: u32) -> Result<u32, OpfsSAHError> {
+    pub async fn add_capacity(&self, n: u32) -> Result<u32> {
         self.pool.add_capacity(n).await
     }
 
     /// Removes up to n entries from the pool, with the caveat that
     /// it can only remove currently-unused entries.
-    pub async fn reduce_capacity(&self, n: u32) -> Result<u32, OpfsSAHError> {
+    pub async fn reduce_capacity(&self, n: u32) -> Result<u32> {
         self.pool.reduce_capacity(n).await
     }
 
@@ -1096,7 +1092,7 @@ impl OpfsSAHPoolUtil {
 
     /// Removes up to n entries from the pool, with the caveat that it can only
     /// remove currently-unused entries.
-    pub async fn reserve_minimum_capacity(&self, min: u32) -> Result<(), OpfsSAHError> {
+    pub async fn reserve_minimum_capacity(&self, min: u32) -> Result<()> {
         let now = self.pool.get_capacity();
         if min > now {
             self.pool.add_capacity(min - now).await?;
@@ -1106,12 +1102,12 @@ impl OpfsSAHPoolUtil {
 
     /// If a virtual file exists with the given name, disassociates it
     /// from the pool and returns true, else returns false without side effects.
-    pub fn unlink(&self, name: &str) -> Result<bool, OpfsSAHError> {
+    pub fn unlink(&self, name: &str) -> Result<bool> {
         self.pool.delete_path(name)
     }
 
     /// Synchronously reads the contents of the given file into a Uint8Array and returns it.
-    pub fn export_file(&self, name: &str) -> Result<Vec<u8>, OpfsSAHError> {
+    pub fn export_file(&self, name: &str) -> Result<Vec<u8>> {
         self.pool.export_file(name)
     }
 
@@ -1119,7 +1115,7 @@ impl OpfsSAHPoolUtil {
     /// under the given name, overwriting any existing content.
     ///
     /// path must start with '/'
-    pub fn import_db(&self, path: &str, bytes: &[u8]) -> Result<(), OpfsSAHError> {
+    pub fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
         if !path.starts_with('/') {
             return Err(OpfsSAHError::Custom("path must start with '/'".into()));
         }
@@ -1128,7 +1124,7 @@ impl OpfsSAHPoolUtil {
 
     /// Clears all client-defined state of all SAHs and makes all of them available
     /// for re-use by the pool.
-    pub async fn wipe_files(&self) -> Result<(), OpfsSAHError> {
+    pub async fn wipe_files(&self) -> Result<()> {
         self.pool.release_access_handles();
         self.pool.acquire_access_handles(true).await?;
         Ok(())
@@ -1140,7 +1136,7 @@ impl OpfsSAHPoolUtil {
 pub async fn install(
     options: Option<&OpfsSAHPoolCfg>,
     default_vfs: bool,
-) -> Result<OpfsSAHPoolUtil, OpfsSAHError> {
+) -> Result<OpfsSAHPoolUtil> {
     let default_options = OpfsSAHPoolCfg::default();
     let options = options.unwrap_or(&default_options);
     let vfs_name = &options.vfs_name;
