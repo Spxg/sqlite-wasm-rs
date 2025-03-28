@@ -75,7 +75,6 @@ async fn preload_db_impl(
     };
 
     match preload {
-        Preload::Empty => (),
         Preload::All => {
             for block in blocks.get_all::<JsValue>().await? {
                 insert_fn(block?);
@@ -92,6 +91,7 @@ async fn preload_db_impl(
                 }
             }
         }
+        Preload::None => (),
     }
     transaction.commit().await?;
 
@@ -729,13 +729,14 @@ pub enum IndexedDbError {
 
 pub enum Preload {
     All,
-    Empty,
     Paths(Vec<String>),
+    None,
 }
 
 pub struct IndexedDbUtil {
     pool: Arc<IdbPool>,
 }
+
 impl IndexedDbUtil {
     pub async fn preload_db(&self, prelod: Vec<String>) -> Result<(), IndexedDbError> {
         self.pool.preload_db(prelod).await
