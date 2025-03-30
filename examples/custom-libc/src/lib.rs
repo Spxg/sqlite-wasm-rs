@@ -1,6 +1,6 @@
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_dedicated_worker);
 
-use sqlite_wasm_rs::{self as ffi, install_opfs_sahpool};
+use sqlite_wasm_rs::{self as ffi, sahpool_vfs::install as install_opfs_sahpool};
 use wasm_bindgen_test::wasm_bindgen_test;
 
 #[allow(non_upper_case_globals)]
