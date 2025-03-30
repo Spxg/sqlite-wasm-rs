@@ -3,14 +3,14 @@
 //! <https://github.com/sqlite/sqlite/blob/master/ext/wasm/api/sqlite3-vfs-opfs-sahpool.c-pp.js>
 
 use crate::vfs::utils::{
-    copy_to_uint8_array_subarray, copy_to_vec, get_random_name, FragileComfirmed, VfsError, VfsPtr,
+    copy_to_uint8_array_subarray, copy_to_vec, get_random_name, register_vfs, FragileComfirmed,
+    VfsError, VfsPtr, SQLITE3_HEADER,
 };
 use crate::{bail, libsqlite3::*};
 
 use js_sys::{Array, DataView, IteratorNext, Map, Object, Reflect, Set, Uint32Array, Uint8Array};
 use once_cell::sync::Lazy;
 use parking_lot::{Mutex, RwLock};
-use std::ffi::CString;
 use std::sync::Arc;
 use std::{collections::HashMap, ffi::CStr};
 use wasm_bindgen::{JsCast, JsValue};
@@ -535,8 +535,6 @@ impl OpfsSAHPool {
     }
 
     fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
-        const HEADER: &str = "SQLite format 3";
-
         let sah = self.map_filename_to_sah.get(&JsValue::from(path));
         let sah = if sah.is_undefined() {
             self.next_available_sah()
@@ -550,7 +548,12 @@ impl OpfsSAHPool {
                 "Byte array size is invalid for an SQLite db.".into(),
             ));
         }
-        if HEADER.as_bytes().iter().zip(bytes).any(|(x, y)| x != y) {
+        if SQLITE3_HEADER
+            .as_bytes()
+            .iter()
+            .zip(bytes)
+            .any(|(x, y)| x != y)
+        {
             return Err(OpfsSAHError::Generic(
                 "Input does not contain an SQLite database header.".into(),
             ));
@@ -1148,21 +1151,6 @@ pub async fn install(
         Ok::<_, OpfsSAHError>(FragileComfirmed::new(pool))
     };
 
-    let register_vfs = || {
-        let name = CString::new(vfs_name.clone()).map_err(|_| VfsError::ToCStr)?;
-        let vfs = Box::leak(Box::new(vfs(name.into_raw())));
-
-        let ret = unsafe { sqlite3_vfs_register(vfs, i32::from(default_vfs)) };
-        if ret != SQLITE_OK {
-            unsafe {
-                drop(Box::from_raw(vfs));
-            }
-            return Err(VfsError::RegisterVfs);
-        }
-
-        Ok::<_, VfsError>(vfs as *mut sqlite3_vfs)
-    };
-
     static NAME2VFS: Lazy<tokio::sync::Mutex<HashMap<String, Arc<FragileComfirmed<OpfsSAHPool>>>>> =
         Lazy::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
@@ -1172,7 +1160,7 @@ pub async fn install(
         Arc::clone(pool)
     } else {
         let pool = Arc::new(create_pool.await?);
-        let vfs = register_vfs()?;
+        let vfs = register_vfs(vfs_name, default_vfs, vfs)?;
         name2vfs.insert(vfs_name.clone(), Arc::clone(&pool));
         VFS2POOL.write().insert(VfsPtr(vfs), Arc::clone(&pool));
         pool
