@@ -1,4 +1,4 @@
-//! indexed-db-pool vfs implementation
+//! idbpool vfs implementation
 
 use crate::vfs::utils::{
     copy_to_uint8_array, copy_to_vec, get_random_name, register_vfs, FragileComfirmed,
@@ -935,7 +935,7 @@ pub struct IndexedDbPoolCfg {
 impl Default for IndexedDbPoolCfg {
     fn default() -> Self {
         Self {
-            vfs_name: "indexed-db-pool".into(),
+            vfs_name: "idbpool".into(),
             clear_on_init: false,
             preload: Preload::All,
         }
@@ -985,7 +985,7 @@ impl IndexedDbUtil {
     }
 }
 
-/// Register `indexed-db-pool` vfs and return a utility object which can be used
+/// Register `idbpool` vfs and return a utility object which can be used
 /// to perform basic administration of the file pool
 pub async fn install(
     options: Option<&IndexedDbPoolCfg>,
