@@ -1,4 +1,4 @@
-#![doc = include_str!("../../VFS.md")]
+#![doc = include_str!("README.md")]
 
 pub mod idbpool;
 pub mod memory;
