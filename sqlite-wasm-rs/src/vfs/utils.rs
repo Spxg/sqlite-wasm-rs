@@ -1,11 +1,17 @@
 //! Some tools for implementing VFS
 
-use crate::libsqlite3::{sqlite3_file, sqlite3_vfs};
+use crate::libsqlite3::*;
 
 use fragile::Fragile;
 use js_sys::{Math, Number, Uint8Array, WebAssembly};
-use std::ops::{Deref, DerefMut};
+use std::{
+    ffi::CString,
+    ops::{Deref, DerefMut},
+};
 use wasm_bindgen::{prelude::wasm_bindgen, JsCast};
+
+/// The header of the SQLite file is used to determine whether the imported file is legal.
+pub const SQLITE3_HEADER: &str = "SQLite format 3";
 
 /// Wrap the pVfs pointer, which is often used in VFS implementation.
 ///
@@ -194,11 +200,18 @@ pub struct SQLiteVfsFile {
 
 impl SQLiteVfsFile {
     /// Convert a `sqlite3_file` pointer to a `SQLiteVfsFile` pointer.
+    ///
+    /// # Safety
+    ///
+    /// You must ensure that the pointer passed in is `SQLiteVfsFile`
     pub unsafe fn from_file(file: *mut sqlite3_file) -> &'static SQLiteVfsFile {
         &*file.cast::<Self>()
     }
 
     /// Get the file name. When xClose, you can release the memory by `drop(Box::from_raw(ptr));`.
+    /// # Safety
+    ///
+    /// You must ensure that the pointer passed in is `SQLiteVfsFile`
     pub unsafe fn name(&self) -> &'static mut str {
         // emm, `from_raw_parts_mut` is unstable
         std::str::from_utf8_unchecked_mut(std::slice::from_raw_parts_mut(
@@ -215,6 +228,28 @@ pub enum VfsError {
     ToCStr,
     #[error("An error occurred while registering vfs with sqlite")]
     RegisterVfs,
+}
+
+/// Register vfs general method
+pub fn register_vfs(
+    vfs_name: &str,
+    default_vfs: bool,
+    register_fn: fn(*const std::os::raw::c_char) -> sqlite3_vfs,
+) -> Result<*mut sqlite3_vfs, VfsError> {
+    let name = CString::new(vfs_name).map_err(|_| VfsError::ToCStr)?;
+    let name_ptr = name.into_raw();
+    let vfs = Box::leak(Box::new(register_fn(name_ptr)));
+
+    let ret = unsafe { sqlite3_vfs_register(vfs, i32::from(default_vfs)) };
+    if ret != SQLITE_OK {
+        unsafe {
+            drop(Box::from_raw(vfs));
+            drop(CString::from_raw(name_ptr));
+        }
+        return Err(VfsError::RegisterVfs);
+    }
+
+    Ok(vfs as *mut sqlite3_vfs)
 }
 
 #[cfg(test)]
