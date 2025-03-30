@@ -3,7 +3,7 @@
 //! <https://github.com/sqlite/sqlite/blob/master/ext/wasm/api/sqlite3-vfs-opfs-sahpool.c-pp.js>
 
 use crate::vfs::utils::{
-    copy_to_uint8_array_subarray, copy_to_vec, get_random_name, FragileComfirmed, VfsPtr,
+    copy_to_uint8_array_subarray, copy_to_vec, get_random_name, FragileComfirmed, VfsError, VfsPtr,
 };
 use crate::{bail, libsqlite3::*};
 
@@ -78,19 +78,16 @@ struct FileObject {
 impl FileObject {
     fn new(obj: Object) -> Result<Self> {
         let path = Reflect::get(&obj, &JsValue::from("path"))
-            .map_err(OpfsSAHError::Reflect)?
+            .unwrap()
             .as_string()
-            .ok_or_else(|| OpfsSAHError::Custom("path not string".into()))?;
+            .unwrap();
 
         let flags = Reflect::get(&obj, &JsValue::from("flags"))
-            .map_err(OpfsSAHError::Reflect)?
+            .unwrap()
             .as_f64()
-            .ok_or_else(|| OpfsSAHError::Custom("flags not number".into()))?
-            as i32;
+            .unwrap() as i32;
 
-        let sah = Reflect::get(&obj, &JsValue::from("sah"))
-            .map_err(OpfsSAHError::Reflect)?
-            .into();
+        let sah = Reflect::get(&obj, &JsValue::from("sah")).unwrap().into();
 
         Ok(Self { path, flags, sah })
     }
@@ -314,7 +311,7 @@ impl OpfsSAHPool {
         flags: i32,
     ) -> Result<()> {
         if HEADER_MAX_PATH_SIZE < path.len() {
-            return Err(OpfsSAHError::Custom(format!("Path too long: {path}")));
+            return Err(OpfsSAHError::Generic(format!("Path too long: {path}")));
         }
         copy_to_uint8_array_subarray(
             path.as_bytes(),
@@ -441,7 +438,7 @@ impl OpfsSAHPool {
     fn get_o_file_for_s3_file(&self, p_file: *mut sqlite3_file) -> Result<FileObject> {
         let file = self.map_s3_file_to_o_file.get(&JsValue::from(p_file));
         if file.is_undefined() {
-            return Err(OpfsSAHError::Custom("open file not exists".into()));
+            return Err(OpfsSAHError::Generic("open file not exists".into()));
         }
         FileObject::new(file.into())
     }
@@ -475,12 +472,12 @@ impl OpfsSAHPool {
     /// the returned result.
     fn get_path(&self, name: *const ::std::os::raw::c_char) -> Result<String> {
         if name.is_null() {
-            return Err(OpfsSAHError::Custom("name is null ptr".into()));
+            return Err(OpfsSAHError::Generic("name is null ptr".into()));
         }
         let name = unsafe {
             CStr::from_ptr(name)
                 .to_str()
-                .map_err(|e| OpfsSAHError::Custom(format!("{e:?}")))?
+                .map_err(|e| OpfsSAHError::Generic(format!("{e:?}")))?
         };
         Url::new_with_base(name, "file://localhost/")
             .map(|x| x.pathname())
@@ -514,7 +511,7 @@ impl OpfsSAHPool {
     fn export_file(&self, name: &str) -> Result<Vec<u8>> {
         let sah = self.map_filename_to_sah.get(&JsValue::from(name));
         if sah.is_undefined() {
-            return Err(OpfsSAHError::Custom(format!("File not found: {name}")));
+            return Err(OpfsSAHError::Generic(format!("File not found: {name}")));
         }
         let sah = FileSystemSyncAccessHandle::from(sah);
         let n = sah.get_size().map_err(OpfsSAHError::GetSize)? - HEADER_OFFSET_DATA as f64;
@@ -528,7 +525,7 @@ impl OpfsSAHPool {
                 )
                 .map_err(OpfsSAHError::Read)?;
             if read != n as f64 {
-                return Err(OpfsSAHError::Custom(format!(
+                return Err(OpfsSAHError::Generic(format!(
                     "Expected to read {} bytes but read {}.",
                     n, read
                 )));
@@ -543,18 +540,18 @@ impl OpfsSAHPool {
         let sah = self.map_filename_to_sah.get(&JsValue::from(path));
         let sah = if sah.is_undefined() {
             self.next_available_sah()
-                .ok_or_else(|| OpfsSAHError::Custom("No available handles to import to.".into()))?
+                .ok_or_else(|| OpfsSAHError::Generic("No available handles to import to.".into()))?
         } else {
             FileSystemSyncAccessHandle::from(sah)
         };
         let length = bytes.len();
         if length < 512 && length % 512 != 0 {
-            return Err(OpfsSAHError::Custom(
+            return Err(OpfsSAHError::Generic(
                 "Byte array size is invalid for an SQLite db.".into(),
             ));
         }
         if HEADER.as_bytes().iter().zip(bytes).any(|(x, y)| x != y) {
-            return Err(OpfsSAHError::Custom(
+            return Err(OpfsSAHError::Generic(
                 "Input does not contain an SQLite database header.".into(),
             ));
         }
@@ -563,7 +560,7 @@ impl OpfsSAHPool {
             .map_err(OpfsSAHError::Write)?;
         if write != length as f64 {
             self.set_associated_path(&sah, "", 0)?;
-            return Err(OpfsSAHError::Custom(format!(
+            return Err(OpfsSAHError::Generic(format!(
                 "Expected to write {} bytes but wrote {}.",
                 length, write
             )));
@@ -860,13 +857,13 @@ unsafe extern "C" fn xOpen(
             Some(sah) => sah,
             None => {
                 if flags & SQLITE_OPEN_CREATE == 0 {
-                    return Err(OpfsSAHError::Custom(format!("file not found: {name}")));
+                    return Err(OpfsSAHError::Generic(format!("file not found: {name}")));
                 }
                 if let Some(sah) = pool.next_available_sah() {
                     pool.set_associated_path(&sah, &name, flags)?;
                     sah
                 } else {
-                    return Err(OpfsSAHError::Custom(
+                    return Err(OpfsSAHError::Generic(
                         "SAH pool is full. Cannot create file".into(),
                     ));
                 }
@@ -1025,32 +1022,37 @@ impl Default for OpfsSAHPoolCfg {
 
 #[derive(thiserror::Error, Debug)]
 pub enum OpfsSAHError {
-    #[error("this vfs is only available in workers")]
+    #[error(transparent)]
+    Vfs(#[from] VfsError),
+    #[error("This vfs is only available in dedicated worker")]
     NotSuported,
-    #[error("get directory handle error")]
+    #[error("An error occurred while getting the directory handle")]
     GetDirHandle(JsValue),
-    #[error("get file handle error")]
+    #[error("An error occurred while getting the file handle")]
     GetFileHandle(JsValue),
-    #[error("create sync access handle error")]
+    #[error("An error occurred while creating sync access handle")]
     CreateSyncAccessHandle(JsValue),
-    #[error("iterate handle error")]
+    #[error("An error occurred while iterating")]
     IterHandle(JsValue),
-    #[error("get path error")]
+    #[error("An error occurred while getting path")]
     GetPath(JsValue),
-    #[error("remove entity error")]
+    #[error("An error occurred while removing entity")]
     RemoveEntity(JsValue),
-    #[error("get size error")]
+    #[error("An error occurred while getting size")]
     GetSize(JsValue),
-    #[error("sah read error")]
+    #[error("An error occurred while reading data")]
     Read(JsValue),
-    #[error("sah write error")]
+    #[error("An error occurred while writing data")]
     Write(JsValue),
-    #[error("sah flush error")]
+    #[error("An error occurred while flushing data")]
     Flush(JsValue),
-    #[error("sah truncate error")]
+    #[error("An error occurred while truncating data")]
     Truncate(JsValue),
-    #[error("reflect error")]
+    #[error("An error occurred while getting data using reflect")]
     Reflect(JsValue),
+    #[error("Generic error: {0}")]
+    Generic(String),
+    #[deprecated(note = "Has been renamed to OpfsSAHError::Generic")]
     #[error("custom error")]
     Custom(String),
 }
@@ -1117,7 +1119,7 @@ impl OpfsSAHPoolUtil {
     /// path must start with '/'
     pub fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
         if !path.starts_with('/') {
-            return Err(OpfsSAHError::Custom("path must start with '/'".into()));
+            return Err(OpfsSAHError::Generic("path must start with '/'".into()));
         }
         self.pool.import_db(path, bytes)
     }
@@ -1143,12 +1145,11 @@ pub async fn install(
 
     let create_pool = async {
         let pool = OpfsSAHPool::new(options).await?;
-        Ok(FragileComfirmed::new(pool))
+        Ok::<_, OpfsSAHError>(FragileComfirmed::new(pool))
     };
 
     let register_vfs = || {
-        let name =
-            CString::new(vfs_name.clone()).map_err(|e| OpfsSAHError::Custom(format!("{e:?}")))?;
+        let name = CString::new(vfs_name.clone()).map_err(|_| VfsError::ToCStr)?;
         let vfs = Box::leak(Box::new(vfs(name.into_raw())));
 
         let ret = unsafe { sqlite3_vfs_register(vfs, i32::from(default_vfs)) };
@@ -1156,12 +1157,10 @@ pub async fn install(
             unsafe {
                 drop(Box::from_raw(vfs));
             }
-            return Err(OpfsSAHError::Custom(format!(
-                "register {vfs_name} vfs failed",
-            )));
+            return Err(VfsError::RegisterVfs);
         }
 
-        Ok(vfs as *mut sqlite3_vfs)
+        Ok::<_, VfsError>(vfs as *mut sqlite3_vfs)
     };
 
     static NAME2VFS: Lazy<tokio::sync::Mutex<HashMap<String, Arc<FragileComfirmed<OpfsSAHPool>>>>> =
