@@ -21,9 +21,9 @@ mod vfs;
 pub use libsqlite3::*;
 
 // indexed db vfs implementation
-pub use vfs::idb as idb_vfs;
+pub use vfs::idbpool as idbpool_vfs;
 
-// opfs vfs implementation
+// opfs sync access handle vfs implementation
 pub use vfs::sahpool as sahpool_vfs;
 
 // some tools for implementing VFS
