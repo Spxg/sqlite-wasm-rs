@@ -1,4 +1,4 @@
-//! idbpool vfs implementation
+//! relaxed-idb vfs implementation
 
 use crate::vfs::utils::{
     copy_to_uint8_array, copy_to_vec, get_random_name, register_vfs, FragileComfirmed,
@@ -23,7 +23,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::Notify;
 use wasm_bindgen::JsValue;
 
-type Result<T> = std::result::Result<T, IndexedDbError>;
+type Result<T> = std::result::Result<T, RelaxedIdbError>;
 
 struct IdbCommit {
     file: String,
@@ -166,14 +166,14 @@ async fn preload_db_impl(
     Ok(name2file)
 }
 
-struct IdbPool {
+struct RelaxedIdb {
     idb: FragileComfirmed<Database>,
     name2file: RwLock<HashMap<String, IdbFile>>,
     tx: UnboundedSender<IdbCommit>,
 }
 
-impl IdbPool {
-    async fn new(options: &IndexedDbPoolCfg, tx: UnboundedSender<IdbCommit>) -> Result<Self> {
+impl RelaxedIdb {
+    async fn new(options: &RelaxedIdbCfg, tx: UnboundedSender<IdbCommit>) -> Result<Self> {
         let indexed_db = Database::open(&options.vfs_name)
             .with_version(1u8)
             .with_on_upgrade_needed(|_, db| {
@@ -189,7 +189,7 @@ impl IdbPool {
         }
 
         let name2file = preload_db_impl(&indexed_db, &options.preload).await?;
-        Ok(IdbPool {
+        Ok(RelaxedIdb {
             idb: FragileComfirmed::new(indexed_db),
             name2file: RwLock::new(name2file),
             tx,
@@ -211,13 +211,13 @@ impl IdbPool {
 
     async fn import_db(&self, path: &str, bytes: &[u8], page_size: usize) -> Result<()> {
         if !(page_size.is_power_of_two() && (512..=65536).contains(&page_size)) {
-            return Err(IndexedDbError::Generic(
+            return Err(RelaxedIdbError::Generic(
                 "The page size must be a power of two between 512 and 65536 inclusive.".into(),
             ));
         }
 
         if self.name2file.read().contains_key(path) {
-            return Err(IndexedDbError::Generic(format!(
+            return Err(RelaxedIdbError::Generic(format!(
                 "{path} file already exists"
             )));
         }
@@ -228,7 +228,7 @@ impl IdbPool {
             .zip(bytes)
             .any(|(x, y)| x != y)
         {
-            return Err(IndexedDbError::Generic(
+            return Err(RelaxedIdbError::Generic(
                 "Input does not contain an SQLite database header.".into(),
             ));
         }
@@ -265,7 +265,7 @@ impl IdbPool {
             })
             .is_err()
         {
-            return Err(IndexedDbError::Generic(
+            return Err(RelaxedIdbError::Generic(
                 "sync db to indexed db failed".into(),
             ));
         }
@@ -294,7 +294,7 @@ impl IdbPool {
                 IdbFile::Temp(items) => Ok(items.clone()),
             }
         } else {
-            Err(IndexedDbError::Generic(
+            Err(RelaxedIdbError::Generic(
                 "the file to be exported does not exist".into(),
             ))
         }
@@ -313,7 +313,7 @@ impl IdbPool {
             })
             .is_err()
         {
-            return Err(IndexedDbError::Generic(
+            return Err(RelaxedIdbError::Generic(
                 "sync db to indexed db failed".into(),
             ));
         }
@@ -328,7 +328,7 @@ impl IdbPool {
     }
 
     async fn commit_loop(self: Arc<Self>, mut rx: UnboundedReceiver<IdbCommit>) {
-        async fn to_commit(pool: &IdbPool, commit: IdbCommit) -> Result<()> {
+        async fn to_commit(pool: &RelaxedIdb, commit: IdbCommit) -> Result<()> {
             let IdbCommit { file, op, notify } = commit;
 
             let transaction = pool
@@ -412,10 +412,10 @@ fn set_block(path: &str, offset: usize, data: &[u8]) -> JsValue {
     block.into()
 }
 
-static VFS2POOL: Lazy<RwLock<HashMap<VfsPtr, Arc<IdbPool>>>> =
+static VFS2POOL: Lazy<RwLock<HashMap<VfsPtr, Arc<RelaxedIdb>>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
-fn pool(vfs: *mut sqlite3_vfs) -> Arc<IdbPool> {
+fn pool(vfs: *mut sqlite3_vfs) -> Arc<RelaxedIdb> {
     // Already registered vfs will not be unregistered, so this is safe
     Arc::clone(VFS2POOL.read().get(&VfsPtr(vfs)).unwrap())
 }
@@ -861,7 +861,7 @@ fn vfs(name: *const ::std::os::raw::c_char) -> sqlite3_vfs {
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum IndexedDbError {
+pub enum RelaxedIdbError {
     #[error(transparent)]
     Vfs(#[from] VfsError),
     #[error(transparent)]
@@ -883,11 +883,11 @@ pub enum Preload {
 }
 
 /// Build `IndexedDbPoolCfg`
-pub struct IndexedDbPoolCfgBuilder(IndexedDbPoolCfg);
+pub struct RelaxedIndexedDbCfgBuilder(RelaxedIdbCfg);
 
-impl IndexedDbPoolCfgBuilder {
+impl RelaxedIndexedDbCfgBuilder {
     pub fn new() -> Self {
-        Self(IndexedDbPoolCfg::default())
+        Self(RelaxedIdbCfg::default())
     }
 
     /// The SQLite VFS name under which this pool's VFS is registered.
@@ -909,19 +909,19 @@ impl IndexedDbPoolCfgBuilder {
     }
 
     /// Build IndexedDbPoolCfg
-    pub fn build(self) -> IndexedDbPoolCfg {
+    pub fn build(self) -> RelaxedIdbCfg {
         self.0
     }
 }
 
-impl Default for IndexedDbPoolCfgBuilder {
+impl Default for RelaxedIndexedDbCfgBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
 /// `IndexedDbPool` options
-pub struct IndexedDbPoolCfg {
+pub struct RelaxedIdbCfg {
     /// The SQLite VFS name under which this pool's VFS is registered.
     pub vfs_name: String,
     /// Delete all files on initialization.
@@ -930,10 +930,10 @@ pub struct IndexedDbPoolCfg {
     pub preload: Preload,
 }
 
-impl Default for IndexedDbPoolCfg {
+impl Default for RelaxedIdbCfg {
     fn default() -> Self {
         Self {
-            vfs_name: "idbpool".into(),
+            vfs_name: "relaxed-idb".into(),
             clear_on_init: false,
             preload: Preload::All,
         }
@@ -941,11 +941,11 @@ impl Default for IndexedDbPoolCfg {
 }
 
 /// IndexedDbPool management tools exposed to clients.
-pub struct IndexedDbUtil {
-    pool: Arc<IdbPool>,
+pub struct RelaxedIdbUtil {
+    pool: Arc<RelaxedIdb>,
 }
 
-impl IndexedDbUtil {
+impl RelaxedIdbUtil {
     /// Preload the db.
     /// Because indexed db reading data is an asynchronous operation,
     /// the db must be preloaded into memory before opening the sqlite db.
@@ -983,16 +983,13 @@ impl IndexedDbUtil {
     }
 }
 
-/// Register `idbpool` vfs and return a utility object which can be used
+/// Register `relaxed-idb` vfs and return a utility object which can be used
 /// to perform basic administration of the file pool
-pub async fn install(
-    options: Option<&IndexedDbPoolCfg>,
-    default_vfs: bool,
-) -> Result<IndexedDbUtil> {
-    static NAME2VFS: Lazy<tokio::sync::Mutex<HashMap<String, Arc<IdbPool>>>> =
+pub async fn install(options: Option<&RelaxedIdbCfg>, default_vfs: bool) -> Result<RelaxedIdbUtil> {
+    static NAME2VFS: Lazy<tokio::sync::Mutex<HashMap<String, Arc<RelaxedIdb>>>> =
         Lazy::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
-    let default_options = IndexedDbPoolCfg::default();
+    let default_options = RelaxedIdbCfg::default();
     let options = options.unwrap_or(&default_options);
     let vfs_name = &options.vfs_name;
 
@@ -1001,7 +998,7 @@ pub async fn install(
         Arc::clone(pool)
     } else {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let pool = Arc::new(IdbPool::new(options, tx).await?);
+        let pool = Arc::new(RelaxedIdb::new(options, tx).await?);
         let vfs = register_vfs(vfs_name, default_vfs, vfs)?;
         name2vfs.insert(vfs_name.into(), Arc::clone(&pool));
         VFS2POOL.write().insert(VfsPtr(vfs), Arc::clone(&pool));
@@ -1009,5 +1006,5 @@ pub async fn install(
         pool
     };
 
-    Ok(IndexedDbUtil { pool })
+    Ok(RelaxedIdbUtil { pool })
 }

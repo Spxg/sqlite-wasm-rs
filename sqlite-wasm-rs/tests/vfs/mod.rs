@@ -1,5 +1,5 @@
-mod idbpool;
 mod memory;
+mod relaxed_idb;
 mod sahpool;
 
 use sqlite_wasm_rs::{sqlite3, sqlite3_exec, SQLITE_OK};

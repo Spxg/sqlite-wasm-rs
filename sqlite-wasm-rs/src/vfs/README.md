@@ -13,17 +13,17 @@ Persistent vfs, ported from sqlite-wasm, see [`opfs-sahpool`](https://sqlite.org
 
 Install the [`opfs-explorer`](https://chromewebstore.google.com/detail/opfs-explorer/acndjpgkpaclldomagafnognkcgjignd) plugin to browse files.
 
-### IndexedPoolVFS
+### RelaxedIdbVFS
 
 Inspired by wa-sqlite's [`IDBMirrorVFS`](https://github.com/rhashimoto/wa-sqlite/blob/master/src/examples/IDBMirrorVFS.js), this is an VFS used in a synchronization context.
 
-The vfs is relaxed durability, for sqlite it is `pragma synchronous=off;`.
+The vfs is relaxed durability, for sqlite it is `pragma synchronous=off;`, so named `relaxed-idb`.
 
 The db page_size can be set via `pragma page_size=SIZE;` before creating a table in db. Once the table is created, it cannot be changed.
 
 ## VFS Comparison
 
-||MemoryVFS|SyncAccessHandlePoolVFS|IndexedPoolVFS|
+||MemoryVFS|SyncAccessHandlePoolVFS|RelaxedIdbVFS|
 |-|-|-|-|
 |Storage|RAM|OPFS|IndexedDB|
 |Contexts|All|Worker|All|

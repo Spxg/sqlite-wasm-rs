@@ -58,7 +58,7 @@ The following vfs have been implemented:
 
 * [`memory`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-rs/src/vfs/memory.rs): as the default vfs, no additional conditions are required, just use.
 * [`sahpool`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-rs/src/vfs/sahpool.rs): ported from sqlite-wasm, it provides the best performance persistent storage method.
-* [`idbpool`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-rs/src/vfs/idbpool.rs): store the database in blocks in indexed db.
+* [`relaxed-idb`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-rs/src/vfs/relaxed_idb.rs): store the database in blocks in indexed db.
 
 Go to [`here`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-rs/src/vfs/README.md) to check it out.
 

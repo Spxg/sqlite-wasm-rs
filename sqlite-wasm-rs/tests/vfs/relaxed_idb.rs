@@ -4,7 +4,9 @@ use indexed_db_futures::prelude::*;
 use indexed_db_futures::transaction::TransactionMode;
 use js_sys::{Object, Reflect};
 use sqlite_wasm_rs::export::*;
-use sqlite_wasm_rs::idbpool_vfs::{install as install_idb_vfs, IndexedDbPoolCfgBuilder, Preload};
+use sqlite_wasm_rs::relaxed_idb_vfs::{
+    install as install_idb_vfs, Preload, RelaxedIndexedDbCfgBuilder,
+};
 use sqlite_wasm_rs::utils::copy_to_uint8_array;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::{console_log, wasm_bindgen_test};
@@ -49,8 +51,8 @@ async fn test_idb_vfs_default_error() {
 async fn test_idb_vfs_custom() {
     install_idb_vfs(
         Some(
-            &IndexedDbPoolCfgBuilder::new()
-                .vfs_name("idbpool-custom")
+            &RelaxedIndexedDbCfgBuilder::new()
+                .vfs_name("relaxed-idb-custom")
                 .clear_on_init(true)
                 .preload(Preload::None)
                 .build(),
@@ -66,7 +68,7 @@ async fn test_idb_vfs_custom() {
             c"test_idb_vfs_custom.db".as_ptr().cast(),
             &mut db as *mut _,
             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-            c"idbpool-custom".as_ptr().cast(),
+            c"relaxed-idb-custom".as_ptr().cast(),
         )
     };
     assert_eq!(SQLITE_OK, ret);
@@ -79,8 +81,8 @@ async fn test_idb_vfs_custom() {
 async fn test_idb_vfs_utils() {
     let util = install_idb_vfs(
         Some(
-            &IndexedDbPoolCfgBuilder::new()
-                .vfs_name("idbpool-utils")
+            &RelaxedIndexedDbCfgBuilder::new()
+                .vfs_name("relaxed-idb-utils")
                 .clear_on_init(true)
                 .preload(Preload::All)
                 .build(),
@@ -96,7 +98,7 @@ async fn test_idb_vfs_utils() {
             c"test_idb_vfs_utils.db".as_ptr(),
             &mut db as *mut _,
             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-            c"idbpool-utils".as_ptr().cast(),
+            c"relaxed-idb-utils".as_ptr().cast(),
         )
     };
 
@@ -118,7 +120,7 @@ async fn test_idb_vfs_utils() {
             c"new.db".as_ptr(),
             &mut db as *mut _,
             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-            c"idbpool-utils".as_ptr().cast(),
+            c"relaxed-idb-utils".as_ptr().cast(),
         )
     };
     assert_eq!(SQLITE_OK, ret);
@@ -136,8 +138,8 @@ async fn test_idb_vfs_utils() {
 async fn test_idb_vfs_set_page_size() {
     let util = install_idb_vfs(
         Some(
-            &IndexedDbPoolCfgBuilder::new()
-                .vfs_name("idbpool-pagesize")
+            &RelaxedIndexedDbCfgBuilder::new()
+                .vfs_name("relaxed-idb-pagesize")
                 .clear_on_init(true)
                 .preload(Preload::None)
                 .build(),
@@ -192,8 +194,8 @@ async fn test_idb_vfs_set_page_size() {
 async fn test_idb_vfs_synchronous() {
     install_idb_vfs(
         Some(
-            &IndexedDbPoolCfgBuilder::new()
-                .vfs_name("idbpool-synchronous")
+            &RelaxedIndexedDbCfgBuilder::new()
+                .vfs_name("relaxed-idb-synchronous")
                 .build(),
         ),
         true,
@@ -279,7 +281,7 @@ async fn test_idb_vfs_preload(block_size: usize) {
     let now = web_time::Instant::now();
     let util = install_idb_vfs(
         Some(
-            &IndexedDbPoolCfgBuilder::new()
+            &RelaxedIndexedDbCfgBuilder::new()
                 .vfs_name("idb-preload")
                 .preload(Preload::None)
                 .build(),
