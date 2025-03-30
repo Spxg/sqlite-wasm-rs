@@ -1,5 +1,8 @@
+//! indexed-db-pool vfs implementation
+
 use crate::vfs::utils::{
-    copy_to_uint8_array, copy_to_vec, get_random_name, FilePtr, FragileComfirmed, VfsPtr,
+    copy_to_uint8_array, copy_to_vec, get_random_name, register_vfs, FragileComfirmed,
+    SQLiteVfsFile, VfsError, VfsPtr, SQLITE3_HEADER,
 };
 use crate::{bail, check_option, check_result, libsqlite3::*};
 
@@ -7,19 +10,25 @@ use indexed_db_futures::database::Database;
 use indexed_db_futures::prelude::*;
 use indexed_db_futures::transaction::TransactionMode;
 use js_sys::{Number, Object, Reflect, Uint8Array};
-use once_cell::sync::Lazy;
+use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::RwLock;
+use std::cell::Cell;
+use std::collections::hash_map;
 use std::{
     collections::HashMap,
-    ffi::{c_char, CStr, CString},
+    ffi::{c_char, CStr},
     sync::Arc,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::Notify;
 use wasm_bindgen::JsValue;
+
+type Result<T> = std::result::Result<T, IndexedDbError>;
 
 struct IdbCommit {
     file: String,
     op: IdbCommitOp,
+    notify: Option<Arc<Notify>>,
 }
 
 enum IdbCommitOp {
@@ -27,11 +36,59 @@ enum IdbCommitOp {
     Delete,
 }
 
-struct IdbPool {
-    idb: FragileComfirmed<Database>,
-    file2name: RwLock<HashMap<FilePtr, String>>,
-    name2file: RwLock<HashMap<String, IdbFile>>,
-    tx: UnboundedSender<IdbCommit>,
+enum IdbFile {
+    Main(IdbBlockFile),
+    Temp(Vec<u8>),
+}
+
+impl IdbFile {
+    fn new(flags: i32) -> Self {
+        if flags & SQLITE_OPEN_MAIN_DB == 0 {
+            Self::Temp(vec![])
+        } else {
+            Self::Main(IdbBlockFile {
+                file_size: 0,
+                block_size: 0,
+                blocks: HashMap::new(),
+                tx_blocks: vec![],
+            })
+        }
+    }
+}
+
+struct IdbBlockFile {
+    file_size: usize,
+    block_size: usize,
+    blocks: HashMap<usize, LazyBuffer>,
+    tx_blocks: Vec<usize>,
+}
+
+struct LazyBuffer {
+    cell: OnceCell<Vec<u8>>,
+    init: Cell<Option<FragileComfirmed<Uint8Array>>>,
+}
+
+unsafe impl Sync for LazyBuffer {}
+
+impl LazyBuffer {
+    fn new(value: Uint8Array) -> Self {
+        Self {
+            cell: OnceCell::new(),
+            init: Cell::new(Some(FragileComfirmed::new(value))),
+        }
+    }
+
+    fn ready(value: Vec<u8>) -> Self {
+        Self {
+            cell: OnceCell::with_value(value),
+            init: Cell::new(None),
+        }
+    }
+
+    fn get(&self) -> &Vec<u8> {
+        self.cell
+            .get_or_init(|| copy_to_vec(&self.init.take().unwrap()))
+    }
 }
 
 fn key_range(file: &str, start: usize) -> std::ops::RangeInclusive<[JsValue; 2]> {
@@ -42,10 +99,23 @@ fn key_range(file: &str, start: usize) -> std::ops::RangeInclusive<[JsValue; 2]>
         ]
 }
 
+async fn clear_impl(indexed_db: &Database) -> Result<()> {
+    let transaction = indexed_db
+        .transaction("blocks")
+        .with_mode(TransactionMode::Readwrite)
+        .build()?;
+    let blocks = transaction.object_store("blocks")?;
+
+    blocks.clear()?.await?;
+    transaction.commit().await?;
+
+    Ok(())
+}
+
 async fn preload_db_impl(
     indexed_db: &Database,
-    preload: Preload,
-) -> Result<HashMap<String, IdbFile>, IndexedDbError> {
+    preload: &Preload,
+) -> Result<HashMap<String, IdbFile>> {
     let transaction = indexed_db
         .transaction("blocks")
         .with_mode(TransactionMode::Readonly)
@@ -55,24 +125,23 @@ async fn preload_db_impl(
     let mut name2file = HashMap::new();
     let mut insert_fn = |block: JsValue| {
         let (path, offset, data) = get_block(block);
-        let IdbFile {
-            db: Idb::Main(db), ..
-        } = name2file.entry(path).or_insert_with(|| IdbFile {
-            // unknown for now
-            flags: 0,
-            db: Idb::Main(IdbBlocks {
-                file_size: 0,
-                block_size: data.length() as _,
-                blocks: HashMap::new(),
-                tx_blocks: Vec::new(),
-            }),
-        })
-        else {
-            unreachable!();
-        };
-        db.file_size += db.block_size;
-        db.blocks
-            .insert(offset, Buffer::Js(FragileComfirmed::new(data)));
+        match name2file.entry(path) {
+            hash_map::Entry::Occupied(mut occupied_entry) => {
+                let IdbFile::Main(db) = occupied_entry.get_mut() else {
+                    unreachable!();
+                };
+                db.file_size += db.block_size;
+                db.blocks.insert(offset, LazyBuffer::new(data));
+            }
+            hash_map::Entry::Vacant(vacant_entry) => {
+                vacant_entry.insert(IdbFile::Main(IdbBlockFile {
+                    file_size: data.length() as _,
+                    block_size: data.length() as _,
+                    blocks: HashMap::from([(offset, LazyBuffer::new(data))]),
+                    tx_blocks: Vec::new(),
+                }));
+            }
+        }
     };
 
     match preload {
@@ -82,10 +151,10 @@ async fn preload_db_impl(
             }
         }
         Preload::Paths(items) => {
-            for preload in items {
+            for file in items {
                 for block in blocks
                     .get_all::<JsValue>()
-                    .with_query(key_range(&preload, 0))
+                    .with_query(key_range(file, 0))
                     .await?
                 {
                     insert_fn(block?);
@@ -99,13 +168,15 @@ async fn preload_db_impl(
     Ok(name2file)
 }
 
+struct IdbPool {
+    idb: FragileComfirmed<Database>,
+    name2file: RwLock<HashMap<String, IdbFile>>,
+    tx: UnboundedSender<IdbCommit>,
+}
+
 impl IdbPool {
-    async fn new(
-        vfs_name: &str,
-        preload: Preload,
-        tx: UnboundedSender<IdbCommit>,
-    ) -> Result<Self, IndexedDbError> {
-        let indexed_db = Database::open(vfs_name)
+    async fn new(options: &IndexedDbPoolCfg, tx: UnboundedSender<IdbCommit>) -> Result<Self> {
+        let indexed_db = Database::open(&options.vfs_name)
             .with_version(1u8)
             .with_on_upgrade_needed(|_, db| {
                 db.create_object_store("blocks")
@@ -114,31 +185,153 @@ impl IdbPool {
                 Ok(())
             })
             .await?;
-        let name2file = preload_db_impl(&indexed_db, preload).await?;
+
+        if options.clear_on_init {
+            clear_impl(&indexed_db).await?;
+        }
+
+        let name2file = preload_db_impl(&indexed_db, &options.preload).await?;
         Ok(IdbPool {
             idb: FragileComfirmed::new(indexed_db),
-            file2name: RwLock::new(HashMap::new()),
             name2file: RwLock::new(name2file),
             tx,
         })
     }
 
-    async fn preload_db(&self, preload: Vec<String>) -> Result<(), IndexedDbError> {
+    async fn preload_db(&self, files: Vec<String>) -> Result<()> {
         let preload = {
             let name2file = self.name2file.read();
-            preload
+            files
                 .into_iter()
                 .filter(|x| !name2file.contains_key(x))
                 .collect::<Vec<_>>()
         };
-        let preload = preload_db_impl(&self.idb, Preload::Paths(preload)).await?;
+        let preload = preload_db_impl(&self.idb, &Preload::Paths(preload)).await?;
         self.name2file.write().extend(preload);
         Ok(())
     }
 
+    async fn import_db(&self, path: &str, bytes: &[u8], page_size: usize) -> Result<()> {
+        if !(page_size.is_power_of_two() && (512..=65536).contains(&page_size)) {
+            return Err(IndexedDbError::Generic(
+                "The page size must be a power of two between 512 and 65536 inclusive.".into(),
+            ));
+        }
+
+        if self.name2file.read().contains_key(path) {
+            return Err(IndexedDbError::Generic(format!(
+                "{path} file already exists"
+            )));
+        }
+
+        if SQLITE3_HEADER
+            .as_bytes()
+            .iter()
+            .zip(bytes)
+            .any(|(x, y)| x != y)
+        {
+            return Err(IndexedDbError::Generic(
+                "Input does not contain an SQLite database header.".into(),
+            ));
+        }
+
+        let mut blocks = HashMap::new();
+        for (idx, chunk) in bytes.chunks(page_size).enumerate() {
+            let mut buffer = chunk.to_vec();
+            if buffer.len() < page_size {
+                buffer.resize(page_size, 0);
+            }
+            blocks.insert(idx * page_size, LazyBuffer::ready(buffer));
+        }
+
+        let tx_blocks = blocks.keys().copied().collect();
+        self.name2file.write().insert(
+            path.into(),
+            IdbFile::Main(IdbBlockFile {
+                file_size: blocks.len() * page_size,
+                block_size: page_size,
+                blocks,
+                tx_blocks,
+            }),
+        );
+
+        let notify = Arc::new(Notify::new());
+        let wait = Arc::clone(&notify);
+
+        if self
+            .tx
+            .send(IdbCommit {
+                file: path.into(),
+                op: IdbCommitOp::Sync,
+                notify: Some(notify),
+            })
+            .is_err()
+        {
+            return Err(IndexedDbError::Generic(
+                "sync db to indexed db failed".into(),
+            ));
+        }
+
+        wait.notified().await;
+
+        Ok(())
+    }
+
+    fn export_file(&self, name: &str) -> Result<Vec<u8>> {
+        let name2file = self.name2file.read();
+
+        if let Some(file) = name2file.get(name) {
+            match file {
+                IdbFile::Main(file) => {
+                    let file_size = file.file_size;
+                    let mut ret = vec![0; file.file_size];
+                    for (&offset, buffer) in &file.blocks {
+                        if offset >= file_size {
+                            continue;
+                        }
+                        ret[offset..offset + file.block_size].copy_from_slice(buffer.get());
+                    }
+                    Ok(ret)
+                }
+                IdbFile::Temp(items) => Ok(items.clone()),
+            }
+        } else {
+            Err(IndexedDbError::Generic(
+                "the file to be exported does not exist".into(),
+            ))
+        }
+    }
+
+    async fn delete_file(&self, name: &str) -> Result<()> {
+        let notify = Arc::new(Notify::new());
+        let wait = Arc::clone(&notify);
+
+        if self
+            .tx
+            .send(IdbCommit {
+                file: name.into(),
+                op: IdbCommitOp::Delete,
+                notify: Some(notify),
+            })
+            .is_err()
+        {
+            return Err(IndexedDbError::Generic(
+                "sync db to indexed db failed".into(),
+            ));
+        }
+
+        wait.notified().await;
+
+        Ok(())
+    }
+
+    async fn clear_all(&self) -> Result<()> {
+        clear_impl(&self.idb).await
+    }
+
     async fn commit_loop(self: Arc<Self>, mut rx: UnboundedReceiver<IdbCommit>) {
-        async fn to_commit(pool: &IdbPool, commit: IdbCommit) -> Result<(), IndexedDbError> {
-            let IdbCommit { file, op } = commit;
+        async fn to_commit(pool: &IdbPool, commit: IdbCommit) -> Result<()> {
+            let IdbCommit { file, op, notify } = commit;
 
             let transaction = pool
                 .idb
@@ -155,7 +348,7 @@ impl IdbPool {
                         return Ok(());
                     };
 
-                    let Idb::Main(idb_blocks) = &mut idb_file.db else {
+                    let IdbFile::Main(idb_blocks) = idb_file else {
                         return Ok(());
                     };
 
@@ -168,10 +361,9 @@ impl IdbPool {
                     }
 
                     for offset in tx_blocks {
-                        let Some(Buffer::Rust(buffer)) = idb_blocks.blocks.get(&offset) else {
-                            unreachable!();
-                        };
-                        store.put(&set_block(&file, offset, buffer)).build()?;
+                        if let Some(buffer) = idb_blocks.blocks.get(&offset).map(|x| x.get()) {
+                            store.put(&set_block(&file, offset, buffer)).build()?;
+                        }
                     }
 
                     store.delete(key_range(&file, file_size)).build()?;
@@ -182,13 +374,15 @@ impl IdbPool {
             }
             transaction.commit().await?;
 
+            if let Some(notify) = notify {
+                notify.notify_one();
+            }
+
             Ok(())
         }
 
         while let Some(commit) = rx.recv().await {
-            if to_commit(&self, commit).await.is_err() {
-                // Todo: and log
-            }
+            if to_commit(&self, commit).await.is_err() {}
         }
     }
 }
@@ -220,72 +414,12 @@ fn set_block(path: &str, offset: usize, data: &[u8]) -> JsValue {
     block.into()
 }
 
-struct IdbFile {
-    flags: i32,
-    db: Idb,
-}
-
-impl IdbFile {
-    fn new(flags: i32) -> Self {
-        let db = if flags & SQLITE_OPEN_MAIN_DB == 0 {
-            Idb::Temp(vec![])
-        } else {
-            Idb::Main(IdbBlocks {
-                file_size: 0,
-                block_size: 0,
-                blocks: HashMap::new(),
-                tx_blocks: vec![],
-            })
-        };
-        Self { flags, db }
-    }
-
-    fn delete_on_close(&self) -> bool {
-        self.flags & SQLITE_OPEN_DELETEONCLOSE != 0
-    }
-}
-
-enum Idb {
-    Main(IdbBlocks),
-    Temp(Vec<u8>),
-}
-
-struct IdbBlocks {
-    file_size: usize,
-    block_size: usize,
-    blocks: HashMap<usize, Buffer>,
-    tx_blocks: Vec<usize>,
-}
-
-enum Buffer {
-    Js(FragileComfirmed<Uint8Array>),
-    Rust(Vec<u8>),
-}
-
-impl Buffer {
-    fn load(&mut self) {
-        if let Buffer::Js(unit) = self {
-            *self = Buffer::Rust(copy_to_vec(unit));
-        }
-    }
-}
-
 static VFS2POOL: Lazy<RwLock<HashMap<VfsPtr, Arc<IdbPool>>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
 fn pool(vfs: *mut sqlite3_vfs) -> Arc<IdbPool> {
     // Already registered vfs will not be unregistered, so this is safe
     Arc::clone(VFS2POOL.read().get(&VfsPtr(vfs)).unwrap())
-}
-
-#[repr(C)]
-struct SqliteIdbFile {
-    io_methods: sqlite3_file,
-    vfs: *mut sqlite3_vfs,
-}
-
-unsafe fn file2vfs(file: *mut sqlite3_file) -> *mut sqlite3_vfs {
-    (*(file.cast::<SqliteIdbFile>())).vfs
 }
 
 unsafe extern "C" fn xOpen(
@@ -303,20 +437,21 @@ unsafe extern "C" fn xOpen(
 
     let pool = pool(pVfs);
     let mut name2file = pool.name2file.write();
-    let mut file2name = pool.file2name.write();
 
-    if let Some(file) = name2file.get_mut(&name) {
-        file.flags = flags;
-    } else {
+    if !name2file.contains_key(&name) {
         if flags & SQLITE_OPEN_CREATE == 0 {
             return SQLITE_CANTOPEN;
         }
         name2file.insert(name.clone(), IdbFile::new(flags));
     }
 
-    file2name.insert(FilePtr(pFile), name);
+    let leak = name.leak();
+    let vfs_file = pFile.cast::<SQLiteVfsFile>();
+    (*vfs_file).vfs = pVfs;
+    (*vfs_file).flags = flags;
+    (*vfs_file).name_ptr = leak.as_ptr();
+    (*vfs_file).name_length = leak.len();
 
-    (*(pFile.cast::<SqliteIdbFile>())).vfs = pVfs;
     (*pFile).pMethods = &IO_METHODS;
 
     if !pOutFlags.is_null() {
@@ -342,6 +477,7 @@ unsafe extern "C" fn xDelete(
         .send(IdbCommit {
             file: s.into(),
             op: IdbCommitOp::Delete,
+            notify: None,
         })
         .is_err()
     {
@@ -395,25 +531,28 @@ unsafe extern "C" fn xGetLastError(
 }
 
 unsafe extern "C" fn xClose(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
-    let pool = pool(file2vfs(pFile));
-    let mut file2name = pool.file2name.write();
-    let mut name2file = pool.name2file.write();
+    let vfs_file = SQLiteVfsFile::from_file(pFile);
+    let pool = pool(vfs_file.vfs);
+    let name = vfs_file.name();
 
-    if let Some(name) = file2name.remove(&FilePtr(pFile)) {
-        if name2file.get(&name).is_some_and(|x| x.delete_on_close()) {
-            name2file.remove(&name).unwrap();
-            if pool
-                .tx
-                .send(IdbCommit {
-                    file: name,
-                    op: IdbCommitOp::Delete,
-                })
-                .is_err()
-            {
-                return SQLITE_ERROR;
-            }
+    let mut name2file = pool.name2file.write();
+    if vfs_file.flags & SQLITE_OPEN_DELETEONCLOSE != 0 {
+        name2file.remove(name);
+        if pool
+            .tx
+            .send(IdbCommit {
+                file: name.into(),
+                op: IdbCommitOp::Delete,
+                notify: None,
+            })
+            .is_err()
+        {
+            return SQLITE_ERROR;
         }
     }
+
+    drop(unsafe { Box::from_raw(name) });
+
     SQLITE_OK
 }
 
@@ -423,19 +562,19 @@ unsafe extern "C" fn xRead(
     iAmt: ::std::os::raw::c_int,
     iOfst: sqlite3_int64,
 ) -> ::std::os::raw::c_int {
-    let pool = pool(file2vfs(pFile));
-    let file2name = pool.file2name.read();
-    let mut name2file = pool.name2file.write();
+    let vfs_file = SQLiteVfsFile::from_file(pFile);
+    let pool = pool(vfs_file.vfs);
+    let name = vfs_file.name();
 
-    let name = check_option!(file2name.get(&FilePtr(pFile)));
-    let file = check_option!(name2file.get_mut(name));
+    let name2file = pool.name2file.read();
+    let file = check_option!(name2file.get(name));
 
     let end = iOfst as usize + iAmt as usize;
     let slice = std::slice::from_raw_parts_mut(zBuf.cast::<u8>(), iAmt as usize);
 
-    match &mut file.db {
-        Idb::Main(file) => {
-            if file.block_size == 0 {
+    match file {
+        IdbFile::Main(file) => {
+            if file.block_size == 0 || file.file_size == 0 {
                 slice.fill(0);
                 return SQLITE_IOERR_SHORT_READ;
             }
@@ -452,20 +591,12 @@ unsafe extern "C" fn xRead(
                 let block_offset = file_offset % block_size;
                 let block_addr = block_idx * file.block_size;
 
-                let Some(buffer) = file.blocks.get_mut(&block_addr) else {
+                let Some(block) = file.blocks.get(&block_addr).map(|x| x.get()) else {
                     break;
                 };
-                buffer.load();
 
-                let Buffer::Rust(block) = &*buffer else {
-                    unreachable!()
-                };
-
-                if block.len() < block_offset {
-                    break;
-                }
-
-                let block_length = (block.len() - block_offset).min(p_data_length - p_data_offset);
+                assert!(block_size == block.len());
+                let block_length = (block_size - block_offset).min(p_data_length - p_data_offset);
                 slice[p_data_offset..p_data_offset + block_length]
                     .copy_from_slice(&block[block_offset..block_offset + block_length]);
                 p_data_offset += block_length;
@@ -476,10 +607,8 @@ unsafe extern "C" fn xRead(
                 slice[bytes_read..].fill(0);
                 return SQLITE_IOERR_SHORT_READ;
             }
-
-            return SQLITE_OK;
         }
-        Idb::Temp(data) => {
+        IdbFile::Temp(data) => {
             if data.len() <= iOfst as usize {
                 slice.fill(0);
                 return SQLITE_IOERR_SHORT_READ;
@@ -504,24 +633,24 @@ unsafe extern "C" fn xWrite(
     iAmt: ::std::os::raw::c_int,
     iOfst: sqlite3_int64,
 ) -> ::std::os::raw::c_int {
-    let pool = pool(file2vfs(pFile));
-    let file2name = pool.file2name.read();
-    let mut name2file = pool.name2file.write();
+    let vfs_file = SQLiteVfsFile::from_file(pFile);
+    let pool = pool(vfs_file.vfs);
+    let name = vfs_file.name();
 
-    let name = check_option!(file2name.get(&FilePtr(pFile)));
+    let mut name2file = pool.name2file.write();
     let file = check_option!(name2file.get_mut(name));
 
     let end = iOfst as usize + iAmt as usize;
     let slice = std::slice::from_raw_parts(zBuf.cast::<u8>(), iAmt as usize);
-    match &mut file.db {
-        Idb::Main(file) => {
+    match file {
+        IdbFile::Main(file) => {
             file.blocks
-                .insert(iOfst as usize, Buffer::Rust(slice.to_vec()));
+                .insert(iOfst as usize, LazyBuffer::ready(slice.to_vec()));
             file.tx_blocks.push(iOfst as usize);
             file.file_size = file.file_size.max(iOfst as usize + iAmt as usize);
             file.block_size = iAmt as usize;
         }
-        Idb::Temp(data) => {
+        IdbFile::Temp(data) => {
             if end > data.len() {
                 data.resize(end, 0);
             }
@@ -535,18 +664,18 @@ unsafe extern "C" fn xTruncate(
     pFile: *mut sqlite3_file,
     size: sqlite3_int64,
 ) -> ::std::os::raw::c_int {
-    let pool = pool(file2vfs(pFile));
-    let file2name = pool.file2name.read();
-    let mut name2file = pool.name2file.write();
+    let vfs_file = SQLiteVfsFile::from_file(pFile);
+    let pool = pool(vfs_file.vfs);
+    let name = vfs_file.name();
 
-    let name = check_option!(file2name.get(&FilePtr(pFile)));
+    let mut name2file = pool.name2file.write();
     let file = check_option!(name2file.get_mut(name));
 
-    match &mut file.db {
-        Idb::Main(file) => {
+    match file {
+        IdbFile::Main(file) => {
             file.file_size = size as usize;
         }
-        Idb::Temp(data) => {
+        IdbFile::Temp(data) => {
             let now = data.len();
             data.truncate(now.min(size as usize));
         }
@@ -566,16 +695,16 @@ unsafe extern "C" fn xFileSize(
     pFile: *mut sqlite3_file,
     pSize: *mut sqlite3_int64,
 ) -> ::std::os::raw::c_int {
-    let pool = pool(file2vfs(pFile));
-    let file2name = pool.file2name.read();
-    let name2file = pool.name2file.read();
+    let vfs_file = SQLiteVfsFile::from_file(pFile);
+    let pool = pool(vfs_file.vfs);
+    let name = vfs_file.name();
 
-    let name = check_option!(file2name.get(&FilePtr(pFile)));
+    let name2file = pool.name2file.read();
     let file = check_option!(name2file.get(name));
 
-    *pSize = match &file.db {
-        Idb::Main(file) => file.file_size as sqlite3_int64,
-        Idb::Temp(data) => data.len() as sqlite3_int64,
+    *pSize = match file {
+        IdbFile::Main(file) => file.file_size as sqlite3_int64,
+        IdbFile::Temp(data) => data.len() as sqlite3_int64,
     };
 
     SQLITE_OK
@@ -608,14 +737,14 @@ unsafe extern "C" fn xFileControl(
     op: ::std::os::raw::c_int,
     pArg: *mut ::std::os::raw::c_void,
 ) -> ::std::os::raw::c_int {
-    let pool = pool(file2vfs(pFile));
-    let file2name = pool.file2name.read();
-    let mut name2file = pool.name2file.write();
+    let vfs_file = SQLiteVfsFile::from_file(pFile);
+    let pool = pool(vfs_file.vfs);
+    let name = vfs_file.name();
 
-    let name = check_option!(file2name.get(&FilePtr(pFile)));
+    let mut name2file = pool.name2file.write();
     let file = check_option!(name2file.get_mut(name));
 
-    let Idb::Main(file) = &mut file.db else {
+    let IdbFile::Main(file) = file else {
         return SQLITE_NOTFOUND;
     };
 
@@ -657,6 +786,7 @@ unsafe extern "C" fn xFileControl(
                 .send(IdbCommit {
                     file: name.into(),
                     op: IdbCommitOp::Sync,
+                    notify: None,
                 })
                 .is_err()
             {
@@ -708,7 +838,7 @@ fn vfs(name: *const ::std::os::raw::c_char) -> sqlite3_vfs {
 
     sqlite3_vfs {
         iVersion: 1,
-        szOsFile: std::mem::size_of::<SqliteIdbFile>() as i32,
+        szOsFile: std::mem::size_of::<SQLiteVfsFile>() as i32,
         mxPathname: 1024,
         pNext: std::ptr::null_mut(),
         zName: name,
@@ -734,67 +864,152 @@ fn vfs(name: *const ::std::os::raw::c_char) -> sqlite3_vfs {
 
 #[derive(thiserror::Error, Debug)]
 pub enum IndexedDbError {
-    #[error("indexed db error")]
-    IndexedDb(#[from] indexed_db_futures::error::Error),
-    #[error("open db error")]
+    #[error(transparent)]
+    Vfs(#[from] VfsError),
+    #[error(transparent)]
     OpenDb(#[from] indexed_db_futures::error::OpenDbError),
-    #[error("custom error")]
-    Custom(String),
+    #[error(transparent)]
+    IndexedDb(#[from] indexed_db_futures::error::Error),
+    #[error("Generic error: {0}")]
+    Generic(String),
 }
 
+/// Select which dbs to preload into memory.
 pub enum Preload {
+    /// Preload all databases
     All,
+    /// Specify the path to load the database
     Paths(Vec<String>),
+    /// Not preloaded, can be manually loaded later via `IndexedDbUtil`
     None,
 }
 
+/// Build `IndexedDbPoolCfg`
+pub struct IndexedDbPoolCfgBuilder(IndexedDbPoolCfg);
+
+impl IndexedDbPoolCfgBuilder {
+    pub fn new() -> Self {
+        Self(IndexedDbPoolCfg::default())
+    }
+
+    /// The SQLite VFS name under which this pool's VFS is registered.
+    pub fn vfs_name(mut self, name: &str) -> Self {
+        self.0.vfs_name = name.into();
+        self
+    }
+
+    /// Delete all files on initialization.
+    pub fn clear_on_init(mut self, set: bool) -> Self {
+        self.0.clear_on_init = set;
+        self
+    }
+
+    /// Select which dbs to preload into memory.
+    pub fn preload(mut self, preload: Preload) -> Self {
+        self.0.preload = preload;
+        self
+    }
+
+    /// Build IndexedDbPoolCfg
+    pub fn build(self) -> IndexedDbPoolCfg {
+        self.0
+    }
+}
+
+impl Default for IndexedDbPoolCfgBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// `IndexedDbPool` options
+pub struct IndexedDbPoolCfg {
+    /// The SQLite VFS name under which this pool's VFS is registered.
+    pub vfs_name: String,
+    /// Delete all files on initialization.
+    pub clear_on_init: bool,
+    /// Select which dbs to preload into memory.
+    pub preload: Preload,
+}
+
+impl Default for IndexedDbPoolCfg {
+    fn default() -> Self {
+        Self {
+            vfs_name: "indexed-db-pool".into(),
+            clear_on_init: false,
+            preload: Preload::All,
+        }
+    }
+}
+
+/// IndexedDbPool management tools exposed to clients.
 pub struct IndexedDbUtil {
     pool: Arc<IdbPool>,
 }
 
 impl IndexedDbUtil {
-    pub async fn preload_db(&self, prelod: Vec<String>) -> Result<(), IndexedDbError> {
+    /// Preload the db.
+    /// Because indexed db reading data is an asynchronous operation,
+    /// the db must be preloaded into memory before opening the sqlite db.
+    pub async fn preload_db(&self, prelod: Vec<String>) -> Result<()> {
         self.pool.preload_db(prelod).await
+    }
+
+    /// Import the db file into the pool and indexed db.
+    /// The page_size must be a power of two between 512 and 65536 inclusive.
+    pub async fn import_db(&self, path: &str, bytes: &[u8], page_size: usize) -> Result<()> {
+        self.pool.import_db(path, bytes, page_size).await
+    }
+
+    /// Export database
+    pub fn export_file(&self, name: &str) -> Result<Vec<u8>> {
+        self.pool.export_file(name)
+    }
+
+    /// Delete the specified file in the indexed db.
+    ///
+    /// # Attention
+    ///
+    /// Please make sure that the deleted db is closed.
+    pub async fn delete_file(&self, name: &str) -> Result<()> {
+        self.pool.delete_file(name).await
+    }
+
+    /// Delete all files in the indexed db.
+    ///
+    /// # Attention
+    ///
+    /// Please make sure that all dbs is closed.
+    pub async fn clear_all(&self) -> Result<()> {
+        self.pool.clear_all().await
     }
 }
 
+/// Register `indexed-db-pool` vfs and return a utility object which can be used
+/// to perform basic administration of the file pool
 pub async fn install(
-    vfs_name: &str,
+    options: Option<&IndexedDbPoolCfg>,
     default_vfs: bool,
-    preload: Preload,
-) -> Result<IndexedDbUtil, IndexedDbError> {
+) -> Result<IndexedDbUtil> {
     static NAME2VFS: Lazy<tokio::sync::Mutex<HashMap<String, Arc<IdbPool>>>> =
         Lazy::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
-    let register_vfs = || {
-        let name = CString::new(vfs_name).map_err(|e| IndexedDbError::Custom(format!("{e:?}")))?;
-        let vfs = Box::leak(Box::new(vfs(name.into_raw())));
-
-        let ret = unsafe { sqlite3_vfs_register(vfs, i32::from(default_vfs)) };
-        if ret != SQLITE_OK {
-            unsafe {
-                drop(Box::from_raw(vfs));
-            }
-            return Err(IndexedDbError::Custom(format!(
-                "register {vfs_name} vfs failed",
-            )));
-        }
-
-        Ok(vfs as *mut sqlite3_vfs)
-    };
+    let default_options = IndexedDbPoolCfg::default();
+    let options = options.unwrap_or(&default_options);
+    let vfs_name = &options.vfs_name;
 
     let mut name2vfs = NAME2VFS.lock().await;
-    if let Some(pool) = name2vfs.get(vfs_name) {
-        Ok(IndexedDbUtil {
-            pool: Arc::clone(pool),
-        })
+    let pool = if let Some(pool) = name2vfs.get(vfs_name) {
+        Arc::clone(pool)
     } else {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let pool = Arc::new(IdbPool::new(vfs_name, preload, tx).await?);
-        let vfs = register_vfs()?;
+        let pool = Arc::new(IdbPool::new(options, tx).await?);
+        let vfs = register_vfs(vfs_name, default_vfs, vfs)?;
         name2vfs.insert(vfs_name.into(), Arc::clone(&pool));
         VFS2POOL.write().insert(VfsPtr(vfs), Arc::clone(&pool));
         wasm_bindgen_futures::spawn_local(Arc::clone(&pool).commit_loop(rx));
-        Ok(IndexedDbUtil { pool })
-    }
+        pool
+    };
+
+    Ok(IndexedDbUtil { pool })
 }
