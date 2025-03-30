@@ -107,7 +107,6 @@ async fn clear_impl(indexed_db: &Database) -> Result<()> {
     let blocks = transaction.object_store("blocks")?;
 
     blocks.clear()?.await?;
-    transaction.commit().await?;
 
     Ok(())
 }
@@ -163,7 +162,6 @@ async fn preload_db_impl(
         }
         Preload::None => (),
     }
-    transaction.commit().await?;
 
     Ok(name2file)
 }
