@@ -37,6 +37,26 @@ jobs:
         cd ../sqlite-wasm-rs
         wasm-pack test --chrome --headless
 
+  test_diesel:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install wasm-pack
+      run: cargo install wasm-pack
+    - name: Test diesel tests
+      run: |
+        git clone https://github.com/emscripten-core/emsdk.git
+        cd emsdk
+        ./emsdk install latest
+        ./emsdk activate latest
+        source ./emsdk_env.sh
+        cd ..
+        git clone https://github.com/diesel-rs/diesel.git
+        cd diesel
+        printf "[patch.crates-io]\n" >> Cargo.toml
+        printf "sqlite-wasm-rs = { path = \"../sqlite-wasm-rs\" }\n" >> Cargo.toml
+        cargo xtask run-tests --wasm sqlite
+
   test_precompiled:
     strategy:
       matrix:
