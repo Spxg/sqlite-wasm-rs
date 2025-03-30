@@ -208,6 +208,15 @@ impl SQLiteVfsFile {
     }
 }
 
+/// Possible errors when registering Vfs
+#[derive(thiserror::Error, Debug)]
+pub enum VfsError {
+    #[error("An error occurred converting the given vfs name to a CStr")]
+    ToCStr,
+    #[error("An error occurred while registering vfs with sqlite")]
+    RegisterVfs,
+}
+
 #[cfg(test)]
 mod tests {
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
