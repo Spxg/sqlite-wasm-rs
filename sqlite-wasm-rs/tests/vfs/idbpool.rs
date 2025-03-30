@@ -225,7 +225,7 @@ async fn test_idb_vfs_synchronous() {
     assert_eq!(SQLITE_ERROR, ret);
 }
 
-const SIZE: usize = 50;
+const SIZE: usize = 1024;
 
 async fn sqlite3_preload_prepare(block_size: usize) {
     let indexed_db = Database::open("idb-preload")
@@ -269,7 +269,7 @@ async fn sqlite3_preload_prepare(block_size: usize) {
     transaction.commit().await.unwrap();
     let elapsed = now.elapsed();
     console_log!(
-        "{block_size}: write {count} block use {:?}, pre {:?}",
+        "page_size {block_size}k: write {count} block use {:?}, pre {:?}",
         elapsed,
         elapsed / count as u32
     );
@@ -294,17 +294,10 @@ async fn test_idb_vfs_preload(block_size: usize) {
     let elapsed = now.elapsed();
     let count = SIZE * 1024 * 1024 / block_size;
     console_log!(
-        "{block_size}: read {count} block use {:?}, per {:?}",
+        "page_size {block_size}k: read {count} block use {:?}, per {:?}",
         elapsed,
         elapsed / count as u32
     );
-}
-
-#[ignore]
-#[wasm_bindgen_test]
-async fn test_idb_vfs_preload_64k() {
-    sqlite3_preload_prepare(65536).await;
-    test_idb_vfs_preload(65536).await;
 }
 
 #[ignore]
@@ -319,4 +312,25 @@ async fn test_idb_vfs_preload_4k() {
 async fn test_idb_vfs_preload_8k() {
     sqlite3_preload_prepare(8192).await;
     test_idb_vfs_preload(8192).await;
+}
+
+#[ignore]
+#[wasm_bindgen_test]
+async fn test_idb_vfs_preload_16k() {
+    sqlite3_preload_prepare(16384).await;
+    test_idb_vfs_preload(16384).await;
+}
+
+#[ignore]
+#[wasm_bindgen_test]
+async fn test_idb_vfs_preload_32k() {
+    sqlite3_preload_prepare(32768).await;
+    test_idb_vfs_preload(32768).await;
+}
+
+#[ignore]
+#[wasm_bindgen_test]
+async fn test_idb_vfs_preload_64k() {
+    sqlite3_preload_prepare(65536).await;
+    test_idb_vfs_preload(65536).await;
 }
