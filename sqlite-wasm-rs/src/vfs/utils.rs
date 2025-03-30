@@ -173,6 +173,41 @@ macro_rules! check_result {
     };
 }
 
+/// The actual pFile type in Vfs.
+///
+/// `szOsFile` must be set to the size of `SQLiteVfsFile`.
+#[repr(C)]
+pub struct SQLiteVfsFile {
+    /// The first field must be of type sqlite_file.
+    /// In C layout, the pointer to SQLiteVfsFile is the pointer to io_methods.
+    pub io_methods: sqlite3_file,
+    /// The vfs where the file is located, usually used to manage files.
+    pub vfs: *mut sqlite3_vfs,
+    /// Flags used to open the database.
+    pub flags: i32,
+    /// The pointer to the file name.
+    /// If it is a leaked static pointer, you need to drop it manually when xClose it.
+    pub name_ptr: *const u8,
+    /// Length of the file name, on wasm32 platform, usize is u32.
+    pub name_length: usize,
+}
+
+impl SQLiteVfsFile {
+    /// Convert a `sqlite3_file` pointer to a `SQLiteVfsFile` pointer.
+    pub unsafe fn from_file(file: *mut sqlite3_file) -> &'static SQLiteVfsFile {
+        &*file.cast::<Self>()
+    }
+
+    /// Get the file name. When xClose, you can release the memory by `drop(Box::from_raw(ptr));`.
+    pub unsafe fn name(&self) -> &'static mut str {
+        // emm, `from_raw_parts_mut` is unstable
+        std::str::from_utf8_unchecked_mut(std::slice::from_raw_parts_mut(
+            self.name_ptr.cast_mut(),
+            self.name_length,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);

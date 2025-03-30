@@ -1,12 +1,12 @@
 //! Memory VFS, used as the default VFS
 
-use crate::vfs::utils::{get_random_name, FilePtr};
+use crate::vfs::utils::{get_random_name, SQLiteVfsFile};
 use crate::{bail, check_option, check_result, libsqlite3::*};
 
 use js_sys::{Date, Math};
 use once_cell::sync::Lazy;
 use parking_lot::{Mutex, MutexGuard, RwLock};
-use std::{collections::HashMap, ffi::CStr, sync::Arc};
+use std::{collections::HashMap, ffi::CStr};
 
 /// thread::sleep is available when atomics are enabled
 #[cfg(target_feature = "atomics")]
@@ -58,38 +58,22 @@ unsafe extern "C" fn xCurrentTimeInt64(
     SQLITE_OK
 }
 
-/// pFile -> mem_file
-fn pfile2file() -> MutexGuard<'static, HashMap<FilePtr, Arc<RwLock<MemFile>>>> {
-    static PFILE: Lazy<Mutex<HashMap<FilePtr, Arc<RwLock<MemFile>>>>> =
-        Lazy::new(|| Mutex::new(HashMap::new()));
-
-    PFILE.lock()
-}
-
-fn mem_file(ptr: *mut sqlite3_file) -> Option<Arc<RwLock<MemFile>>> {
-    pfile2file().get(&FilePtr(ptr)).cloned()
-}
-
 /// filename -> mem_file
-fn name2file() -> MutexGuard<'static, HashMap<String, Arc<RwLock<MemFile>>>> {
-    static NAME: Lazy<Mutex<HashMap<String, Arc<RwLock<MemFile>>>>> =
+fn name2file() -> MutexGuard<'static, HashMap<String, RwLock<MemFile>>> {
+    static NAME2FILE: Lazy<Mutex<HashMap<String, RwLock<MemFile>>>> =
         Lazy::new(|| Mutex::new(HashMap::new()));
 
-    NAME.lock()
+    NAME2FILE.lock()
 }
 
 /// An open file
 struct MemFile {
-    // filename
-    name: String,
-    /// flags
-    flags: i32,
     /// content of the file
     data: Vec<u8>,
 }
 
 unsafe extern "C" fn xOpen(
-    _pVfs: *mut sqlite3_vfs,
+    pVfs: *mut sqlite3_vfs,
     zName: sqlite3_filename,
     pFile: *mut sqlite3_file,
     flags: ::std::os::raw::c_int,
@@ -102,22 +86,20 @@ unsafe extern "C" fn xOpen(
     };
 
     let mut name2file = name2file();
-    let mem_file = if let Some(mem_file) = name2file.get(&name) {
-        Arc::clone(mem_file)
-    } else {
+    if !name2file.contains_key(&name) {
         if flags & SQLITE_OPEN_CREATE == 0 {
             return SQLITE_CANTOPEN;
         }
-        let file = Arc::new(RwLock::new(MemFile {
-            name: name.clone(),
-            flags,
-            data: Vec::new(),
-        }));
-        name2file.insert(name, Arc::clone(&file));
-        file
-    };
+        let file = RwLock::new(MemFile { data: Vec::new() });
+        name2file.insert(name.clone(), file);
+    }
 
-    pfile2file().insert(FilePtr(pFile), mem_file);
+    let leak = name.leak();
+    let vfs_file = pFile.cast::<SQLiteVfsFile>();
+    (*vfs_file).vfs = pVfs;
+    (*vfs_file).flags = flags;
+    (*vfs_file).name_ptr = leak.as_ptr();
+    (*vfs_file).name_length = leak.len();
 
     (*pFile).pMethods = &IO_METHODS;
 
@@ -182,12 +164,15 @@ unsafe extern "C" fn xGetLastError(
 }
 
 unsafe extern "C" fn xClose(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
-    if let Some(file) = pfile2file().remove(&FilePtr(pFile)) {
-        let file = file.write();
-        if file.flags & SQLITE_OPEN_DELETEONCLOSE != 0 {
-            name2file().remove(&file.name);
-        }
+    let vfs_file = SQLiteVfsFile::from_file(pFile);
+    let name = vfs_file.name();
+
+    if vfs_file.flags & SQLITE_OPEN_DELETEONCLOSE != 0 {
+        name2file().remove(name);
     }
+
+    drop(unsafe { Box::from_raw(name) });
+
     SQLITE_OK
 }
 
@@ -197,7 +182,11 @@ unsafe extern "C" fn xRead(
     iAmt: ::std::os::raw::c_int,
     iOfst: sqlite3_int64,
 ) -> ::std::os::raw::c_int {
-    let file = check_option!(mem_file(pFile));
+    let name2file = name2file();
+    let file = check_option! {
+        name2file.get(SQLiteVfsFile::from_file(pFile).name())
+    };
+
     let file = file.read();
     let data = &file.data;
 
@@ -226,7 +215,11 @@ unsafe extern "C" fn xWrite(
     iAmt: ::std::os::raw::c_int,
     iOfst: sqlite3_int64,
 ) -> ::std::os::raw::c_int {
-    let file = check_option!(mem_file(pFile));
+    let name2file = name2file();
+    let file = check_option! {
+        name2file.get(SQLiteVfsFile::from_file(pFile).name())
+    };
+
     let mut file = file.write();
 
     let end = iOfst as usize + iAmt as usize;
@@ -246,7 +239,11 @@ unsafe extern "C" fn xTruncate(
     pFile: *mut sqlite3_file,
     size: sqlite3_int64,
 ) -> ::std::os::raw::c_int {
-    let file = check_option!(mem_file(pFile));
+    let name2file = name2file();
+    let file = check_option! {
+        name2file.get(SQLiteVfsFile::from_file(pFile).name())
+    };
+
     let mut file = file.write();
 
     let now = file.data.len();
@@ -265,7 +262,10 @@ unsafe extern "C" fn xFileSize(
     pFile: *mut sqlite3_file,
     pSize: *mut sqlite3_int64,
 ) -> ::std::os::raw::c_int {
-    let file = check_option!(mem_file(pFile));
+    let name2file = name2file();
+    let file = check_option! {
+        name2file.get(SQLiteVfsFile::from_file(pFile).name())
+    };
     *pSize = file.read().data.len() as sqlite3_int64;
     SQLITE_OK
 }
@@ -333,7 +333,7 @@ static IO_METHODS: sqlite3_io_methods = sqlite3_io_methods {
 fn vfs() -> sqlite3_vfs {
     sqlite3_vfs {
         iVersion: 1,
-        szOsFile: std::mem::size_of::<sqlite3_file>() as i32,
+        szOsFile: std::mem::size_of::<SQLiteVfsFile>() as i32,
         mxPathname: 1024,
         pNext: std::ptr::null_mut(),
         zName: c"memvfs".as_ptr().cast(),
