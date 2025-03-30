@@ -43,7 +43,7 @@ jobs:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
       run: cargo install wasm-pack
-    - name: Test diesel tests
+    - name: Run diesel tests
       run: |
         git clone https://github.com/emscripten-core/emsdk.git
         cd emsdk
@@ -56,6 +56,20 @@ jobs:
         printf "[patch.crates-io]\n" >> Cargo.toml
         printf "sqlite-wasm-rs = { path = \"../sqlite-wasm-rs\" }\n" >> Cargo.toml
         cargo xtask run-tests --wasm sqlite
+
+  test_rusqlite:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install wasm-pack
+      run: cargo install wasm-pack
+    - name: Run rusqlite tests
+      run: |
+        git clone https://github.com/Spxg/rusqlite.git
+        cd rusqlite
+        printf "[patch.crates-io]\n" >> Cargo.toml
+        printf "sqlite-wasm-rs = { path = \"../sqlite-wasm-rs\" }\n" >> Cargo.toml
+        wasm-pack test --chrome --headless --features modern-full-wasm32-unknown-unknown,precompiled-wasm
 
   test_precompiled:
     strategy:
