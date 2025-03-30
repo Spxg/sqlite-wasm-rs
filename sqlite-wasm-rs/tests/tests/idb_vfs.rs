@@ -4,17 +4,83 @@ use indexed_db_futures::prelude::*;
 use indexed_db_futures::transaction::TransactionMode;
 use js_sys::{Object, Reflect};
 use sqlite_wasm_rs::export::*;
-use sqlite_wasm_rs::idb_vfs::{install as install_idb_vfs, Preload};
+use sqlite_wasm_rs::idb_vfs::{install as install_idb_vfs, IndexedDbPoolCfgBuilder, Preload};
 use sqlite_wasm_rs::utils::copy_to_uint8_array;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::{console_log, wasm_bindgen_test};
 
 #[wasm_bindgen_test]
 #[allow(unused)]
-async fn test_indexed_db_vfs_page_size_after_create() {
-    let util = install_idb_vfs("sqlite-wasm-rs", true, Preload::None)
+async fn test_indexed_db_vfs_utils() {
+    let util = install_idb_vfs(
+        Some(
+            &IndexedDbPoolCfgBuilder::new()
+                .vfs_name("sqlite-wasm-rs-delete")
+                .clear_on_init(true)
+                .preload(Preload::All)
+                .build(),
+        ),
+        true,
+    )
+    .await
+    .unwrap();
+
+    let mut db = std::ptr::null_mut();
+    let ret = unsafe {
+        sqlite3_open_v2(
+            c"test_indexed_db_vfs_utils.db".as_ptr(),
+            &mut db as *mut _,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+            std::ptr::null_mut(),
+        )
+    };
+
+    test_vfs(db);
+
+    unsafe { sqlite3_close(db) };
+
+    let db = util.export_file("test_indexed_db_vfs_utils.db").unwrap();
+    util.import_db("test_indexed_db_vfs_utils2.db", &db, 512)
         .await
         .unwrap();
+
+    let mut db = std::ptr::null_mut();
+
+    let ret = unsafe {
+        sqlite3_open_v2(
+            c"test_indexed_db_vfs_utils2.db".as_ptr(),
+            &mut db as *mut _,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+            std::ptr::null_mut(),
+        )
+    };
+
+    test_vfs(db);
+
+    unsafe { sqlite3_close(db) };
+
+    util.delete_file("test_indexed_db_vfs_utils.db")
+        .await
+        .unwrap();
+    util.delete_file("test_indexed_db_vfs_utils2.db")
+        .await
+        .unwrap();
+}
+
+#[wasm_bindgen_test]
+#[allow(unused)]
+async fn test_indexed_db_vfs_page_size_after_create() {
+    let util = install_idb_vfs(
+        Some(
+            &IndexedDbPoolCfgBuilder::new()
+                .vfs_name("sqlite-wasm-rs")
+                .preload(Preload::None)
+                .build(),
+        ),
+        true,
+    )
+    .await
+    .unwrap();
     util.preload_db(vec!["test_indexed_db_vfs_page_size_after_create.db".into()])
         .await
         .unwrap();
@@ -68,9 +134,17 @@ async fn test_indexed_db_vfs_page_size_after_create() {
 #[wasm_bindgen_test]
 #[allow(unused)]
 async fn test_indexed_db_vfs_page_size() {
-    install_idb_vfs("sqlite-wasm-rs", true, Preload::All)
-        .await
-        .unwrap();
+    install_idb_vfs(
+        Some(
+            &IndexedDbPoolCfgBuilder::new()
+                .vfs_name("sqlite-wasm-rs")
+                .preload(Preload::None)
+                .build(),
+        ),
+        true,
+    )
+    .await
+    .unwrap();
 
     let mut db = std::ptr::null_mut();
     let ret = unsafe {
@@ -107,9 +181,17 @@ async fn test_indexed_db_vfs_page_size() {
 #[wasm_bindgen_test]
 #[allow(unused)]
 async fn test_indexed_db_vfs_synchronous() {
-    install_idb_vfs("sqlite-wasm-rs", true, Preload::All)
-        .await
-        .unwrap();
+    install_idb_vfs(
+        Some(
+            &IndexedDbPoolCfgBuilder::new()
+                .vfs_name("sqlite-wasm-rs")
+                .preload(Preload::All)
+                .build(),
+        ),
+        true,
+    )
+    .await
+    .unwrap();
 
     let mut db = std::ptr::null_mut();
     let ret = unsafe {
@@ -132,7 +214,8 @@ async fn test_indexed_db_vfs_synchronous() {
     assert_eq!(SQLITE_ERROR, ret);
 }
 
-const SIZE: usize = 70;
+const SIZE: usize = 1024;
+
 async fn sqlite3_preload_prepare(block_size: usize) {
     let indexed_db = Database::open("sqlite-wasm-rs-preload")
         .with_version(1u8)
@@ -183,9 +266,17 @@ async fn sqlite3_preload_prepare(block_size: usize) {
 
 async fn test_indexed_db_vfs_preload(block_size: usize) {
     let now = web_time::Instant::now();
-    let util = install_idb_vfs("sqlite-wasm-rs-preload", true, Preload::None)
-        .await
-        .unwrap();
+    let util = install_idb_vfs(
+        Some(
+            &IndexedDbPoolCfgBuilder::new()
+                .vfs_name("sqlite-wasm-rs-preload")
+                .preload(Preload::None)
+                .build(),
+        ),
+        true,
+    )
+    .await
+    .unwrap();
     util.preload_db(vec![format!("test_indexed_db_vfs_preload_{block_size}")])
         .await
         .unwrap();
@@ -210,7 +301,7 @@ async fn test_indexed_db_vfs_preload_64k() {
 #[wasm_bindgen_test]
 #[allow(unused)]
 async fn test_indexed_db_vfs_preload_4k() {
-    // sqlite3_preload_prepare(4096).await;
+    sqlite3_preload_prepare(4096).await;
     test_indexed_db_vfs_preload(4096).await;
 }
 
@@ -218,6 +309,6 @@ async fn test_indexed_db_vfs_preload_4k() {
 #[wasm_bindgen_test]
 #[allow(unused)]
 async fn test_indexed_db_vfs_preload_8k() {
-    // sqlite3_preload_prepare(8192).await;
+    sqlite3_preload_prepare(8192).await;
     test_indexed_db_vfs_preload(8192).await;
 }
