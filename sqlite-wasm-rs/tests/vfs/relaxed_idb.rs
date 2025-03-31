@@ -2,10 +2,9 @@ use crate::vfs::{check_persistent, prepare_simple_db};
 use indexed_db_futures::database::Database;
 use indexed_db_futures::prelude::*;
 use indexed_db_futures::transaction::TransactionMode;
-use js_sys::{Object, Reflect};
+use js_sys::{Object, Reflect, Uint8Array};
 use sqlite_wasm_rs::export::*;
 use sqlite_wasm_rs::relaxed_idb_vfs::{install as install_idb_vfs, Preload, RelaxedIdbCfgBuilder};
-use sqlite_wasm_rs::utils::copy_to_uint8_array;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::{console_log, wasm_bindgen_test};
 
@@ -256,7 +255,7 @@ async fn sqlite3_preload_prepare(block_size: usize) {
     Reflect::set(
         &block,
         &JsValue::from("data"),
-        &JsValue::from(copy_to_uint8_array(&vec![0; block_size])),
+        &JsValue::from(Uint8Array::new_with_length(block_size as u32)),
     )
     .unwrap();
 
@@ -269,7 +268,8 @@ async fn sqlite3_preload_prepare(block_size: usize) {
     transaction.commit().await.unwrap();
     let elapsed = now.elapsed();
     console_log!(
-        "page_size {block_size}k: write {count} block use {:?}, pre {:?}",
+        "page_size {}k: write {count} block use {:?}, pre {:?}",
+        block_size / 1024,
         elapsed,
         elapsed / count as u32
     );
@@ -294,10 +294,18 @@ async fn test_idb_vfs_preload(block_size: usize) {
     let elapsed = now.elapsed();
     let count = SIZE * 1024 * 1024 / block_size;
     console_log!(
-        "page_size {block_size}k: read {count} block use {:?}, per {:?}",
+        "page_size {}k: read {count} block use {:?}, per {:?}",
+        block_size / 1024,
         elapsed,
         elapsed / count as u32
     );
+}
+
+#[ignore]
+#[wasm_bindgen_test]
+async fn test_idb_vfs_preload_base() {
+    sqlite3_preload_prepare(SIZE * 1024 * 1024).await;
+    test_idb_vfs_preload(SIZE * 1024 * 1024).await;
 }
 
 #[ignore]
