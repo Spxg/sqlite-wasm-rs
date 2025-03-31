@@ -301,6 +301,8 @@ impl RelaxedIdb {
     }
 
     async fn delete_file(&self, name: &str) -> Result<()> {
+        self.name2file.write().remove(name);
+
         let notify = Arc::new(Notify::new());
         let wait = Arc::clone(&notify);
 
@@ -324,6 +326,7 @@ impl RelaxedIdb {
     }
 
     async fn clear_all(&self) -> Result<()> {
+        std::mem::take(&mut *self.name2file.write());
         clear_impl(&self.idb).await
     }
 
@@ -878,11 +881,11 @@ pub enum Preload {
     All,
     /// Specify the path to load the database
     Paths(Vec<String>),
-    /// Not preloaded, can be manually loaded later via `IndexedDbUtil`
+    /// Not preloaded, can be manually loaded later via `RelaxedIdbUtil`
     None,
 }
 
-/// Build `IndexedDbPoolCfg`
+/// Build `RelaxedIdbCfg`
 pub struct RelaxedIdbCfgBuilder(RelaxedIdbCfg);
 
 impl RelaxedIdbCfgBuilder {
@@ -908,7 +911,7 @@ impl RelaxedIdbCfgBuilder {
         self
     }
 
-    /// Build IndexedDbPoolCfg
+    /// Build `RelaxedIdbCfg`
     pub fn build(self) -> RelaxedIdbCfg {
         self.0
     }
@@ -920,7 +923,7 @@ impl Default for RelaxedIdbCfgBuilder {
     }
 }
 
-/// `IndexedDbPool` options
+/// `RelaxedIdb` options
 pub struct RelaxedIdbCfg {
     /// The SQLite VFS name under which this pool's VFS is registered.
     pub vfs_name: String,
@@ -940,7 +943,7 @@ impl Default for RelaxedIdbCfg {
     }
 }
 
-/// IndexedDbPool management tools exposed to clients.
+/// RelaxedIdb management tools exposed to clients.
 pub struct RelaxedIdbUtil {
     pool: Arc<RelaxedIdb>,
 }
