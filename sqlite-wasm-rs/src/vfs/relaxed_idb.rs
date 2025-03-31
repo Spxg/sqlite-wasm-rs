@@ -883,9 +883,9 @@ pub enum Preload {
 }
 
 /// Build `IndexedDbPoolCfg`
-pub struct RelaxedIndexedDbCfgBuilder(RelaxedIdbCfg);
+pub struct RelaxedIdbCfgBuilder(RelaxedIdbCfg);
 
-impl RelaxedIndexedDbCfgBuilder {
+impl RelaxedIdbCfgBuilder {
     pub fn new() -> Self {
         Self(RelaxedIdbCfg::default())
     }
@@ -914,7 +914,7 @@ impl RelaxedIndexedDbCfgBuilder {
     }
 }
 
-impl Default for RelaxedIndexedDbCfgBuilder {
+impl Default for RelaxedIdbCfgBuilder {
     fn default() -> Self {
         Self::new()
     }

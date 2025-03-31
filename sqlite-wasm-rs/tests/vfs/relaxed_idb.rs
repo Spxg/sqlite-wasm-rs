@@ -4,9 +4,7 @@ use indexed_db_futures::prelude::*;
 use indexed_db_futures::transaction::TransactionMode;
 use js_sys::{Object, Reflect};
 use sqlite_wasm_rs::export::*;
-use sqlite_wasm_rs::relaxed_idb_vfs::{
-    install as install_idb_vfs, Preload, RelaxedIndexedDbCfgBuilder,
-};
+use sqlite_wasm_rs::relaxed_idb_vfs::{install as install_idb_vfs, Preload, RelaxedIdbCfgBuilder};
 use sqlite_wasm_rs::utils::copy_to_uint8_array;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::{console_log, wasm_bindgen_test};
@@ -51,7 +49,7 @@ async fn test_idb_vfs_default_error() {
 async fn test_idb_vfs_custom() {
     install_idb_vfs(
         Some(
-            &RelaxedIndexedDbCfgBuilder::new()
+            &RelaxedIdbCfgBuilder::new()
                 .vfs_name("relaxed-idb-custom")
                 .clear_on_init(true)
                 .preload(Preload::None)
@@ -81,7 +79,7 @@ async fn test_idb_vfs_custom() {
 async fn test_idb_vfs_utils() {
     let util = install_idb_vfs(
         Some(
-            &RelaxedIndexedDbCfgBuilder::new()
+            &RelaxedIdbCfgBuilder::new()
                 .vfs_name("relaxed-idb-utils")
                 .clear_on_init(true)
                 .preload(Preload::All)
@@ -138,7 +136,7 @@ async fn test_idb_vfs_utils() {
 async fn test_idb_vfs_set_page_size() {
     let util = install_idb_vfs(
         Some(
-            &RelaxedIndexedDbCfgBuilder::new()
+            &RelaxedIdbCfgBuilder::new()
                 .vfs_name("relaxed-idb-pagesize")
                 .clear_on_init(true)
                 .preload(Preload::None)
@@ -194,7 +192,7 @@ async fn test_idb_vfs_set_page_size() {
 async fn test_idb_vfs_synchronous() {
     install_idb_vfs(
         Some(
-            &RelaxedIndexedDbCfgBuilder::new()
+            &RelaxedIdbCfgBuilder::new()
                 .vfs_name("relaxed-idb-synchronous")
                 .build(),
         ),
@@ -281,7 +279,7 @@ async fn test_idb_vfs_preload(block_size: usize) {
     let now = web_time::Instant::now();
     let util = install_idb_vfs(
         Some(
-            &RelaxedIndexedDbCfgBuilder::new()
+            &RelaxedIdbCfgBuilder::new()
                 .vfs_name("idb-preload")
                 .preload(Preload::None)
                 .build(),
