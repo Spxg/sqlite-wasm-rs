@@ -10,7 +10,6 @@ use wasm_bindgen_test::wasm_bindgen_test;
 mod shim;
 
 #[wasm_bindgen_test]
-#[allow(unused)]
 async fn usage() {
     // open with memory vfs
     let mut db = std::ptr::null_mut();

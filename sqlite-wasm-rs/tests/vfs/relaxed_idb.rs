@@ -131,7 +131,6 @@ async fn test_idb_vfs_utils() {
 }
 
 #[wasm_bindgen_test]
-#[allow(unused)]
 async fn test_idb_vfs_set_page_size() {
     let util = install_idb_vfs(
         Some(
@@ -187,7 +186,6 @@ async fn test_idb_vfs_set_page_size() {
 }
 
 #[wasm_bindgen_test]
-#[allow(unused)]
 async fn test_idb_vfs_synchronous() {
     install_idb_vfs(
         Some(
@@ -223,8 +221,6 @@ async fn test_idb_vfs_synchronous() {
     };
     assert_eq!(SQLITE_ERROR, ret);
 }
-
-const SIZE: usize = 1024;
 
 async fn sqlite3_preload_prepare(block_size: usize) {
     let indexed_db = Database::open("idb-preload")
@@ -301,44 +297,51 @@ async fn test_idb_vfs_preload(block_size: usize) {
     );
 }
 
+const SIZE: usize = 1024;
+
+#[ignore]
+#[wasm_bindgen_test]
+async fn test_idb_prepare_all() {
+    sqlite3_preload_prepare(SIZE * 1024 * 1024).await;
+    sqlite3_preload_prepare(4096).await;
+    sqlite3_preload_prepare(8192).await;
+    sqlite3_preload_prepare(16384).await;
+    sqlite3_preload_prepare(32768).await;
+    sqlite3_preload_prepare(65536).await;
+}
+
 #[ignore]
 #[wasm_bindgen_test]
 async fn test_idb_vfs_preload_base() {
-    sqlite3_preload_prepare(SIZE * 1024 * 1024).await;
     test_idb_vfs_preload(SIZE * 1024 * 1024).await;
 }
 
 #[ignore]
 #[wasm_bindgen_test]
 async fn test_idb_vfs_preload_4k() {
-    sqlite3_preload_prepare(4096).await;
     test_idb_vfs_preload(4096).await;
 }
 
 #[ignore]
 #[wasm_bindgen_test]
 async fn test_idb_vfs_preload_8k() {
-    sqlite3_preload_prepare(8192).await;
     test_idb_vfs_preload(8192).await;
 }
 
 #[ignore]
 #[wasm_bindgen_test]
 async fn test_idb_vfs_preload_16k() {
-    sqlite3_preload_prepare(16384).await;
     test_idb_vfs_preload(16384).await;
 }
 
 #[ignore]
 #[wasm_bindgen_test]
 async fn test_idb_vfs_preload_32k() {
-    sqlite3_preload_prepare(32768).await;
     test_idb_vfs_preload(32768).await;
 }
 
 #[ignore]
 #[wasm_bindgen_test]
 async fn test_idb_vfs_preload_64k() {
-    sqlite3_preload_prepare(65536).await;
     test_idb_vfs_preload(65536).await;
 }
