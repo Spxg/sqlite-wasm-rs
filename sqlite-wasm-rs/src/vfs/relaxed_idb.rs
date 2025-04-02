@@ -758,10 +758,10 @@ unsafe extern "C" fn xFileControl(
             bail!(name.is_null());
             bail!(value.is_null(), SQLITE_NOTFOUND);
 
-            let key = check_result!(CStr::from_ptr(name).to_str());
-            let value = check_result!(CStr::from_ptr(value).to_str());
+            let key = check_result!(CStr::from_ptr(name).to_str()).to_lowercase();
+            let value = check_result!(CStr::from_ptr(value).to_str()).to_lowercase();
 
-            match key.to_lowercase().as_str() {
+            match key.as_str() {
                 "page_size" => {
                     let page_size = check_result!(value.parse::<usize>());
 
@@ -774,7 +774,7 @@ unsafe extern "C" fn xFileControl(
                     }
                 }
                 "synchronous" => {
-                    if value.to_lowercase().as_str() == "full" {
+                    if value.as_str() == "full" {
                         return SQLITE_ERROR;
                     }
                 }
