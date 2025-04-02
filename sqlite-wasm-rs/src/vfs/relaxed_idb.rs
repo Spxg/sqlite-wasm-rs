@@ -89,6 +89,10 @@ impl LazyBuffer {
         self.cell
             .get_or_init(|| copy_to_vec(&self.init.take().unwrap()))
     }
+
+    fn get_mut(&mut self) -> Option<&mut Vec<u8>> {
+        self.cell.get_mut()
+    }
 }
 
 fn key_range(file: &str, start: usize) -> std::ops::RangeInclusive<[JsValue; 2]> {
@@ -105,9 +109,7 @@ async fn clear_impl(indexed_db: &Database) -> Result<()> {
         .with_mode(TransactionMode::Readwrite)
         .build()?;
     let blocks = transaction.object_store("blocks")?;
-
     blocks.clear()?.await?;
-
     Ok(())
 }
 
@@ -645,8 +647,16 @@ unsafe extern "C" fn xWrite(
     let slice = std::slice::from_raw_parts(zBuf.cast::<u8>(), iAmt as usize);
     match file {
         IdbFile::Main(file) => {
-            file.blocks
-                .insert(iOfst as usize, LazyBuffer::ready(slice.to_vec()));
+            if let Some(Some(buffer)) = file
+                .blocks
+                .get_mut(&(iOfst as usize))
+                .map(|buffer| buffer.get_mut())
+            {
+                buffer.copy_from_slice(slice);
+            } else {
+                file.blocks
+                    .insert(iOfst as usize, LazyBuffer::ready(slice.to_vec()));
+            }
             file.tx_blocks.push(iOfst as usize);
             file.file_size = file.file_size.max(iOfst as usize + iAmt as usize);
             file.block_size = iAmt as usize;
