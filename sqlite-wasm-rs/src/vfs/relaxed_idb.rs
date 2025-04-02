@@ -758,28 +758,21 @@ unsafe extern "C" fn xFileControl(
             bail!(name.is_null());
             bail!(value.is_null(), SQLITE_NOTFOUND);
 
-            let key = check_result!(CStr::from_ptr(name).to_str()).to_lowercase();
-            let value = check_result!(CStr::from_ptr(value).to_str()).to_lowercase();
+            let key = check_result!(CStr::from_ptr(name).to_str()).to_ascii_lowercase();
+            let value = check_result!(CStr::from_ptr(value).to_str()).to_ascii_lowercase();
 
-            match key.as_str() {
-                "page_size" => {
-                    let page_size = check_result!(value.parse::<usize>());
-
-                    if page_size == file.block_size {
-                        return SQLITE_OK;
-                    } else if file.block_size == 0 {
-                        file.block_size = page_size;
-                    } else {
-                        return SQLITE_ERROR;
-                    }
+            if key == "page_size" {
+                let page_size = check_result!(value.parse::<usize>());
+                if page_size == file.block_size {
+                    return SQLITE_OK;
+                } else if file.block_size == 0 {
+                    file.block_size = page_size;
+                } else {
+                    return SQLITE_ERROR;
                 }
-                "synchronous" => {
-                    if value.as_str() == "full" {
-                        return SQLITE_ERROR;
-                    }
-                }
-                _ => return SQLITE_NOTFOUND,
-            }
+            } else if key == "synchronous" && value == "full" {
+                return SQLITE_ERROR;
+            };
         }
         SQLITE_FCNTL_SYNC | SQLITE_FCNTL_COMMIT_PHASETWO => {
             if pool
