@@ -2,7 +2,8 @@
 
 use crate::vfs::utils::{
     copy_to_slice, copy_to_uint8_array, copy_to_uint8_array_subarray, get_random_name, page_read,
-    register_vfs, FragileComfirmed, MemPageStore, SQLiteVfsFile, VfsError, VfsPtr, SQLITE3_HEADER,
+    register_vfs, FragileComfirmed, MemLinearStore, SQLiteVfsFile, VfsError, VfsPtr, VfsStore,
+    SQLITE3_HEADER,
 };
 use crate::{bail, check_option, check_result, libsqlite3::*};
 
@@ -34,30 +35,70 @@ enum IdbCommitOp {
 }
 
 enum IdbFile {
-    Main(IdbBlockFile),
-    Temp(MemPageStore),
+    Main(IdbPageStore),
+    Temp(MemLinearStore),
 }
 
 impl IdbFile {
     fn new(flags: i32) -> Self {
         if flags & SQLITE_OPEN_MAIN_DB == 0 {
-            Self::Temp(MemPageStore::default())
+            Self::Temp(MemLinearStore::default())
         } else {
-            Self::Main(IdbBlockFile {
-                file_size: 0,
-                block_size: 0,
-                blocks: HashMap::new(),
-                tx_blocks: HashSet::new(),
-            })
+            Self::Main(IdbPageStore::default())
         }
     }
 }
 
-struct IdbBlockFile {
+#[derive(Default)]
+struct IdbPageStore {
     file_size: usize,
     block_size: usize,
     blocks: HashMap<usize, FragileComfirmed<Uint8Array>>,
     tx_blocks: HashSet<usize>,
+}
+
+impl VfsStore for IdbPageStore {
+    fn read(&self, buf: &mut [u8], offset: usize) -> i32 {
+        page_read(
+            buf,
+            self.block_size,
+            self.file_size,
+            offset,
+            |addr| self.blocks.get(&addr),
+            |page, buf, (start, end)| {
+                copy_to_slice(&page.subarray(start as u32, end as u32), buf);
+            },
+        )
+    }
+
+    fn write(&mut self, buf: &[u8], offset: usize) {
+        let size = buf.len();
+        let end = size + offset;
+        for fill in (self.file_size..end).step_by(size) {
+            self.blocks.insert(
+                fill,
+                FragileComfirmed::new(Uint8Array::new_with_length(size as u32)),
+            );
+            self.tx_blocks.insert(fill);
+        }
+        if let Some(buffer) = self.blocks.get_mut(&offset) {
+            copy_to_uint8_array_subarray(buf, buffer);
+        } else {
+            self.blocks
+                .insert(offset, FragileComfirmed::new(copy_to_uint8_array(buf)));
+        }
+        self.tx_blocks.insert(offset);
+        self.file_size = self.file_size.max(end);
+        self.block_size = size;
+    }
+
+    fn truncate(&mut self, size: usize) {
+        self.file_size = size;
+    }
+
+    fn size(&self) -> usize {
+        self.file_size
+    }
 }
 
 fn key_range(file: &str, start: usize) -> std::ops::RangeInclusive<[JsValue; 2]> {
@@ -104,7 +145,7 @@ async fn preload_db_impl(
                 db.blocks.insert(offset, FragileComfirmed::new(data));
             }
             hash_map::Entry::Vacant(vacant_entry) => {
-                vacant_entry.insert(IdbFile::Main(IdbBlockFile {
+                vacant_entry.insert(IdbFile::Main(IdbPageStore {
                     file_size: data.length() as _,
                     block_size: data.length() as _,
                     blocks: HashMap::from([(offset, FragileComfirmed::new(data))]),
@@ -219,7 +260,7 @@ impl RelaxedIdb {
         let tx_blocks = blocks.keys().copied().collect();
         self.name2file.write().insert(
             path.into(),
-            IdbFile::Main(IdbBlockFile {
+            IdbFile::Main(IdbPageStore {
                 file_size: blocks.len() * page_size,
                 block_size: page_size,
                 blocks,
@@ -517,17 +558,8 @@ unsafe extern "C" fn xRead(
     let slice = std::slice::from_raw_parts_mut(zBuf.cast::<u8>(), size);
 
     match file {
-        IdbFile::Main(file) => page_read(
-            slice,
-            file.block_size,
-            file.file_size,
-            offset,
-            |addr| file.blocks.get(&addr),
-            |page, buf, (start, end)| {
-                copy_to_slice(&page.subarray(start as u32, end as u32), buf);
-            },
-        ),
-        IdbFile::Temp(data) => data.read(slice, offset),
+        IdbFile::Main(idb_page_store) => idb_page_store.read(slice, offset),
+        IdbFile::Temp(mem_linear_store) => mem_linear_store.read(slice, offset),
     }
 }
 
@@ -546,29 +578,15 @@ unsafe extern "C" fn xWrite(
     let file = check_option!(name2file.get_mut(name));
 
     let (offset, size) = (iOfst as usize, iAmt as usize);
-    let end = offset + size;
     let slice = std::slice::from_raw_parts(zBuf.cast::<u8>(), size);
 
     match file {
-        IdbFile::Main(file) => {
-            for fill in (file.file_size..end).step_by(size) {
-                file.blocks.insert(
-                    fill,
-                    FragileComfirmed::new(Uint8Array::new_with_length(size as u32)),
-                );
-                file.tx_blocks.insert(fill);
-            }
-            if let Some(buffer) = file.blocks.get_mut(&offset) {
-                copy_to_uint8_array_subarray(slice, buffer);
-            } else {
-                file.blocks
-                    .insert(offset, FragileComfirmed::new(copy_to_uint8_array(slice)));
-            }
-            file.tx_blocks.insert(offset);
-            file.file_size = file.file_size.max(end);
-            file.block_size = size;
+        IdbFile::Main(idb_page_store) => {
+            idb_page_store.write(slice, offset);
         }
-        IdbFile::Temp(data) => data.write(slice, offset),
+        IdbFile::Temp(mem_linear_store) => {
+            mem_linear_store.write(slice, offset);
+        }
     }
     SQLITE_OK
 }
@@ -584,12 +602,13 @@ unsafe extern "C" fn xTruncate(
     let mut name2file = pool.name2file.write();
     let file = check_option!(name2file.get_mut(name));
 
+    let size = size as usize;
     match file {
-        IdbFile::Main(file) => {
-            file.file_size = size as usize;
+        IdbFile::Main(idb_page_store) => {
+            idb_page_store.truncate(size);
         }
-        IdbFile::Temp(data) => {
-            data.truncate(size as usize);
+        IdbFile::Temp(mem_linear_store) => {
+            mem_linear_store.truncate(size);
         }
     }
 
@@ -615,8 +634,8 @@ unsafe extern "C" fn xFileSize(
     let file = check_option!(name2file.get(name));
 
     *pSize = match file {
-        IdbFile::Main(file) => file.file_size,
-        IdbFile::Temp(data) => data.size(),
+        IdbFile::Main(idb_page_store) => idb_page_store.size(),
+        IdbFile::Temp(mem_linear_store) => mem_linear_store.size(),
     } as sqlite3_int64;
 
     SQLITE_OK

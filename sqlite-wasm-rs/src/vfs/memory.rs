@@ -1,6 +1,6 @@
 //! Memory VFS, used as the default VFS
 
-use crate::vfs::utils::{get_random_name, MemPageStore, SQLiteVfsFile};
+use crate::vfs::utils::{get_random_name, MemLinearStore, MemPageStore, SQLiteVfsFile, VfsStore};
 use crate::{bail, check_option, check_result, libsqlite3::*};
 
 use js_sys::{Date, Math};
@@ -67,9 +67,21 @@ fn name2file() -> MutexGuard<'static, HashMap<String, RwLock<MemFile>>> {
 }
 
 /// An open file
-struct MemFile {
-    /// content of the file
-    data: MemPageStore,
+enum MemFile {
+    /// content of the main db
+    Main(MemPageStore),
+    /// content of the main temp
+    Temp(MemLinearStore),
+}
+
+impl MemFile {
+    fn new(flags: i32) -> Self {
+        if flags & SQLITE_OPEN_MAIN_DB == 0 {
+            Self::Temp(MemLinearStore::default())
+        } else {
+            Self::Main(MemPageStore::default())
+        }
+    }
 }
 
 unsafe extern "C" fn xOpen(
@@ -90,9 +102,7 @@ unsafe extern "C" fn xOpen(
         if flags & SQLITE_OPEN_CREATE == 0 {
             return SQLITE_CANTOPEN;
         }
-        let file = RwLock::new(MemFile {
-            data: MemPageStore::default(),
-        });
+        let file = RwLock::new(MemFile::new(flags));
         name2file.insert(name.clone(), file);
     }
 
@@ -186,9 +196,13 @@ unsafe extern "C" fn xRead(
     };
 
     let file = file.read();
-    let data = &file.data;
+    let offset = iOfst as usize;
     let slice = std::slice::from_raw_parts_mut(zBuf.cast::<u8>(), iAmt as usize);
-    data.read(slice, iOfst as usize)
+
+    match &*file {
+        MemFile::Main(mem_page_store) => mem_page_store.read(slice, offset),
+        MemFile::Temp(mem_linear_store) => mem_linear_store.read(slice, offset),
+    }
 }
 
 unsafe extern "C" fn xWrite(
@@ -203,9 +217,13 @@ unsafe extern "C" fn xWrite(
     };
 
     let mut file = file.write();
-
+    let offset = iOfst as usize;
     let slice = std::slice::from_raw_parts(zBuf.cast::<u8>(), iAmt as usize);
-    file.data.write(slice, iOfst as usize);
+
+    match &mut *file {
+        MemFile::Main(mem_page_store) => mem_page_store.write(slice, offset),
+        MemFile::Temp(mem_linear_store) => mem_linear_store.write(slice, offset),
+    }
 
     SQLITE_OK
 }
@@ -218,7 +236,12 @@ unsafe extern "C" fn xTruncate(
     let file = check_option! {
         name2file.get(SQLiteVfsFile::from_file(pFile).name())
     };
-    file.write().data.truncate(size as usize);
+
+    let size = size as usize;
+    match &mut *file.write() {
+        MemFile::Main(mem_page_store) => mem_page_store.truncate(size),
+        MemFile::Temp(mem_linear_store) => mem_linear_store.truncate(size),
+    }
     SQLITE_OK
 }
 
@@ -237,7 +260,11 @@ unsafe extern "C" fn xFileSize(
     let file = check_option! {
         name2file.get(SQLiteVfsFile::from_file(pFile).name())
     };
-    *pSize = file.read().data.size() as _;
+
+    *pSize = match &*file.read() {
+        MemFile::Main(mem_page_store) => mem_page_store.size(),
+        MemFile::Temp(mem_linear_store) => mem_linear_store.size(),
+    } as sqlite3_int64;
     SQLITE_OK
 }
 

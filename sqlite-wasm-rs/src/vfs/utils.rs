@@ -301,6 +301,59 @@ pub fn page_read<T, G: Fn(usize) -> Option<T>, R: Fn(T, &mut [u8], (usize, usize
     SQLITE_OK
 }
 
+/// Some basic capabilities of Store
+pub trait VfsStore {
+    /// Abstraction of `xRead`, returns `SQLITE_OK` or `SQLITE_IOERR_SHORT_READ`
+    fn read(&self, buf: &mut [u8], offset: usize) -> i32;
+    /// Abstraction of `xWrite`
+    fn write(&mut self, buf: &[u8], offset: usize);
+    /// Abstraction of `xTruncate`
+    fn truncate(&mut self, size: usize);
+    /// Get file size
+    fn size(&self) -> usize;
+}
+
+/// Linear storage in memory, used for temporary DB
+#[derive(Default)]
+pub struct MemLinearStore(Vec<u8>);
+
+impl VfsStore for MemLinearStore {
+    fn read(&self, buf: &mut [u8], offset: usize) -> i32 {
+        let size = buf.len();
+        let end = size + offset;
+        if self.0.len() <= offset {
+            buf.fill(0);
+            return SQLITE_IOERR_SHORT_READ;
+        }
+
+        let read_end = end.min(self.0.len());
+        let read_size = read_end - offset;
+        buf[..read_size].copy_from_slice(&self.0[offset..read_end]);
+
+        if read_size < size {
+            buf[read_size..].fill(0);
+            return SQLITE_IOERR_SHORT_READ;
+        }
+        SQLITE_OK
+    }
+
+    fn write(&mut self, buf: &[u8], offset: usize) {
+        let end = buf.len() + offset;
+        if end > self.0.len() {
+            self.0.resize(end, 0);
+        }
+        self.0[offset..end].copy_from_slice(buf);
+    }
+
+    fn truncate(&mut self, size: usize) {
+        self.0.truncate(size);
+    }
+
+    fn size(&self) -> usize {
+        self.0.len()
+    }
+}
+
 /// Memory storage structure by page (block)
 ///
 /// Used by memory vfs and relaxed-idb vfs
@@ -311,9 +364,8 @@ pub struct MemPageStore {
     page_size: usize,
 }
 
-impl MemPageStore {
-    /// Abstraction of `xRead`, returns `SQLITE_OK` or `SQLITE_IOERR_SHORT_READ`
-    pub fn read(&self, buf: &mut [u8], offset: usize) -> i32 {
+impl VfsStore for MemPageStore {
+    fn read(&self, buf: &mut [u8], offset: usize) -> i32 {
         page_read(
             buf,
             self.page_size,
@@ -326,13 +378,12 @@ impl MemPageStore {
         )
     }
 
-    /// Abstraction of `xWrite`
-    pub fn write(&mut self, buf: &[u8], offset: usize) {
-        let buffer_size = buf.len();
-        let end = buffer_size + offset;
+    fn write(&mut self, buf: &[u8], offset: usize) {
+        let size = buf.len();
+        let end = size + offset;
 
-        for fill in (self.file_size..end).step_by(buffer_size) {
-            self.pages.insert(fill, vec![0; buffer_size]);
+        for fill in (self.file_size..end).step_by(size) {
+            self.pages.insert(fill, vec![0; size]);
         }
         if let Some(buffer) = self.pages.get_mut(&offset) {
             buffer.copy_from_slice(buf);
@@ -340,20 +391,18 @@ impl MemPageStore {
             self.pages.insert(offset, buf.to_vec());
         }
 
-        self.page_size = buffer_size;
+        self.page_size = size;
         self.file_size = self.file_size.max(end);
     }
 
-    /// Abstraction of `xTruncate`
-    pub fn truncate(&mut self, size: usize) {
+    fn truncate(&mut self, size: usize) {
         for offset in size..self.file_size {
             self.pages.remove(&offset);
         }
         self.file_size = size;
     }
 
-    /// Get file size
-    pub fn size(&self) -> usize {
+    fn size(&self) -> usize {
         self.file_size
     }
 }
