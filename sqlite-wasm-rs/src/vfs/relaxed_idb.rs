@@ -1,8 +1,8 @@
 //! relaxed-idb vfs implementation
 
 use crate::vfs::utils::{
-    copy_to_slice, copy_to_uint8_array, copy_to_uint8_array_subarray, get_random_name,
-    register_vfs, FragileComfirmed, SQLiteVfsFile, VfsError, VfsPtr, SQLITE3_HEADER,
+    copy_to_slice, copy_to_uint8_array, copy_to_uint8_array_subarray, get_random_name, page_read,
+    register_vfs, FragileComfirmed, MemPageStore, SQLiteVfsFile, VfsError, VfsPtr, SQLITE3_HEADER,
 };
 use crate::{bail, check_option, check_result, libsqlite3::*};
 
@@ -35,13 +35,13 @@ enum IdbCommitOp {
 
 enum IdbFile {
     Main(IdbBlockFile),
-    Temp(Vec<u8>),
+    Temp(MemPageStore),
 }
 
 impl IdbFile {
     fn new(flags: i32) -> Self {
         if flags & SQLITE_OPEN_MAIN_DB == 0 {
-            Self::Temp(vec![])
+            Self::Temp(MemPageStore::default())
         } else {
             Self::Main(IdbBlockFile {
                 file_size: 0,
@@ -236,23 +236,24 @@ impl RelaxedIdb {
         let name2file = self.name2file.read();
 
         if let Some(file) = name2file.get(name) {
-            match file {
-                IdbFile::Main(file) => {
-                    let file_size = file.file_size;
-                    let mut ret = vec![0; file.file_size];
-                    for (&offset, buffer) in &file.blocks {
-                        if offset >= file_size {
-                            continue;
-                        }
-                        copy_to_slice(buffer, &mut ret[offset..offset + file.block_size]);
+            if let IdbFile::Main(file) = file {
+                let file_size = file.file_size;
+                let mut ret = vec![0; file.file_size];
+                for (&offset, buffer) in &file.blocks {
+                    if offset >= file_size {
+                        continue;
                     }
-                    Ok(ret)
+                    copy_to_slice(buffer, &mut ret[offset..offset + file.block_size]);
                 }
-                IdbFile::Temp(items) => Ok(items.clone()),
+                Ok(ret)
+            } else {
+                Err(RelaxedIdbError::Generic(
+                    "Does not support dumping temporary files".into(),
+                ))
             }
         } else {
             Err(RelaxedIdbError::Generic(
-                "the file to be exported does not exist".into(),
+                "The file to be exported does not exist".into(),
             ))
         }
     }
@@ -459,13 +460,9 @@ unsafe extern "C" fn xFullPathname(
     zOut: *mut ::std::os::raw::c_char,
 ) -> ::std::os::raw::c_int {
     bail!(zName.is_null() || zOut.is_null(), SQLITE_CANTOPEN);
-
     let len = CStr::from_ptr(zName).count_bytes() + 1;
-
     bail!(len > nOut as usize, SQLITE_CANTOPEN);
-
     zName.copy_to(zOut, len);
-
     SQLITE_OK
 }
 
@@ -515,63 +512,23 @@ unsafe extern "C" fn xRead(
     let name2file = pool.name2file.read();
     let file = check_option!(name2file.get(name));
 
-    let end = iOfst as usize + iAmt as usize;
-    let slice = std::slice::from_raw_parts_mut(zBuf.cast::<u8>(), iAmt as usize);
+    let size = iAmt as usize;
+    let offset = iOfst as usize;
+    let slice = std::slice::from_raw_parts_mut(zBuf.cast::<u8>(), size);
 
     match file {
-        IdbFile::Main(file) => {
-            if file.block_size == 0 || file.file_size == 0 {
-                slice.fill(0);
-                return SQLITE_IOERR_SHORT_READ;
-            }
-
-            let mut bytes_read = 0;
-            let mut p_data_offset = 0;
-            let p_data_length = iAmt as usize;
-            let i_offset = iOfst as usize;
-            let block_size = file.block_size;
-
-            while p_data_offset < p_data_length {
-                let file_offset = i_offset + p_data_offset;
-                let block_idx = file_offset / block_size;
-                let block_offset = file_offset % block_size;
-                let block_addr = block_idx * file.block_size;
-
-                let Some(block) = file.blocks.get(&block_addr) else {
-                    break;
-                };
-
-                let block_length = (block_size - block_offset).min(p_data_length - p_data_offset);
-                copy_to_slice(
-                    &block.subarray(block_offset as u32, (block_offset + block_length) as u32),
-                    &mut slice[p_data_offset..p_data_offset + block_length],
-                );
-                p_data_offset += block_length;
-                bytes_read += block_length;
-            }
-
-            if bytes_read < p_data_length {
-                slice[bytes_read..].fill(0);
-                return SQLITE_IOERR_SHORT_READ;
-            }
-        }
-        IdbFile::Temp(data) => {
-            if data.len() <= iOfst as usize {
-                slice.fill(0);
-                return SQLITE_IOERR_SHORT_READ;
-            }
-
-            let read_size = end.min(data.len()) - iOfst as usize;
-            slice[..read_size].copy_from_slice(&data[iOfst as usize..end.min(data.len())]);
-
-            if read_size < iAmt as usize {
-                slice[read_size..iAmt as usize].fill(0);
-                return SQLITE_IOERR_SHORT_READ;
-            }
-        }
+        IdbFile::Main(file) => page_read(
+            slice,
+            file.block_size,
+            file.file_size,
+            offset,
+            |addr| file.blocks.get(&addr),
+            |page, buf, (start, end)| {
+                copy_to_slice(&page.subarray(start as u32, end as u32), buf);
+            },
+        ),
+        IdbFile::Temp(data) => data.read(slice, offset),
     }
-
-    SQLITE_OK
 }
 
 unsafe extern "C" fn xWrite(
@@ -588,16 +545,16 @@ unsafe extern "C" fn xWrite(
     let mut name2file = pool.name2file.write();
     let file = check_option!(name2file.get_mut(name));
 
-    let (offset, buffer_size) = (iOfst as usize, iAmt as usize);
-    let end = offset + buffer_size;
-    let slice = std::slice::from_raw_parts(zBuf.cast::<u8>(), buffer_size);
+    let (offset, size) = (iOfst as usize, iAmt as usize);
+    let end = offset + size;
+    let slice = std::slice::from_raw_parts(zBuf.cast::<u8>(), size);
 
     match file {
         IdbFile::Main(file) => {
-            for fill in (file.file_size..end).step_by(buffer_size) {
+            for fill in (file.file_size..end).step_by(size) {
                 file.blocks.insert(
                     fill,
-                    FragileComfirmed::new(Uint8Array::new_with_length(buffer_size as u32)),
+                    FragileComfirmed::new(Uint8Array::new_with_length(size as u32)),
                 );
                 file.tx_blocks.insert(fill);
             }
@@ -609,14 +566,9 @@ unsafe extern "C" fn xWrite(
             }
             file.tx_blocks.insert(offset);
             file.file_size = file.file_size.max(end);
-            file.block_size = buffer_size;
+            file.block_size = size;
         }
-        IdbFile::Temp(data) => {
-            if end > data.len() {
-                data.resize(end, 0);
-            }
-            data[offset..end].copy_from_slice(slice);
-        }
+        IdbFile::Temp(data) => data.write(slice, offset),
     }
     SQLITE_OK
 }
@@ -637,8 +589,7 @@ unsafe extern "C" fn xTruncate(
             file.file_size = size as usize;
         }
         IdbFile::Temp(data) => {
-            let now = data.len();
-            data.truncate(now.min(size as usize));
+            data.truncate(size as usize);
         }
     }
 
@@ -664,9 +615,9 @@ unsafe extern "C" fn xFileSize(
     let file = check_option!(name2file.get(name));
 
     *pSize = match file {
-        IdbFile::Main(file) => file.file_size as sqlite3_int64,
-        IdbFile::Temp(data) => data.len() as sqlite3_int64,
-    };
+        IdbFile::Main(file) => file.file_size,
+        IdbFile::Temp(data) => data.size(),
+    } as sqlite3_int64;
 
     SQLITE_OK
 }

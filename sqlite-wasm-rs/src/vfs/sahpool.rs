@@ -808,13 +808,9 @@ unsafe extern "C" fn xFullPathname(
     zOut: *mut ::std::os::raw::c_char,
 ) -> ::std::os::raw::c_int {
     bail!(zName.is_null() || zOut.is_null(), SQLITE_CANTOPEN);
-
     let len = CStr::from_ptr(zName).count_bytes() + 1;
-
     bail!(len > nOut as usize, SQLITE_CANTOPEN);
-
     zName.copy_to(zOut, len);
-
     SQLITE_OK
 }
 

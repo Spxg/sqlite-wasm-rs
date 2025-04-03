@@ -5,6 +5,7 @@ use crate::libsqlite3::*;
 use fragile::Fragile;
 use js_sys::{Math, Number, Uint8Array, WebAssembly};
 use std::{
+    collections::HashMap,
     ffi::CString,
     ops::{Deref, DerefMut},
 };
@@ -250,6 +251,111 @@ pub fn register_vfs(
     }
 
     Ok(vfs as *mut sqlite3_vfs)
+}
+
+/// Generic function for reading by page (block)
+pub fn page_read<T, G: Fn(usize) -> Option<T>, R: Fn(T, &mut [u8], (usize, usize))>(
+    buf: &mut [u8],
+    page_size: usize,
+    file_size: usize,
+    offset: usize,
+    get_page: G,
+    read_fn: R,
+) -> i32 {
+    if page_size == 0 || file_size == 0 {
+        buf.fill(0);
+        return SQLITE_IOERR_SHORT_READ;
+    }
+
+    let mut bytes_read = 0;
+    let mut p_data_offset = 0;
+    let p_data_length = buf.len();
+    let i_offset = offset;
+
+    while p_data_offset < p_data_length {
+        let file_offset = i_offset + p_data_offset;
+        let page_idx = file_offset / page_size;
+        let page_offset = file_offset % page_size;
+        let page_addr = page_idx * page_size;
+
+        let Some(page) = get_page(page_addr) else {
+            break;
+        };
+
+        let page_length = (page_size - page_offset).min(p_data_length - p_data_offset);
+        read_fn(
+            page,
+            &mut buf[p_data_offset..p_data_offset + page_length],
+            (page_offset, page_offset + page_length),
+        );
+
+        p_data_offset += page_length;
+        bytes_read += page_length;
+    }
+
+    if bytes_read < p_data_length {
+        buf[bytes_read..].fill(0);
+        return SQLITE_IOERR_SHORT_READ;
+    }
+
+    SQLITE_OK
+}
+
+/// Memory storage structure by page (block)
+///
+/// Used by memory vfs and relaxed-idb vfs
+#[derive(Default)]
+pub struct MemPageStore {
+    pages: HashMap<usize, Vec<u8>>,
+    file_size: usize,
+    page_size: usize,
+}
+
+impl MemPageStore {
+    /// Abstraction of `xRead`, returns `SQLITE_OK` or `SQLITE_IOERR_SHORT_READ`
+    pub fn read(&self, buf: &mut [u8], offset: usize) -> i32 {
+        page_read(
+            buf,
+            self.page_size,
+            self.file_size,
+            offset,
+            |addr| self.pages.get(&addr),
+            |page, buf, (start, end)| {
+                buf.copy_from_slice(&page[start..end]);
+            },
+        )
+    }
+
+    /// Abstraction of `xWrite`
+    pub fn write(&mut self, buf: &[u8], offset: usize) {
+        let buffer_size = buf.len();
+        let end = buffer_size + offset;
+
+        for fill in (self.file_size..end).step_by(buffer_size) {
+            self.pages.insert(fill, vec![0; buffer_size]);
+        }
+        if let Some(buffer) = self.pages.get_mut(&offset) {
+            buffer.copy_from_slice(buf);
+        } else {
+            self.pages.insert(offset, buf.to_vec());
+        }
+
+        self.page_size = buffer_size;
+        self.file_size = self.file_size.max(end);
+    }
+
+    /// Abstraction of `xTruncate`
+    pub fn truncate(&mut self, size: usize) {
+        for offset in size..self.file_size {
+            self.pages.remove(&offset);
+        }
+        self.file_size = size;
+    }
+
+    /// Get file size
+    pub fn size(&self) -> usize {
+        self.file_size
+    }
 }
 
 #[cfg(test)]

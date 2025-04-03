@@ -1,6 +1,6 @@
 //! Memory VFS, used as the default VFS
 
-use crate::vfs::utils::{get_random_name, SQLiteVfsFile};
+use crate::vfs::utils::{get_random_name, MemPageStore, SQLiteVfsFile};
 use crate::{bail, check_option, check_result, libsqlite3::*};
 
 use js_sys::{Date, Math};
@@ -69,7 +69,7 @@ fn name2file() -> MutexGuard<'static, HashMap<String, RwLock<MemFile>>> {
 /// An open file
 struct MemFile {
     /// content of the file
-    data: Vec<u8>,
+    data: MemPageStore,
 }
 
 unsafe extern "C" fn xOpen(
@@ -90,7 +90,9 @@ unsafe extern "C" fn xOpen(
         if flags & SQLITE_OPEN_CREATE == 0 {
             return SQLITE_CANTOPEN;
         }
-        let file = RwLock::new(MemFile { data: Vec::new() });
+        let file = RwLock::new(MemFile {
+            data: MemPageStore::default(),
+        });
         name2file.insert(name.clone(), file);
     }
 
@@ -145,13 +147,9 @@ unsafe extern "C" fn xFullPathname(
     zOut: *mut ::std::os::raw::c_char,
 ) -> ::std::os::raw::c_int {
     bail!(zName.is_null() || zOut.is_null(), SQLITE_CANTOPEN);
-
     let len = CStr::from_ptr(zName).count_bytes() + 1;
-
     bail!(len > nOut as usize, SQLITE_CANTOPEN);
-
     zName.copy_to(zOut, len);
-
     SQLITE_OK
 }
 
@@ -189,24 +187,8 @@ unsafe extern "C" fn xRead(
 
     let file = file.read();
     let data = &file.data;
-
-    let end = iOfst as usize + iAmt as usize;
     let slice = std::slice::from_raw_parts_mut(zBuf.cast::<u8>(), iAmt as usize);
-
-    if data.len() <= iOfst as usize {
-        slice.fill(0);
-        return SQLITE_IOERR_SHORT_READ;
-    }
-
-    let read_size = end.min(data.len()) - iOfst as usize;
-    slice[..read_size].copy_from_slice(&data[iOfst as usize..end.min(data.len())]);
-
-    if read_size < iAmt as usize {
-        slice[read_size..iAmt as usize].fill(0);
-        return SQLITE_IOERR_SHORT_READ;
-    }
-
-    SQLITE_OK
+    data.read(slice, iOfst as usize)
 }
 
 unsafe extern "C" fn xWrite(
@@ -222,15 +204,8 @@ unsafe extern "C" fn xWrite(
 
     let mut file = file.write();
 
-    let end = iOfst as usize + iAmt as usize;
-    let data = &mut file.data;
-
-    if end > data.len() {
-        data.resize(end, 0);
-    }
     let slice = std::slice::from_raw_parts(zBuf.cast::<u8>(), iAmt as usize);
-
-    data[iOfst as usize..end].copy_from_slice(slice);
+    file.data.write(slice, iOfst as usize);
 
     SQLITE_OK
 }
@@ -243,11 +218,7 @@ unsafe extern "C" fn xTruncate(
     let file = check_option! {
         name2file.get(SQLiteVfsFile::from_file(pFile).name())
     };
-
-    let mut file = file.write();
-
-    let now = file.data.len();
-    file.data.truncate(now.min(size as usize));
+    file.write().data.truncate(size as usize);
     SQLITE_OK
 }
 
@@ -266,7 +237,7 @@ unsafe extern "C" fn xFileSize(
     let file = check_option! {
         name2file.get(SQLiteVfsFile::from_file(pFile).name())
     };
-    *pSize = file.read().data.len() as sqlite3_int64;
+    *pSize = file.read().data.size() as _;
     SQLITE_OK
 }
 
