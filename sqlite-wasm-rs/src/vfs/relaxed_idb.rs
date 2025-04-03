@@ -20,7 +20,6 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::sync::Notify;
 use wasm_bindgen::JsValue;
 
 type Result<T> = std::result::Result<T, RelaxedIdbError>;
@@ -28,7 +27,6 @@ type Result<T> = std::result::Result<T, RelaxedIdbError>;
 struct IdbCommit {
     file: String,
     op: IdbCommitOp,
-    notify: Option<Arc<Notify>>,
 }
 
 enum IdbCommitOp {
@@ -259,24 +257,7 @@ impl RelaxedIdb {
             }),
         );
 
-        let notify = Arc::new(Notify::new());
-        let wait = Arc::clone(&notify);
-
-        if self
-            .tx
-            .send(IdbCommit {
-                file: path.into(),
-                op: IdbCommitOp::Sync,
-                notify: Some(notify),
-            })
-            .is_err()
-        {
-            return Err(RelaxedIdbError::Generic(
-                "sync db to indexed db failed".into(),
-            ));
-        }
-
-        wait.notified().await;
+        self.sync_file_impl(path).await?;
 
         Ok(())
     }
@@ -308,26 +289,7 @@ impl RelaxedIdb {
 
     async fn delete_file(&self, name: &str) -> Result<()> {
         self.name2file.write().remove(name);
-
-        let notify = Arc::new(Notify::new());
-        let wait = Arc::clone(&notify);
-
-        if self
-            .tx
-            .send(IdbCommit {
-                file: name.into(),
-                op: IdbCommitOp::Delete,
-                notify: Some(notify),
-            })
-            .is_err()
-        {
-            return Err(RelaxedIdbError::Generic(
-                "sync db to indexed db failed".into(),
-            ));
-        }
-
-        wait.notified().await;
-
+        self.delete_file_impl(name).await?;
         Ok(())
     }
 
@@ -336,66 +298,74 @@ impl RelaxedIdb {
         clear_impl(&self.idb).await
     }
 
-    async fn commit_loop(self: Arc<Self>, mut rx: UnboundedReceiver<IdbCommit>) {
-        async fn to_commit(pool: &RelaxedIdb, commit: IdbCommit) -> Result<()> {
-            let IdbCommit { file, op, notify } = commit;
+    async fn delete_file_impl(&self, file: &str) -> Result<()> {
+        let transaction = self
+            .idb
+            .transaction("blocks")
+            .with_mode(TransactionMode::Readwrite)
+            .build()?;
 
-            let transaction = pool
-                .idb
-                .transaction("blocks")
-                .with_mode(TransactionMode::Readwrite)
-                .build()?;
+        let store = transaction.object_store("blocks")?;
 
-            let store = transaction.object_store("blocks")?;
+        store.delete(key_range(file, 0)).build()?;
+        transaction.commit().await?;
 
-            match op {
-                IdbCommitOp::Sync => {
-                    let mut name2file = pool.name2file.write();
-                    let Some(idb_file) = name2file.get_mut(&file) else {
-                        return Ok(());
-                    };
+        Ok(())
+    }
 
-                    let IdbFile::Main(idb_blocks) = idb_file else {
-                        return Ok(());
-                    };
+    // already drop
+    #[allow(clippy::await_holding_lock)]
+    async fn sync_file_impl(&self, file: &str) -> Result<()> {
+        let mut name2file = self.name2file.write();
+        let Some(idb_file) = name2file.get_mut(file) else {
+            return Ok(());
+        };
 
-                    let tx_blocks = std::mem::take(&mut idb_blocks.tx_blocks);
-                    if tx_blocks.is_empty() {
-                        return Ok(());
-                    }
+        let IdbFile::Main(idb_blocks) = idb_file else {
+            return Ok(());
+        };
 
-                    let file_size = idb_blocks.file_size;
-                    let mut truncated_offset = idb_blocks.file_size;
-                    while idb_blocks.blocks.remove(&truncated_offset).is_some() {
-                        truncated_offset += idb_blocks.block_size;
-                    }
-                    let path = JsValue::from(&file);
-
-                    for offset in tx_blocks {
-                        if let Some(buffer) =
-                            idb_blocks.blocks.get(&offset).map(|buffer| buffer.get())
-                        {
-                            store.put(&set_block(&path, offset, buffer)).build()?;
-                        }
-                    }
-
-                    store.delete(key_range(&file, file_size)).build()?;
-                }
-                IdbCommitOp::Delete => {
-                    store.delete(key_range(&file, 0)).build()?;
-                }
-            }
-            transaction.commit().await?;
-
-            if let Some(notify) = notify {
-                notify.notify_one();
-            }
-
-            Ok(())
+        let tx_blocks = std::mem::take(&mut idb_blocks.tx_blocks);
+        if tx_blocks.is_empty() {
+            return Ok(());
         }
 
+        let file_size = idb_blocks.file_size;
+        let mut truncated_offset = idb_blocks.file_size;
+        while idb_blocks.blocks.remove(&truncated_offset).is_some() {
+            truncated_offset += idb_blocks.block_size;
+        }
+        let path = JsValue::from(file);
+
+        let transaction = self
+            .idb
+            .transaction("blocks")
+            .with_mode(TransactionMode::Readwrite)
+            .build()?;
+
+        let store = transaction.object_store("blocks")?;
+
+        for offset in tx_blocks {
+            if let Some(buffer) = idb_blocks.blocks.get(&offset).map(|buffer| buffer.get()) {
+                store.put(&set_block(&path, offset, buffer)).build()?;
+            }
+        }
+        store.delete(key_range(file, file_size)).build()?;
+
+        drop(name2file);
+
+        transaction.commit().await?;
+
+        Ok(())
+    }
+
+    async fn commit_loop(self: Arc<Self>, mut rx: UnboundedReceiver<IdbCommit>) {
         while let Some(commit) = rx.recv().await {
-            if to_commit(&self, commit).await.is_err() {}
+            let IdbCommit { file, op } = commit;
+            if let Err(_e) = match op {
+                IdbCommitOp::Sync => self.sync_file_impl(&file).await,
+                IdbCommitOp::Delete => self.delete_file_impl(&file).await,
+            } {}
         }
     }
 }
@@ -490,7 +460,6 @@ unsafe extern "C" fn xDelete(
         .send(IdbCommit {
             file: s.into(),
             op: IdbCommitOp::Delete,
-            notify: None,
         })
         .is_err()
     {
@@ -556,7 +525,6 @@ unsafe extern "C" fn xClose(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
             .send(IdbCommit {
                 file: name.into(),
                 op: IdbCommitOp::Delete,
-                notify: None,
             })
             .is_err()
         {
@@ -804,7 +772,6 @@ unsafe extern "C" fn xFileControl(
                 .send(IdbCommit {
                     file: name.into(),
                     op: IdbCommitOp::Sync,
-                    notify: None,
                 })
                 .is_err()
             {
