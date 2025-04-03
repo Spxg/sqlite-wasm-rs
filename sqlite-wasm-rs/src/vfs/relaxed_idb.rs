@@ -337,16 +337,18 @@ impl RelaxedIdb {
             return Ok(());
         };
 
-        let tx_blocks = std::mem::take(&mut idb_blocks.tx_blocks);
-        if tx_blocks.is_empty() {
-            return Ok(());
-        }
-
         let file_size = idb_blocks.file_size;
         let mut truncated_offset = idb_blocks.file_size;
         while idb_blocks.blocks.remove(&truncated_offset).is_some() {
             truncated_offset += idb_blocks.block_size;
         }
+
+        let tx_blocks = std::mem::take(&mut idb_blocks.tx_blocks);
+        if tx_blocks.is_empty() && file_size == truncated_offset {
+            // no need to put or delete
+            return Ok(());
+        }
+
         let path = JsValue::from(file);
 
         let transaction = self
@@ -460,17 +462,19 @@ unsafe extern "C" fn xDelete(
     let s = check_result!(CStr::from_ptr(zName).to_str());
 
     let pool = pool(pVfs);
-    pool.name2file.write().remove(s);
 
-    if pool
-        .tx
-        .send(IdbCommit {
-            file: s.into(),
-            op: IdbCommitOp::Delete,
-        })
-        .is_err()
-    {
-        return SQLITE_ERROR;
+    // temp db nerver put into indexed db, no need to delete
+    if let Some(IdbFile::Main(_)) = pool.name2file.write().remove(s) {
+        if pool
+            .tx
+            .send(IdbCommit {
+                file: s.into(),
+                op: IdbCommitOp::Delete,
+            })
+            .is_err()
+        {
+            return SQLITE_ERROR;
+        }
     }
 
     SQLITE_OK
@@ -520,18 +524,19 @@ unsafe extern "C" fn xClose(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
     let pool = pool(vfs_file.vfs);
     let name = vfs_file.name();
 
-    let mut name2file = pool.name2file.write();
     if vfs_file.flags & SQLITE_OPEN_DELETEONCLOSE != 0 {
-        name2file.remove(name);
-        if pool
-            .tx
-            .send(IdbCommit {
-                file: name.into(),
-                op: IdbCommitOp::Delete,
-            })
-            .is_err()
-        {
-            return SQLITE_ERROR;
+        // temp db nerver put into indexed db, no need to delete
+        if let Some(IdbFile::Main(_)) = pool.name2file.write().remove(name) {
+            if pool
+                .tx
+                .send(IdbCommit {
+                    file: name.into(),
+                    op: IdbCommitOp::Delete,
+                })
+                .is_err()
+            {
+                return SQLITE_ERROR;
+            }
         }
     }
 
