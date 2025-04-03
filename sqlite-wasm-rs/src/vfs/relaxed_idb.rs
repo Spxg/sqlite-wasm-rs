@@ -13,7 +13,7 @@ use js_sys::{Number, Object, Reflect, Uint8Array};
 use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::RwLock;
 use std::cell::Cell;
-use std::collections::hash_map;
+use std::collections::{hash_map, HashSet};
 use std::{
     collections::HashMap,
     ffi::{c_char, CStr},
@@ -50,7 +50,7 @@ impl IdbFile {
                 file_size: 0,
                 block_size: 0,
                 blocks: HashMap::new(),
-                tx_blocks: vec![],
+                tx_blocks: HashSet::new(),
             })
         }
     }
@@ -60,7 +60,7 @@ struct IdbBlockFile {
     file_size: usize,
     block_size: usize,
     blocks: HashMap<usize, LazyBuffer>,
-    tx_blocks: Vec<usize>,
+    tx_blocks: HashSet<usize>,
 }
 
 struct LazyBuffer {
@@ -117,6 +117,10 @@ async fn preload_db_impl(
     indexed_db: &Database,
     preload: &Preload,
 ) -> Result<HashMap<String, IdbFile>> {
+    if matches!(preload, &Preload::None) {
+        return Ok(HashMap::new());
+    }
+
     let transaction = indexed_db
         .transaction("blocks")
         .with_mode(TransactionMode::Readonly)
@@ -139,7 +143,7 @@ async fn preload_db_impl(
                     file_size: data.length() as _,
                     block_size: data.length() as _,
                     blocks: HashMap::from([(offset, LazyBuffer::new(data))]),
-                    tx_blocks: Vec::new(),
+                    tx_blocks: HashSet::new(),
                 }));
             }
         }
@@ -162,7 +166,7 @@ async fn preload_db_impl(
                 }
             }
         }
-        Preload::None => (),
+        Preload::None => unreachable!(),
     }
 
     Ok(name2file)
@@ -356,16 +360,22 @@ impl RelaxedIdb {
                     };
 
                     let tx_blocks = std::mem::take(&mut idb_blocks.tx_blocks);
+                    if tx_blocks.is_empty() {
+                        return Ok(());
+                    }
 
                     let file_size = idb_blocks.file_size;
                     let mut truncated_offset = idb_blocks.file_size;
                     while idb_blocks.blocks.remove(&truncated_offset).is_some() {
                         truncated_offset += idb_blocks.block_size;
                     }
+                    let path = JsValue::from(&file);
 
                     for offset in tx_blocks {
-                        if let Some(buffer) = idb_blocks.blocks.get(&offset).map(|x| x.get()) {
-                            store.put(&set_block(&file, offset, buffer)).build()?;
+                        if let Some(buffer) =
+                            idb_blocks.blocks.get(&offset).map(|buffer| buffer.get())
+                        {
+                            store.put(&set_block(&path, offset, buffer)).build()?;
                         }
                     }
 
@@ -404,9 +414,9 @@ fn get_block(value: JsValue) -> (String, usize, Uint8Array) {
     (path, offset, Uint8Array::from(data))
 }
 
-fn set_block(path: &str, offset: usize, data: &[u8]) -> JsValue {
+fn set_block(path: &JsValue, offset: usize, data: &[u8]) -> JsValue {
     let block = Object::new();
-    Reflect::set(&block, &JsValue::from("path"), &JsValue::from(path)).unwrap();
+    Reflect::set(&block, &JsValue::from("path"), path).unwrap();
     Reflect::set(&block, &JsValue::from("offset"), &JsValue::from(offset)).unwrap();
     Reflect::set(
         &block,
@@ -598,7 +608,6 @@ unsafe extern "C" fn xRead(
                     break;
                 };
 
-                assert!(block_size == block.len());
                 let block_length = (block_size - block_offset).min(p_data_length - p_data_offset);
                 slice[p_data_offset..p_data_offset + block_length]
                     .copy_from_slice(&block[block_offset..block_offset + block_length]);
@@ -637,35 +646,40 @@ unsafe extern "C" fn xWrite(
     iOfst: sqlite3_int64,
 ) -> ::std::os::raw::c_int {
     let vfs_file = SQLiteVfsFile::from_file(pFile);
+
     let pool = pool(vfs_file.vfs);
     let name = vfs_file.name();
 
     let mut name2file = pool.name2file.write();
     let file = check_option!(name2file.get_mut(name));
 
-    let end = iOfst as usize + iAmt as usize;
-    let slice = std::slice::from_raw_parts(zBuf.cast::<u8>(), iAmt as usize);
+    let (offset, buffer_size) = (iOfst as usize, iAmt as usize);
+    let end = offset + buffer_size;
+    let slice = std::slice::from_raw_parts(zBuf.cast::<u8>(), buffer_size);
+
     match file {
         IdbFile::Main(file) => {
-            if let Some(Some(buffer)) = file
-                .blocks
-                .get_mut(&(iOfst as usize))
-                .map(|buffer| buffer.get_mut())
+            for fill in (file.file_size..end).step_by(buffer_size) {
+                file.blocks
+                    .insert(fill, LazyBuffer::ready(vec![0; buffer_size]));
+                file.tx_blocks.insert(fill);
+            }
+            if let Some(Some(buffer)) = file.blocks.get_mut(&offset).map(|buffer| buffer.get_mut())
             {
                 buffer.copy_from_slice(slice);
             } else {
                 file.blocks
-                    .insert(iOfst as usize, LazyBuffer::ready(slice.to_vec()));
+                    .insert(offset, LazyBuffer::ready(slice.to_vec()));
             }
-            file.tx_blocks.push(iOfst as usize);
-            file.file_size = file.file_size.max(iOfst as usize + iAmt as usize);
-            file.block_size = iAmt as usize;
+            file.tx_blocks.insert(offset);
+            file.file_size = file.file_size.max(end);
+            file.block_size = buffer_size;
         }
         IdbFile::Temp(data) => {
             if end > data.len() {
                 data.resize(end, 0);
             }
-            data[iOfst as usize..end].copy_from_slice(slice);
+            data[offset..end].copy_from_slice(slice);
         }
     }
     SQLITE_OK
