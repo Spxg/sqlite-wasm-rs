@@ -1,8 +1,8 @@
 //! relaxed-idb vfs implementation
 
 use crate::vfs::utils::{
-    copy_to_uint8_array, copy_to_vec, get_random_name, register_vfs, FragileComfirmed,
-    SQLiteVfsFile, VfsError, VfsPtr, SQLITE3_HEADER,
+    copy_to_slice, copy_to_uint8_array, copy_to_uint8_array_subarray, get_random_name,
+    register_vfs, FragileComfirmed, SQLiteVfsFile, VfsError, VfsPtr, SQLITE3_HEADER,
 };
 use crate::{bail, check_option, check_result, libsqlite3::*};
 
@@ -10,9 +10,8 @@ use indexed_db_futures::database::Database;
 use indexed_db_futures::prelude::*;
 use indexed_db_futures::transaction::TransactionMode;
 use js_sys::{Number, Object, Reflect, Uint8Array};
-use once_cell::sync::{Lazy, OnceCell};
+use once_cell::sync::Lazy;
 use parking_lot::RwLock;
-use std::cell::Cell;
 use std::collections::{hash_map, HashSet};
 use std::{
     collections::HashMap,
@@ -57,40 +56,8 @@ impl IdbFile {
 struct IdbBlockFile {
     file_size: usize,
     block_size: usize,
-    blocks: HashMap<usize, LazyBuffer>,
+    blocks: HashMap<usize, FragileComfirmed<Uint8Array>>,
     tx_blocks: HashSet<usize>,
-}
-
-struct LazyBuffer {
-    cell: OnceCell<Vec<u8>>,
-    init: Cell<Option<FragileComfirmed<Uint8Array>>>,
-}
-
-unsafe impl Sync for LazyBuffer {}
-
-impl LazyBuffer {
-    fn new(value: Uint8Array) -> Self {
-        Self {
-            cell: OnceCell::new(),
-            init: Cell::new(Some(FragileComfirmed::new(value))),
-        }
-    }
-
-    fn ready(value: Vec<u8>) -> Self {
-        Self {
-            cell: OnceCell::with_value(value),
-            init: Cell::new(None),
-        }
-    }
-
-    fn get(&self) -> &Vec<u8> {
-        self.cell
-            .get_or_init(|| copy_to_vec(&self.init.take().unwrap()))
-    }
-
-    fn get_mut(&mut self) -> Option<&mut Vec<u8>> {
-        self.cell.get_mut()
-    }
 }
 
 fn key_range(file: &str, start: usize) -> std::ops::RangeInclusive<[JsValue; 2]> {
@@ -134,13 +101,13 @@ async fn preload_db_impl(
                     unreachable!();
                 };
                 db.file_size += db.block_size;
-                db.blocks.insert(offset, LazyBuffer::new(data));
+                db.blocks.insert(offset, FragileComfirmed::new(data));
             }
             hash_map::Entry::Vacant(vacant_entry) => {
                 vacant_entry.insert(IdbFile::Main(IdbBlockFile {
                     file_size: data.length() as _,
                     block_size: data.length() as _,
-                    blocks: HashMap::from([(offset, LazyBuffer::new(data))]),
+                    blocks: HashMap::from([(offset, FragileComfirmed::new(data))]),
                     tx_blocks: HashSet::new(),
                 }));
             }
@@ -243,7 +210,10 @@ impl RelaxedIdb {
             if buffer.len() < page_size {
                 buffer.resize(page_size, 0);
             }
-            blocks.insert(idx * page_size, LazyBuffer::ready(buffer));
+            blocks.insert(
+                idx * page_size,
+                FragileComfirmed::new(copy_to_uint8_array(&buffer)),
+            );
         }
 
         let tx_blocks = blocks.keys().copied().collect();
@@ -274,7 +244,7 @@ impl RelaxedIdb {
                         if offset >= file_size {
                             continue;
                         }
-                        ret[offset..offset + file.block_size].copy_from_slice(buffer.get());
+                        copy_to_slice(buffer, &mut ret[offset..offset + file.block_size]);
                     }
                     Ok(ret)
                 }
@@ -346,7 +316,7 @@ impl RelaxedIdb {
         let store = transaction.object_store("blocks")?;
 
         for offset in tx_blocks {
-            if let Some(buffer) = idb_blocks.blocks.get(&offset).map(|buffer| buffer.get()) {
+            if let Some(buffer) = idb_blocks.blocks.get(&offset) {
                 store.put(&set_block(&path, offset, buffer)).build()?;
             }
         }
@@ -384,16 +354,11 @@ fn get_block(value: JsValue) -> (String, usize, Uint8Array) {
     (path, offset, Uint8Array::from(data))
 }
 
-fn set_block(path: &JsValue, offset: usize, data: &[u8]) -> JsValue {
+fn set_block(path: &JsValue, offset: usize, data: &Uint8Array) -> JsValue {
     let block = Object::new();
     Reflect::set(&block, &JsValue::from("path"), path).unwrap();
     Reflect::set(&block, &JsValue::from("offset"), &JsValue::from(offset)).unwrap();
-    Reflect::set(
-        &block,
-        &JsValue::from("data"),
-        &JsValue::from(copy_to_uint8_array(data)),
-    )
-    .unwrap();
+    Reflect::set(&block, &JsValue::from("data"), &JsValue::from(data)).unwrap();
     block.into()
 }
 
@@ -572,13 +537,15 @@ unsafe extern "C" fn xRead(
                 let block_offset = file_offset % block_size;
                 let block_addr = block_idx * file.block_size;
 
-                let Some(block) = file.blocks.get(&block_addr).map(|x| x.get()) else {
+                let Some(block) = file.blocks.get(&block_addr) else {
                     break;
                 };
 
                 let block_length = (block_size - block_offset).min(p_data_length - p_data_offset);
-                slice[p_data_offset..p_data_offset + block_length]
-                    .copy_from_slice(&block[block_offset..block_offset + block_length]);
+                copy_to_slice(
+                    &block.subarray(block_offset as u32, (block_offset + block_length) as u32),
+                    &mut slice[p_data_offset..p_data_offset + block_length],
+                );
                 p_data_offset += block_length;
                 bytes_read += block_length;
             }
@@ -628,16 +595,17 @@ unsafe extern "C" fn xWrite(
     match file {
         IdbFile::Main(file) => {
             for fill in (file.file_size..end).step_by(buffer_size) {
-                file.blocks
-                    .insert(fill, LazyBuffer::ready(vec![0; buffer_size]));
+                file.blocks.insert(
+                    fill,
+                    FragileComfirmed::new(Uint8Array::new_with_length(buffer_size as u32)),
+                );
                 file.tx_blocks.insert(fill);
             }
-            if let Some(Some(buffer)) = file.blocks.get_mut(&offset).map(|buffer| buffer.get_mut())
-            {
-                buffer.copy_from_slice(slice);
+            if let Some(buffer) = file.blocks.get_mut(&offset) {
+                copy_to_uint8_array_subarray(slice, buffer);
             } else {
                 file.blocks
-                    .insert(offset, LazyBuffer::ready(slice.to_vec()));
+                    .insert(offset, FragileComfirmed::new(copy_to_uint8_array(slice)));
             }
             file.tx_blocks.insert(offset);
             file.file_size = file.file_size.max(end);
