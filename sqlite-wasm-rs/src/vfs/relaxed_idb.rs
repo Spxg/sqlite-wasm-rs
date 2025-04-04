@@ -1,9 +1,9 @@
 //! relaxed-idb vfs implementation
 
 use crate::vfs::utils::{
-    copy_to_slice, copy_to_uint8_array, copy_to_uint8_array_subarray, get_random_name, page_read,
-    register_vfs, FragileComfirmed, MemLinearStore, SQLiteVfsFile, VfsError, VfsPtr, VfsStore,
-    SQLITE3_HEADER,
+    copy_to_slice, copy_to_uint8_array, copy_to_uint8_array_subarray, page_read, register_vfs,
+    FragileComfirmed, MemLinearStore, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, StoreControl,
+    VfsError, VfsPtr, VfsStore, SQLITE3_HEADER,
 };
 use crate::{bail, check_option, check_result, libsqlite3::*};
 
@@ -14,10 +14,10 @@ use js_sys::{Number, Object, Reflect, Uint8Array};
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use std::collections::{hash_map, HashSet};
+use std::sync::Arc;
 use std::{
     collections::HashMap,
     ffi::{c_char, CStr},
-    sync::Arc,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use wasm_bindgen::JsValue;
@@ -98,6 +98,36 @@ impl VfsStore for IdbPageStore {
 
     fn size(&self) -> usize {
         self.file_size
+    }
+}
+
+impl VfsStore for IdbFile {
+    fn read(&self, buf: &mut [u8], offset: usize) -> i32 {
+        match self {
+            IdbFile::Main(idb_page_store) => idb_page_store.read(buf, offset),
+            IdbFile::Temp(mem_linear_store) => mem_linear_store.read(buf, offset),
+        }
+    }
+
+    fn write(&mut self, buf: &[u8], offset: usize) {
+        match self {
+            IdbFile::Main(idb_page_store) => idb_page_store.write(buf, offset),
+            IdbFile::Temp(mem_linear_store) => mem_linear_store.write(buf, offset),
+        }
+    }
+
+    fn truncate(&mut self, size: usize) {
+        match self {
+            IdbFile::Main(idb_page_store) => idb_page_store.truncate(size),
+            IdbFile::Temp(mem_linear_store) => mem_linear_store.truncate(size),
+        }
+    }
+
+    fn size(&self) -> usize {
+        match self {
+            IdbFile::Main(idb_page_store) => idb_page_store.size(),
+            IdbFile::Temp(mem_linear_store) => mem_linear_store.size(),
+        }
     }
 }
 
@@ -414,380 +444,123 @@ fn pool(vfs: *mut sqlite3_vfs) -> Arc<RelaxedIdb> {
     Arc::clone(VFS2POOL.read().get(&VfsPtr(vfs)).unwrap())
 }
 
-unsafe extern "C" fn xOpen(
-    pVfs: *mut sqlite3_vfs,
-    zName: sqlite3_filename,
-    pFile: *mut sqlite3_file,
-    flags: ::std::os::raw::c_int,
-    pOutFlags: *mut ::std::os::raw::c_int,
-) -> ::std::os::raw::c_int {
-    let name = if zName.is_null() {
-        get_random_name()
-    } else {
-        check_result!(CStr::from_ptr(zName).to_str()).into()
-    };
+struct RelaxedIdbStoreControl;
 
-    let pool = pool(pVfs);
-    let mut name2file = pool.name2file.write();
-
-    if !name2file.contains_key(&name) {
-        if flags & SQLITE_OPEN_CREATE == 0 {
-            return SQLITE_CANTOPEN;
-        }
-        name2file.insert(name.clone(), IdbFile::new(flags));
+impl StoreControl<IdbFile> for RelaxedIdbStoreControl {
+    fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32) {
+        pool(vfs)
+            .name2file
+            .write()
+            .insert(file.into(), IdbFile::new(flags));
     }
 
-    let leak = name.leak();
-    let vfs_file = pFile.cast::<SQLiteVfsFile>();
-    (*vfs_file).vfs = pVfs;
-    (*vfs_file).flags = flags;
-    (*vfs_file).name_ptr = leak.as_ptr();
-    (*vfs_file).name_length = leak.len();
-
-    (*pFile).pMethods = &IO_METHODS;
-
-    if !pOutFlags.is_null() {
-        *pOutFlags = flags;
+    fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> bool {
+        pool(vfs).name2file.read().contains_key(file)
     }
 
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xDelete(
-    pVfs: *mut sqlite3_vfs,
-    zName: *const ::std::os::raw::c_char,
-    _syncDir: ::std::os::raw::c_int,
-) -> ::std::os::raw::c_int {
-    bail!(zName.is_null(), SQLITE_IOERR_DELETE);
-    let s = check_result!(CStr::from_ptr(zName).to_str());
-
-    let pool = pool(pVfs);
-
-    // temp db nerver put into indexed db, no need to delete
-    if let Some(IdbFile::Main(_)) = pool.name2file.write().remove(s) {
-        if pool
-            .tx
-            .send(IdbCommit {
-                file: s.into(),
-                op: IdbCommitOp::Delete,
-            })
-            .is_err()
-        {
-            return SQLITE_ERROR;
-        }
-    }
-
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xAccess(
-    pVfs: *mut sqlite3_vfs,
-    zName: *const ::std::os::raw::c_char,
-    _flags: ::std::os::raw::c_int,
-    pResOut: *mut ::std::os::raw::c_int,
-) -> ::std::os::raw::c_int {
-    *pResOut = if zName.is_null() {
-        0
-    } else {
-        let s = check_result!(CStr::from_ptr(zName).to_str());
-        let pool = pool(pVfs);
-        let name2file = pool.name2file.read();
-        i32::from(name2file.contains_key(s))
-    };
-
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xFullPathname(
-    _pVfs: *mut sqlite3_vfs,
-    zName: *const ::std::os::raw::c_char,
-    nOut: ::std::os::raw::c_int,
-    zOut: *mut ::std::os::raw::c_char,
-) -> ::std::os::raw::c_int {
-    bail!(zName.is_null() || zOut.is_null(), SQLITE_CANTOPEN);
-    let len = CStr::from_ptr(zName).count_bytes() + 1;
-    bail!(len > nOut as usize, SQLITE_CANTOPEN);
-    zName.copy_to(zOut, len);
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xGetLastError(
-    _pVfs: *mut sqlite3_vfs,
-    _nOut: ::std::os::raw::c_int,
-    _zOut: *mut ::std::os::raw::c_char,
-) -> ::std::os::raw::c_int {
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xClose(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
-    let vfs_file = SQLiteVfsFile::from_file(pFile);
-    let pool = pool(vfs_file.vfs);
-    let name = vfs_file.name();
-
-    if vfs_file.flags & SQLITE_OPEN_DELETEONCLOSE != 0 {
-        // temp db nerver put into indexed db, no need to delete
-        if let Some(IdbFile::Main(_)) = pool.name2file.write().remove(name) {
+    fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> Option<IdbFile> {
+        let pool = pool(vfs);
+        let idb_file = pool.name2file.write().remove(file);
+        // temp db never put into indexed db, no need to delete
+        if let Some(IdbFile::Main(_)) = &idb_file {
             if pool
                 .tx
                 .send(IdbCommit {
-                    file: name.into(),
+                    file: file.into(),
                     op: IdbCommitOp::Delete,
                 })
                 .is_err()
-            {
-                return SQLITE_ERROR;
+            {}
+        }
+        idb_file
+    }
+
+    fn with_file<F: Fn(&IdbFile) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> Option<i32> {
+        Some(unsafe { f(pool(vfs_file.vfs).name2file.read().get(vfs_file.name())?) })
+    }
+
+    fn with_file_mut<F: Fn(&mut IdbFile) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> Option<i32> {
+        Some(unsafe {
+            f(pool(vfs_file.vfs)
+                .name2file
+                .write()
+                .get_mut(vfs_file.name())?)
+        })
+    }
+}
+
+struct RelaxedIdbIoMethods;
+
+impl SQLiteIoMethods for RelaxedIdbIoMethods {
+    type Store = IdbFile;
+    type StoreControl = RelaxedIdbStoreControl;
+
+    const VERSION: ::std::os::raw::c_int = 1;
+
+    unsafe extern "C" fn xFileControl(
+        pFile: *mut sqlite3_file,
+        op: ::std::os::raw::c_int,
+        pArg: *mut ::std::os::raw::c_void,
+    ) -> ::std::os::raw::c_int {
+        let vfs_file = SQLiteVfsFile::from_file(pFile);
+        let pool = pool(vfs_file.vfs);
+        let name = vfs_file.name();
+
+        let mut name2file = pool.name2file.write();
+        let file = check_option!(name2file.get_mut(name));
+
+        let IdbFile::Main(file) = file else {
+            return SQLITE_NOTFOUND;
+        };
+
+        match op {
+            SQLITE_FCNTL_PRAGMA => {
+                let pArg = pArg as *mut *mut c_char;
+                let name = *pArg.add(1);
+                let value = *pArg.add(2);
+
+                bail!(name.is_null());
+                bail!(value.is_null(), SQLITE_NOTFOUND);
+
+                let key = check_result!(CStr::from_ptr(name).to_str()).to_ascii_lowercase();
+                let value = check_result!(CStr::from_ptr(value).to_str()).to_ascii_lowercase();
+
+                if key == "page_size" {
+                    let page_size = check_result!(value.parse::<usize>());
+                    if page_size == file.block_size {
+                        return SQLITE_OK;
+                    } else if file.block_size == 0 {
+                        file.block_size = page_size;
+                    } else {
+                        return SQLITE_ERROR;
+                    }
+                } else if key == "synchronous" && value == "full" {
+                    return SQLITE_ERROR;
+                };
             }
-        }
-    }
-
-    drop(unsafe { Box::from_raw(name) });
-
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xRead(
-    pFile: *mut sqlite3_file,
-    zBuf: *mut ::std::os::raw::c_void,
-    iAmt: ::std::os::raw::c_int,
-    iOfst: sqlite3_int64,
-) -> ::std::os::raw::c_int {
-    let vfs_file = SQLiteVfsFile::from_file(pFile);
-    let pool = pool(vfs_file.vfs);
-    let name = vfs_file.name();
-
-    let name2file = pool.name2file.read();
-    let file = check_option!(name2file.get(name));
-
-    let size = iAmt as usize;
-    let offset = iOfst as usize;
-    let slice = std::slice::from_raw_parts_mut(zBuf.cast::<u8>(), size);
-
-    match file {
-        IdbFile::Main(idb_page_store) => idb_page_store.read(slice, offset),
-        IdbFile::Temp(mem_linear_store) => mem_linear_store.read(slice, offset),
-    }
-}
-
-unsafe extern "C" fn xWrite(
-    pFile: *mut sqlite3_file,
-    zBuf: *const ::std::os::raw::c_void,
-    iAmt: ::std::os::raw::c_int,
-    iOfst: sqlite3_int64,
-) -> ::std::os::raw::c_int {
-    let vfs_file = SQLiteVfsFile::from_file(pFile);
-
-    let pool = pool(vfs_file.vfs);
-    let name = vfs_file.name();
-
-    let mut name2file = pool.name2file.write();
-    let file = check_option!(name2file.get_mut(name));
-
-    let (offset, size) = (iOfst as usize, iAmt as usize);
-    let slice = std::slice::from_raw_parts(zBuf.cast::<u8>(), size);
-
-    match file {
-        IdbFile::Main(idb_page_store) => {
-            idb_page_store.write(slice, offset);
-        }
-        IdbFile::Temp(mem_linear_store) => {
-            mem_linear_store.write(slice, offset);
-        }
-    }
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xTruncate(
-    pFile: *mut sqlite3_file,
-    size: sqlite3_int64,
-) -> ::std::os::raw::c_int {
-    let vfs_file = SQLiteVfsFile::from_file(pFile);
-    let pool = pool(vfs_file.vfs);
-    let name = vfs_file.name();
-
-    let mut name2file = pool.name2file.write();
-    let file = check_option!(name2file.get_mut(name));
-
-    let size = size as usize;
-    match file {
-        IdbFile::Main(idb_page_store) => {
-            idb_page_store.truncate(size);
-        }
-        IdbFile::Temp(mem_linear_store) => {
-            mem_linear_store.truncate(size);
-        }
-    }
-
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xSync(
-    _pFile: *mut sqlite3_file,
-    _flags: ::std::os::raw::c_int,
-) -> ::std::os::raw::c_int {
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xFileSize(
-    pFile: *mut sqlite3_file,
-    pSize: *mut sqlite3_int64,
-) -> ::std::os::raw::c_int {
-    let vfs_file = SQLiteVfsFile::from_file(pFile);
-    let pool = pool(vfs_file.vfs);
-    let name = vfs_file.name();
-
-    let name2file = pool.name2file.read();
-    let file = check_option!(name2file.get(name));
-
-    *pSize = match file {
-        IdbFile::Main(idb_page_store) => idb_page_store.size(),
-        IdbFile::Temp(mem_linear_store) => mem_linear_store.size(),
-    } as sqlite3_int64;
-
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xLock(
-    _pFile: *mut sqlite3_file,
-    _eLock: ::std::os::raw::c_int,
-) -> ::std::os::raw::c_int {
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xUnlock(
-    _pFile: *mut sqlite3_file,
-    _eLock: ::std::os::raw::c_int,
-) -> ::std::os::raw::c_int {
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xCheckReservedLock(
-    _pFile: *mut sqlite3_file,
-    pResOut: *mut ::std::os::raw::c_int,
-) -> ::std::os::raw::c_int {
-    *pResOut = 0;
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xFileControl(
-    pFile: *mut sqlite3_file,
-    op: ::std::os::raw::c_int,
-    pArg: *mut ::std::os::raw::c_void,
-) -> ::std::os::raw::c_int {
-    let vfs_file = SQLiteVfsFile::from_file(pFile);
-    let pool = pool(vfs_file.vfs);
-    let name = vfs_file.name();
-
-    let mut name2file = pool.name2file.write();
-    let file = check_option!(name2file.get_mut(name));
-
-    let IdbFile::Main(file) = file else {
-        return SQLITE_NOTFOUND;
-    };
-
-    match op {
-        SQLITE_FCNTL_PRAGMA => {
-            let pArg = pArg as *mut *mut c_char;
-            let name = *pArg.add(1);
-            let value = *pArg.add(2);
-
-            bail!(name.is_null());
-            bail!(value.is_null(), SQLITE_NOTFOUND);
-
-            let key = check_result!(CStr::from_ptr(name).to_str()).to_ascii_lowercase();
-            let value = check_result!(CStr::from_ptr(value).to_str()).to_ascii_lowercase();
-
-            if key == "page_size" {
-                let page_size = check_result!(value.parse::<usize>());
-                if page_size == file.block_size {
-                    return SQLITE_OK;
-                } else if file.block_size == 0 {
-                    file.block_size = page_size;
-                } else {
+            SQLITE_FCNTL_SYNC | SQLITE_FCNTL_COMMIT_PHASETWO => {
+                if pool
+                    .tx
+                    .send(IdbCommit {
+                        file: name.into(),
+                        op: IdbCommitOp::Sync,
+                    })
+                    .is_err()
+                {
                     return SQLITE_ERROR;
                 }
-            } else if key == "synchronous" && value == "full" {
-                return SQLITE_ERROR;
-            };
-        }
-        SQLITE_FCNTL_SYNC | SQLITE_FCNTL_COMMIT_PHASETWO => {
-            if pool
-                .tx
-                .send(IdbCommit {
-                    file: name.into(),
-                    op: IdbCommitOp::Sync,
-                })
-                .is_err()
-            {
-                return SQLITE_ERROR;
             }
+            _ => (),
         }
-        _ => (),
+
+        SQLITE_NOTFOUND
     }
-
-    SQLITE_NOTFOUND
 }
 
-unsafe extern "C" fn xSectorSize(_pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
-    512
-}
+struct RelaxedIdbVfs;
 
-unsafe extern "C" fn xDeviceCharacteristics(_arg1: *mut sqlite3_file) -> ::std::os::raw::c_int {
-    0
-}
-
-static IO_METHODS: sqlite3_io_methods = sqlite3_io_methods {
-    iVersion: 1,
-    xClose: Some(xClose),
-    xRead: Some(xRead),
-    xWrite: Some(xWrite),
-    xTruncate: Some(xTruncate),
-    xSync: Some(xSync),
-    xFileSize: Some(xFileSize),
-    xLock: Some(xLock),
-    xUnlock: Some(xUnlock),
-    xCheckReservedLock: Some(xCheckReservedLock),
-    xFileControl: Some(xFileControl),
-    xSectorSize: Some(xSectorSize),
-    xDeviceCharacteristics: Some(xDeviceCharacteristics),
-    xShmMap: None,
-    xShmLock: None,
-    xShmBarrier: None,
-    xShmUnmap: None,
-    xFetch: None,
-    xUnfetch: None,
-};
-
-fn vfs(name: *const ::std::os::raw::c_char) -> sqlite3_vfs {
-    let default_vfs = unsafe { sqlite3_vfs_find(std::ptr::null()) };
-    let xRandomness = unsafe { (*default_vfs).xRandomness };
-    let xSleep = unsafe { (*default_vfs).xSleep };
-    let xCurrentTime = unsafe { (*default_vfs).xCurrentTime };
-    let xCurrentTimeInt64 = unsafe { (*default_vfs).xCurrentTimeInt64 };
-
-    sqlite3_vfs {
-        iVersion: 1,
-        szOsFile: std::mem::size_of::<SQLiteVfsFile>() as i32,
-        mxPathname: 1024,
-        pNext: std::ptr::null_mut(),
-        zName: name,
-        pAppData: std::ptr::null_mut(),
-        xOpen: Some(xOpen),
-        xDelete: Some(xDelete),
-        xAccess: Some(xAccess),
-        xFullPathname: Some(xFullPathname),
-        xDlOpen: None,
-        xDlError: None,
-        xDlSym: None,
-        xDlClose: None,
-        xRandomness,
-        xSleep,
-        xCurrentTime,
-        xGetLastError: Some(xGetLastError),
-        xCurrentTimeInt64,
-        xSetSystemCall: None,
-        xGetSystemCall: None,
-        xNextSystemCall: None,
-    }
+impl SQLiteVfs<RelaxedIdbIoMethods> for RelaxedIdbVfs {
+    const VERSION: ::std::os::raw::c_int = 1;
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -929,7 +702,8 @@ pub async fn install(options: Option<&RelaxedIdbCfg>, default_vfs: bool) -> Resu
     } else {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let pool = Arc::new(RelaxedIdb::new(options, tx).await?);
-        let vfs = register_vfs(vfs_name, default_vfs, vfs)?;
+        let vfs = register_vfs(vfs_name, default_vfs, RelaxedIdbVfs::vfs)?;
+
         name2vfs.insert(vfs_name.into(), Arc::clone(&pool));
         VFS2POOL.write().insert(VfsPtr(vfs), Arc::clone(&pool));
         wasm_bindgen_futures::spawn_local(Arc::clone(&pool).commit_loop(rx));

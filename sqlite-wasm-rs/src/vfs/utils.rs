@@ -3,10 +3,10 @@
 use crate::libsqlite3::*;
 
 use fragile::Fragile;
-use js_sys::{Math, Number, Uint8Array, WebAssembly};
+use js_sys::{Date, Math, Number, Uint8Array, WebAssembly};
 use std::{
     collections::HashMap,
-    ffi::CString,
+    ffi::{CStr, CString},
     ops::{Deref, DerefMut},
 };
 use wasm_bindgen::{prelude::wasm_bindgen, JsCast};
@@ -210,6 +210,7 @@ impl SQLiteVfsFile {
     }
 
     /// Get the file name. When xClose, you can release the memory by `drop(Box::from_raw(ptr));`.
+    ///
     /// # Safety
     ///
     /// You must ensure that the pointer passed in is `SQLiteVfsFile`
@@ -404,6 +405,337 @@ impl VfsStore for MemPageStore {
 
     fn size(&self) -> usize {
         self.file_size
+    }
+}
+
+/// Control the Store and make changes to files
+pub trait StoreControl<S> {
+    /// Adding files to the Store, use for `xOpen`
+    fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32);
+    /// Checks if the specified file exists in the Store, use for `xOpen`
+    fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> bool;
+    /// Delete the specified file in the Store, use for `xClose` and `xDelete`
+    fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> Option<S>;
+    /// Read the file contents, use for `xRead`, `xFileSize`
+    fn with_file<F: Fn(&S) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> Option<i32>;
+    /// Write the file contents, use for `xWrite`, `xTruncate`
+    fn with_file_mut<F: Fn(&mut S) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> Option<i32>;
+}
+
+/// Abstraction of SQLite vfs
+#[allow(clippy::missing_safety_doc)]
+pub trait SQLiteVfs<IO: SQLiteIoMethods> {
+    const VERSION: ::std::os::raw::c_int;
+
+    fn vfs(vfs_name: *const ::std::os::raw::c_char) -> sqlite3_vfs {
+        sqlite3_vfs {
+            iVersion: Self::VERSION,
+            szOsFile: std::mem::size_of::<SQLiteVfsFile>() as i32,
+            mxPathname: 1024,
+            pNext: std::ptr::null_mut(),
+            zName: vfs_name,
+            pAppData: std::ptr::null_mut(),
+            xOpen: Some(Self::xOpen),
+            xDelete: Some(Self::xDelete),
+            xAccess: Some(Self::xAccess),
+            xFullPathname: Some(Self::xFullPathname),
+            xDlOpen: None,
+            xDlError: None,
+            xDlSym: None,
+            xDlClose: None,
+            xRandomness: Some(x_methods_shim::xRandomness),
+            xSleep: Some(x_methods_shim::xSleep),
+            xCurrentTime: Some(x_methods_shim::xCurrentTime),
+            xGetLastError: Some(Self::xGetLastError),
+            xCurrentTimeInt64: Some(x_methods_shim::xCurrentTimeInt64),
+            xSetSystemCall: None,
+            xGetSystemCall: None,
+            xNextSystemCall: None,
+        }
+    }
+
+    unsafe extern "C" fn xOpen(
+        pVfs: *mut sqlite3_vfs,
+        zName: sqlite3_filename,
+        pFile: *mut sqlite3_file,
+        flags: ::std::os::raw::c_int,
+        pOutFlags: *mut ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int {
+        let name = if zName.is_null() {
+            get_random_name()
+        } else {
+            check_result!(CStr::from_ptr(zName).to_str()).into()
+        };
+
+        if !IO::StoreControl::contains_file(pVfs, &name) {
+            if flags & SQLITE_OPEN_CREATE == 0 {
+                return SQLITE_CANTOPEN;
+            }
+            IO::StoreControl::add_file(pVfs, &name, flags);
+        }
+
+        let leak = name.leak();
+        let vfs_file = pFile.cast::<SQLiteVfsFile>();
+        (*vfs_file).vfs = pVfs;
+        (*vfs_file).flags = flags;
+        (*vfs_file).name_ptr = leak.as_ptr();
+        (*vfs_file).name_length = leak.len();
+
+        (*pFile).pMethods = &IO::METHODS;
+
+        if !pOutFlags.is_null() {
+            *pOutFlags = flags;
+        }
+
+        SQLITE_OK
+    }
+
+    unsafe extern "C" fn xDelete(
+        pVfs: *mut sqlite3_vfs,
+        zName: *const ::std::os::raw::c_char,
+        _syncDir: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int {
+        bail!(zName.is_null(), SQLITE_IOERR_DELETE);
+        let s = check_result!(CStr::from_ptr(zName).to_str());
+        IO::StoreControl::delete_file(pVfs, s);
+        SQLITE_OK
+    }
+
+    unsafe extern "C" fn xAccess(
+        pVfs: *mut sqlite3_vfs,
+        zName: *const ::std::os::raw::c_char,
+        _flags: ::std::os::raw::c_int,
+        pResOut: *mut ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int {
+        *pResOut = if zName.is_null() {
+            0
+        } else {
+            let s = check_result!(CStr::from_ptr(zName).to_str());
+            i32::from(IO::StoreControl::contains_file(pVfs, s))
+        };
+
+        SQLITE_OK
+    }
+
+    unsafe extern "C" fn xFullPathname(
+        _pVfs: *mut sqlite3_vfs,
+        zName: *const ::std::os::raw::c_char,
+        nOut: ::std::os::raw::c_int,
+        zOut: *mut ::std::os::raw::c_char,
+    ) -> ::std::os::raw::c_int {
+        bail!(zName.is_null() || zOut.is_null(), SQLITE_CANTOPEN);
+        let len = CStr::from_ptr(zName).count_bytes() + 1;
+        bail!(len > nOut as usize, SQLITE_CANTOPEN);
+        zName.copy_to(zOut, len);
+        SQLITE_OK
+    }
+
+    unsafe extern "C" fn xGetLastError(
+        _pVfs: *mut sqlite3_vfs,
+        _nOut: ::std::os::raw::c_int,
+        _zOut: *mut ::std::os::raw::c_char,
+    ) -> ::std::os::raw::c_int {
+        SQLITE_OK
+    }
+}
+
+/// Abstraction of SQLite vfs's io methods
+#[allow(clippy::missing_safety_doc)]
+pub trait SQLiteIoMethods {
+    type Store: VfsStore;
+    type StoreControl: StoreControl<Self::Store>;
+
+    const VERSION: ::std::os::raw::c_int;
+
+    const METHODS: sqlite3_io_methods = sqlite3_io_methods {
+        iVersion: Self::VERSION,
+        xClose: Some(Self::xClose),
+        xRead: Some(Self::xRead),
+        xWrite: Some(Self::xWrite),
+        xTruncate: Some(Self::xTruncate),
+        xSync: Some(Self::xSync),
+        xFileSize: Some(Self::xFileSize),
+        xLock: Some(Self::xLock),
+        xUnlock: Some(Self::xUnlock),
+        xCheckReservedLock: Some(Self::xCheckReservedLock),
+        xFileControl: Some(Self::xFileControl),
+        xSectorSize: Some(Self::xSectorSize),
+        xDeviceCharacteristics: Some(Self::xDeviceCharacteristics),
+        xShmMap: None,
+        xShmLock: None,
+        xShmBarrier: None,
+        xShmUnmap: None,
+        xFetch: None,
+        xUnfetch: None,
+    };
+
+    unsafe extern "C" fn xClose(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
+        let vfs_file = SQLiteVfsFile::from_file(pFile);
+        if vfs_file.flags & SQLITE_OPEN_DELETEONCLOSE != 0 {
+            check_option!(Self::StoreControl::delete_file(
+                vfs_file.vfs,
+                vfs_file.name()
+            ));
+        }
+        drop(unsafe { Box::from_raw(vfs_file.name()) });
+        SQLITE_OK
+    }
+
+    unsafe extern "C" fn xRead(
+        pFile: *mut sqlite3_file,
+        zBuf: *mut ::std::os::raw::c_void,
+        iAmt: ::std::os::raw::c_int,
+        iOfst: sqlite3_int64,
+    ) -> ::std::os::raw::c_int {
+        let vfs_file = SQLiteVfsFile::from_file(pFile);
+        let f = |store: &Self::Store| {
+            let size = iAmt as usize;
+            let offset = iOfst as usize;
+            let slice = std::slice::from_raw_parts_mut(zBuf.cast::<u8>(), size);
+            store.read(slice, offset)
+        };
+        check_option!(Self::StoreControl::with_file(vfs_file, f))
+    }
+
+    unsafe extern "C" fn xWrite(
+        pFile: *mut sqlite3_file,
+        zBuf: *const ::std::os::raw::c_void,
+        iAmt: ::std::os::raw::c_int,
+        iOfst: sqlite3_int64,
+    ) -> ::std::os::raw::c_int {
+        let vfs_file = SQLiteVfsFile::from_file(pFile);
+        let f = |store: &mut Self::Store| {
+            let (offset, size) = (iOfst as usize, iAmt as usize);
+            let slice = std::slice::from_raw_parts(zBuf.cast::<u8>(), size);
+            store.write(slice, offset);
+            SQLITE_OK
+        };
+        check_option!(Self::StoreControl::with_file_mut(vfs_file, f))
+    }
+
+    unsafe extern "C" fn xTruncate(
+        pFile: *mut sqlite3_file,
+        size: sqlite3_int64,
+    ) -> ::std::os::raw::c_int {
+        let vfs_file = SQLiteVfsFile::from_file(pFile);
+        let f = |store: &mut Self::Store| {
+            store.truncate(size as usize);
+            SQLITE_OK
+        };
+        check_option!(Self::StoreControl::with_file_mut(vfs_file, f))
+    }
+
+    unsafe extern "C" fn xSync(
+        _pFile: *mut sqlite3_file,
+        _flags: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int {
+        SQLITE_OK
+    }
+
+    unsafe extern "C" fn xFileSize(
+        pFile: *mut sqlite3_file,
+        pSize: *mut sqlite3_int64,
+    ) -> ::std::os::raw::c_int {
+        let vfs_file = SQLiteVfsFile::from_file(pFile);
+        let f = |store: &Self::Store| {
+            *pSize = store.size() as sqlite3_int64;
+            SQLITE_OK
+        };
+        check_option!(Self::StoreControl::with_file(vfs_file, f))
+    }
+
+    unsafe extern "C" fn xLock(
+        _pFile: *mut sqlite3_file,
+        _eLock: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int {
+        SQLITE_OK
+    }
+
+    unsafe extern "C" fn xUnlock(
+        _pFile: *mut sqlite3_file,
+        _eLock: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int {
+        SQLITE_OK
+    }
+
+    unsafe extern "C" fn xCheckReservedLock(
+        _pFile: *mut sqlite3_file,
+        pResOut: *mut ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int {
+        *pResOut = 0;
+        SQLITE_OK
+    }
+
+    unsafe extern "C" fn xFileControl(
+        _pFile: *mut sqlite3_file,
+        _op: ::std::os::raw::c_int,
+        _pArg: *mut ::std::os::raw::c_void,
+    ) -> ::std::os::raw::c_int {
+        SQLITE_NOTFOUND
+    }
+
+    unsafe extern "C" fn xSectorSize(_pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
+        512
+    }
+
+    unsafe extern "C" fn xDeviceCharacteristics(_arg1: *mut sqlite3_file) -> ::std::os::raw::c_int {
+        0
+    }
+}
+
+/// Some x methods simulated using JS
+#[allow(clippy::missing_safety_doc)]
+pub mod x_methods_shim {
+    use super::*;
+
+    /// thread::sleep is available when atomics are enabled
+    #[cfg(target_feature = "atomics")]
+    pub unsafe extern "C" fn xSleep(
+        _pVfs: *mut sqlite3_vfs,
+        microseconds: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int {
+        use std::{thread, time::Duration};
+
+        thread::sleep(Duration::from_micros(microseconds as u64));
+        SQLITE_OK
+    }
+
+    #[cfg(not(target_feature = "atomics"))]
+    pub unsafe extern "C" fn xSleep(
+        _pVfs: *mut sqlite3_vfs,
+        _microseconds: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int {
+        SQLITE_OK
+    }
+
+    /// https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L951
+    pub unsafe extern "C" fn xRandomness(
+        _pVfs: *mut sqlite3_vfs,
+        nByte: ::std::os::raw::c_int,
+        zOut: *mut ::std::os::raw::c_char,
+    ) -> ::std::os::raw::c_int {
+        for i in 0..nByte {
+            *zOut.offset(i as isize) = (Math::random() * 255000.0) as _;
+        }
+        nByte
+    }
+
+    /// https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L870
+    pub unsafe extern "C" fn xCurrentTime(
+        _pVfs: *mut sqlite3_vfs,
+        pTimeOut: *mut f64,
+    ) -> ::std::os::raw::c_int {
+        *pTimeOut = 2440587.5 + (Date::new_0().get_time() / 86400000.0);
+        SQLITE_OK
+    }
+
+    /// https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L877
+    pub unsafe extern "C" fn xCurrentTimeInt64(
+        _pVfs: *mut sqlite3_vfs,
+        pOut: *mut sqlite3_int64,
+    ) -> ::std::os::raw::c_int {
+        *pOut = ((2440587.5 * 86400000.0) + Date::new_0().get_time()) as sqlite3_int64;
+        SQLITE_OK
     }
 }
 

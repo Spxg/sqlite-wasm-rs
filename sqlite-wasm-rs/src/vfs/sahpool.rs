@@ -1,5 +1,7 @@
 //! opfs-sahpool vfs implementation, ported from sqlite-wasm
 //!
+//! No large-scale reconstruction is required to facilitate future maintenance.
+//!
 //! <https://github.com/sqlite/sqlite/blob/master/ext/wasm/api/sqlite3-vfs-opfs-sahpool.c-pp.js>
 
 use crate::vfs::utils::{
