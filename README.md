@@ -1,3 +1,4 @@
+
 # SQLite Wasm Rust
 
 [![Crates.io](https://img.shields.io/crates/v/sqlite-wasm-rs.svg)](https://crates.io/crates/sqlite-wasm-rs)
@@ -20,9 +21,9 @@ sqlite-wasm-rs = { version = "0.3", default-features = false, features = ["preco
 ```
 
 ```rust
-use sqlite_wasm_rs::{self as ffi, sahpool_vfs::install as install_opfs_sahpool};
+use sqlite_wasm_rs::{self as ffi, relaxed_idb_vfs::install as install_idb_vfs};
 
-async fn open_db() -> anyhow::Result<()> {
+async fn open_db() {
     // open with memory vfs
     let mut db = std::ptr::null_mut();
     let ret = unsafe {
@@ -35,14 +36,14 @@ async fn open_db() -> anyhow::Result<()> {
     };
     assert_eq!(ffi::SQLITE_OK, ret);
 
-    // install opfs-sahpool persistent vfs and set as default vfs
-    install_opfs_sahpool(None, true).await?;
+    // install relaxed-idb persistent vfs and set as default vfs
+    install_idb_vfs(None, true).await.unwrap();
 
-    // open with opfs-sahpool vfs
+    // open with relaxed-idb vfs
     let mut db = std::ptr::null_mut();
     let ret = unsafe {
         ffi::sqlite3_open_v2(
-            c"opfs-sahpool.db".as_ptr().cast(),
+            c"relaxed-idb.db".as_ptr().cast(),
             &mut db as *mut _,
             ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
             std::ptr::null()
@@ -56,8 +57,8 @@ async fn open_db() -> anyhow::Result<()> {
 
 The following vfs have been implemented:
 
-* [`memory`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-rs/src/vfs/memory.rs): as the default vfs, no additional conditions are required, just use.
-* [`sahpool`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-rs/src/vfs/sahpool.rs): ported from sqlite-wasm, it provides the best performance persistent storage method.
+* [`memory`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-rs/src/vfs/memory.rs): as the default vfs, no additional conditions are required, store the database in memory.
+* [`sahpool`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-rs/src/vfs/sahpool.rs): ported from sqlite-wasm, store the database in opfs.
 * [`relaxed-idb`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-rs/src/vfs/relaxed_idb.rs): store the database in blocks in indexed db.
 
 Go to [`here`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-rs/src/vfs/README.md) to check it out.
@@ -86,11 +87,7 @@ About security:
 * You can specify the bundled feature to compile sqlite locally, which requires the emscripten toolchain.
 * Currently all precompiled products are compiled and committed through Github Actions, which can be tracked, downloaded and compared.
 
-Precompile workflow: <https://github.com/Spxg/sqlite-wasm-rs/blob/master/.github/workflows/precompile.yml>
-
-Change History: <https://github.com/Spxg/sqlite-wasm-rs/commits/master/sqlite-wasm-rs/library>
-
-Actions: <https://github.com/Spxg/sqlite-wasm-rs/actions?query=event%3Aworkflow_dispatch>
+[Precompile Workflow](https://github.com/Spxg/sqlite-wasm-rs/blob/master/.github/workflows/precompile.yml) | [Change History](https://github.com/Spxg/sqlite-wasm-rs/commits/master/sqlite-wasm-rs/library) | [Actions](https://github.com/Spxg/sqlite-wasm-rs/actions?query=event%3Aworkflow_dispatch)
 
 ## Related Project
 

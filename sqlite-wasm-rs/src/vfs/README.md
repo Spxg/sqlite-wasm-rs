@@ -5,30 +5,38 @@ Go to [`here`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-rs
 
 ### MemoryVFS
 
-Data is stored in memory, this is the default vfs.
+Data is stored in memory, this is the default vfs. Reading and writing are very fast, after all, in memory.
 
-### SyncAccessHandlePoolVFS
-
-Persistent vfs, ported from sqlite-wasm, see [`opfs-sahpool`](https://sqlite.org/wasm/doc/trunk/persistence.md#vfs-opfs-sahpool) for details.
-
-Install the [`opfs-explorer`](https://chromewebstore.google.com/detail/opfs-explorer/acndjpgkpaclldomagafnognkcgjignd) plugin to browse files.
+Refresh the page and data will be lost. You also need to pay attention to the memory size limit of the browser page.
 
 ### RelaxedIdbVFS
 
 Inspired by wa-sqlite's [`IDBMirrorVFS`](https://github.com/rhashimoto/wa-sqlite/blob/master/src/examples/IDBMirrorVFS.js), this is an VFS used in a synchronization context.
 
-The vfs is relaxed durability, for sqlite it is `pragma synchronous=off;`, so named `relaxed-idb`.
+The principle is to preload the db into memory before xOpen, and then all operations are synchronous. When sqlite calls sync, it asynchronously writes the changed blocks to the indexed db through the indexed transaction. The difference from IDBMirrorVFS is that `RelaxedIdbVFS` does not support pragma `synchronous=full` at all, so named `RelaxedIdbVFS`.
+
+As for performance, since both reading and writing are done in memory, the performance is very good. However, we need to pay attention to the performance of preload the database, because the database is divided into multiple blocks and stored in the indexed db, and it takes some time to read all of them into memory. After my test, when page_size is 64k, the loading speed is the fastest.
 
 The db page_size can be set via `pragma page_size=SIZE;` before creating a table in db. Once the table is created, it cannot be changed.
 
+As with MemoryVFS, you also need to pay attention to the memory size limit of the browser page.
+
+It is particularly important to note that using it on multiple pages may cause DB corruption. It is recommended to use it in SharedWorker.
+
+### SyncAccessHandlePoolVFS
+
+Ported from sqlite-wasm, see [`opfs-sahpool`](https://sqlite.org/wasm/doc/trunk/persistence.md#vfs-opfs-sahpool) for details. Install the [`opfs-explorer`](https://chromewebstore.google.com/detail/opfs-explorer/acndjpgkpaclldomagafnognkcgjignd) plugin to browse files.
+
+The VFS is based on [`FileSystemSyncAccessHandle`](https://developer.mozilla.org/en-US/docs/Web/API/FileSystemSyncAccessHandle) read and write. It is particularly important to note that the Dedicated Web Workers is required.
+
 ## VFS Comparison
 
-||MemoryVFS|SyncAccessHandlePoolVFS|RelaxedIdbVFS|
+||MemoryVFS|RelaxedIdbVFS|SyncAccessHandlePoolVFS|
 |-|-|-|-|
-|Storage|RAM|OPFS|IndexedDB|
-|Contexts|All|Worker|All|
+|Storage|RAM|IndexedDB|OPFS|
+|Contexts|All|All|Dedicated Web Workers|
 |Multiple connections|:x:|:x:|:x:|
-|Full durability|✅|✅|:x:|
-|Relaxed durability|:x:|:x:|✅|
+|Full durability|✅|:x:|✅|
+|Relaxed durability|:x:|✅|:x:|
 |Multi-database transactions|✅|✅|✅|
 |No COOP/COEP requirements|✅|✅|✅|
