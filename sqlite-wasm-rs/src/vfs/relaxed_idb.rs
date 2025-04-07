@@ -75,7 +75,7 @@ impl VfsStore for IdbPageStore {
     fn write(&mut self, buf: &[u8], offset: usize) {
         let size = buf.len();
         let end = size + offset;
-        for fill in (self.file_size..end).step_by(size) {
+        for fill in (self.file_size..offset).step_by(size) {
             self.blocks.insert(
                 fill,
                 FragileComfirmed::new(Uint8Array::new_with_length(size as u32)),
@@ -419,25 +419,33 @@ impl RelaxedIdb {
     }
 }
 
+static ONCE_JS_VALUE: Lazy<FragileComfirmed<(JsValue, JsValue, JsValue)>> = Lazy::new(|| {
+    FragileComfirmed::new((
+        JsValue::from("path"),
+        JsValue::from("offset"),
+        JsValue::from("data"),
+    ))
+});
+
 fn get_block(value: JsValue) -> (String, usize, Uint8Array) {
-    let path = Reflect::get(&value, &JsValue::from("path"))
+    let path = Reflect::get(&value, &ONCE_JS_VALUE.0)
         .unwrap()
         .as_string()
         .unwrap();
-    let offset = Reflect::get(&value, &JsValue::from("offset"))
+    let offset = Reflect::get(&value, &ONCE_JS_VALUE.1)
         .unwrap()
         .as_f64()
         .unwrap() as usize;
-    let data = Reflect::get(&value, &JsValue::from("data")).unwrap();
+    let data = Reflect::get(&value, &ONCE_JS_VALUE.2).unwrap();
 
     (path, offset, Uint8Array::from(data))
 }
 
 fn set_block(path: &JsValue, offset: usize, data: &Uint8Array) -> JsValue {
     let block = Object::new();
-    Reflect::set(&block, &JsValue::from("path"), path).unwrap();
-    Reflect::set(&block, &JsValue::from("offset"), &JsValue::from(offset)).unwrap();
-    Reflect::set(&block, &JsValue::from("data"), &JsValue::from(data)).unwrap();
+    Reflect::set(&block, &ONCE_JS_VALUE.0, path).unwrap();
+    Reflect::set(&block, &ONCE_JS_VALUE.1, &JsValue::from(offset)).unwrap();
+    Reflect::set(&block, &ONCE_JS_VALUE.2, &JsValue::from(data)).unwrap();
     block.into()
 }
 
