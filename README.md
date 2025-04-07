@@ -21,7 +21,7 @@ sqlite-wasm-rs = { version = "0.3", default-features = false, features = ["preco
 ```
 
 ```rust
-use sqlite_wasm_rs::{self as ffi, relaxed_idb_vfs::install as install_idb_vfs};
+use sqlite_wasm_rs::{self as ffi, sahpool_vfs::install as install_opfs_vfs};
 
 async fn open_db() {
     // open with memory vfs
@@ -36,14 +36,14 @@ async fn open_db() {
     };
     assert_eq!(ffi::SQLITE_OK, ret);
 
-    // install relaxed-idb persistent vfs and set as default vfs
-    install_idb_vfs(None, true).await.unwrap();
+    // install opfs-sahpool persistent vfs and set as default vfs
+    install_opfs_vfs(None, true).await.unwrap();
 
-    // open with relaxed-idb vfs
+    // open with opfs-sahpool vfs
     let mut db = std::ptr::null_mut();
     let ret = unsafe {
         ffi::sqlite3_open_v2(
-            c"relaxed-idb.db".as_ptr().cast(),
+            c"opfs-sahpool.db".as_ptr().cast(),
             &mut db as *mut _,
             ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
             std::ptr::null()
