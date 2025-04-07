@@ -71,6 +71,15 @@ jobs:
         printf "sqlite-wasm-rs = { path = \"../sqlite-wasm-rs\" }\n" >> Cargo.toml
         wasm-pack test --chrome --headless --features modern-full-wasm32-unknown-unknown,precompiled-wasm
 
+  test_clippy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Check clippy
+      run: |
+        cd sqlite-wasm-rs
+        cargo clippy --no-default-features --features precompiled
+
   test_precompiled:
     strategy:
       matrix:
