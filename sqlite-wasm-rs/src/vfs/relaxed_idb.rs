@@ -55,6 +55,7 @@ struct IdbPageStore {
     block_size: usize,
     blocks: HashMap<usize, FragileComfirmed<Uint8Array>>,
     tx_blocks: HashSet<usize>,
+    sync_notified: bool,
 }
 
 impl VfsStore for IdbPageStore {
@@ -180,6 +181,7 @@ async fn preload_db_impl(
                     block_size: data.length() as _,
                     blocks: HashMap::from([(offset, FragileComfirmed::new(data))]),
                     tx_blocks: HashSet::new(),
+                    sync_notified: false,
                 }));
             }
         }
@@ -295,6 +297,7 @@ impl RelaxedIdb {
                 block_size: page_size,
                 blocks,
                 tx_blocks,
+                sync_notified: false,
             }),
         );
 
@@ -366,6 +369,8 @@ impl RelaxedIdb {
         let IdbFile::Main(idb_blocks) = idb_file else {
             return Ok(());
         };
+
+        idb_blocks.sync_notified = false;
 
         let file_size = idb_blocks.file_size;
         let mut truncated_offset = idb_blocks.file_size;
@@ -539,15 +544,18 @@ impl SQLiteIoMethods for RelaxedIdbIoMethods {
                 };
             }
             SQLITE_FCNTL_SYNC | SQLITE_FCNTL_COMMIT_PHASETWO => {
-                if pool
-                    .tx
-                    .send(IdbCommit {
-                        file: name.into(),
-                        op: IdbCommitOp::Sync,
-                    })
-                    .is_err()
-                {
-                    return SQLITE_ERROR;
+                if !file.sync_notified {
+                    if pool
+                        .tx
+                        .send(IdbCommit {
+                            file: name.into(),
+                            op: IdbCommitOp::Sync,
+                        })
+                        .is_err()
+                    {
+                        return SQLITE_ERROR;
+                    }
+                    file.sync_notified = true;
                 }
             }
             _ => (),
