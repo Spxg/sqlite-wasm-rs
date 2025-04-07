@@ -539,7 +539,7 @@ impl SQLiteIoMethods for RelaxedIdbIoMethods {
                     } else {
                         return SQLITE_ERROR;
                     }
-                } else if key == "synchronous" && value == "full" {
+                } else if key == "synchronous" && value != "off" {
                     return SQLITE_ERROR;
                 };
             }
