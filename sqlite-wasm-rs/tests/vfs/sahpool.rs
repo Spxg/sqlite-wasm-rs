@@ -4,6 +4,40 @@ use sqlite_wasm_rs::*;
 use wasm_bindgen_test::wasm_bindgen_test;
 
 #[wasm_bindgen_test]
+async fn test_opfs_sah_vfs_default_cipher() {
+    install_opfs_sahpool(None, true).await.unwrap();
+
+    let mut db = std::ptr::null_mut();
+    let ret = unsafe {
+        sqlite3_open_v2(
+            c"test_opfs_sah_vfs_default_cipher.db".as_ptr().cast(),
+            &mut db as *mut _,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+            c"multipleciphers-opfs-sahpool".as_ptr().cast(),
+        )
+    };
+    assert_eq!(SQLITE_OK, ret);
+
+    let sql = c"
+        PRAGMA cipher = aes256cbc;
+        PRAGMA key = 12345;
+    ";
+
+    let ret = unsafe {
+        sqlite3_exec(
+            db,
+            sql.as_ptr().cast(),
+            None,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(ret, SQLITE_OK);
+
+    prepare_simple_db(db);
+}
+
+#[wasm_bindgen_test]
 async fn test_opfs_sah_vfs_default() {
     install_opfs_sahpool(None, true).await.unwrap();
 

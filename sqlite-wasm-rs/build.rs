@@ -1,7 +1,7 @@
 #![allow(deprecated)]
 
 #[cfg(feature = "bundled")]
-static COMMON: [&str; 7] = [
+static COMMON: [&str; 14] = [
     // wasm is single-threaded
     "-DSQLITE_THREADSAFE=0",
     "-DSQLITE_TEMP_STORE=2",
@@ -11,6 +11,14 @@ static COMMON: [&str; 7] = [
     "-DSQLITE_OMIT_DEPRECATED",
     // there is no dlopen on this platform.
     "-DSQLITE_OMIT_LOAD_EXTENSION",
+    // cipher
+    "-DHAVE_CIPHER_AES_128_CBC=0",
+    "-DHAVE_CIPHER_AES_256_CBC=1",
+    "-DHAVE_CIPHER_SQLCIPHER=0",
+    "-DHAVE_CIPHER_RC4=0",
+    "-DHAVE_CIPHER_ASCON128=0",
+    "-DHAVE_CIPHER_AEGIS=0",
+    "-DHAVE_CIPHER_CHACHA20=0",
 ];
 
 #[cfg(feature = "bundled")]
@@ -226,7 +234,7 @@ or use the precompiled binaries via the `default-features = false` and `precompi
     }
 
     if !cfg!(feature = "custom-libc") || build_all {
-        cmd!(sh, "{CC} {COMMON...} {FULL_FEATURED...} source/sqlite3.c source/wasm-shim.c -o {output}/sqlite3.o -I source -r -Oz -lc").read().unwrap();
+        cmd!(sh, "{CC} {COMMON...} {FULL_FEATURED...} source/sqlite3mc_amalgamation.c source/wasm-shim.c -o {output}/sqlite3.o -I source -r -Oz -lc").read().unwrap();
 
         cmd!(
             sh,
@@ -239,9 +247,10 @@ or use the precompiled binaries via the `default-features = false` and `precompi
     if cfg!(feature = "custom-libc") || build_all {
         cmd!(
             sh,
-            "{CC} {COMMON...} {FULL_FEATURED...} source/sqlite3.c -o {output}/sqlite3.o -r -Oz"
+            "{CC} {COMMON...} {FULL_FEATURED...} source/sqlite3mc_amalgamation.c -o {output}/sqlite3.o -r -Oz"
         )
         .read()
+
         .unwrap();
 
         cmd!(sh, "{AR} rcs {output}/libsqlite3.a {output}/sqlite3.o")
