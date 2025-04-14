@@ -380,11 +380,10 @@ impl VfsStore for MemPageStore {
     }
 
     fn write(&mut self, buf: &[u8], offset: usize) {
-        let size = buf.len();
-        let end = size + offset;
+        let page_size = buf.len();
 
-        for fill in (self.file_size..end).step_by(size) {
-            self.pages.insert(fill, vec![0; size]);
+        for fill in (self.file_size..offset).step_by(page_size) {
+            self.pages.insert(fill, vec![0; page_size]);
         }
         if let Some(buffer) = self.pages.get_mut(&offset) {
             buffer.copy_from_slice(buf);
@@ -392,8 +391,8 @@ impl VfsStore for MemPageStore {
             self.pages.insert(offset, buf.to_vec());
         }
 
-        self.page_size = size;
-        self.file_size = self.file_size.max(end);
+        self.page_size = page_size;
+        self.file_size = self.file_size.max(offset + page_size);
     }
 
     fn truncate(&mut self, size: usize) {

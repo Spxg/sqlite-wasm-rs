@@ -73,24 +73,26 @@ impl VfsStore for IdbPageStore {
     }
 
     fn write(&mut self, buf: &[u8], offset: usize) {
-        let size = buf.len();
-        let end = size + offset;
-        for fill in (self.file_size..offset).step_by(size) {
+        let page_size = buf.len();
+
+        for fill in (self.file_size..offset).step_by(page_size) {
             self.blocks.insert(
                 fill,
-                FragileComfirmed::new(Uint8Array::new_with_length(size as u32)),
+                FragileComfirmed::new(Uint8Array::new_with_length(page_size as u32)),
             );
             self.tx_blocks.insert(fill);
         }
+
         if let Some(buffer) = self.blocks.get_mut(&offset) {
             copy_to_uint8_array_subarray(buf, buffer);
         } else {
             self.blocks
                 .insert(offset, FragileComfirmed::new(copy_to_uint8_array(buf)));
         }
+
         self.tx_blocks.insert(offset);
-        self.file_size = self.file_size.max(end);
-        self.block_size = size;
+        self.block_size = page_size;
+        self.file_size = self.file_size.max(offset + page_size);
     }
 
     fn truncate(&mut self, size: usize) {
