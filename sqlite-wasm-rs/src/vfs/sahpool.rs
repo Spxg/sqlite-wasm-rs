@@ -7,6 +7,7 @@
 use crate::vfs::utils::{
     copy_to_uint8_array_subarray, copy_to_vec, get_random_name, register_vfs, FragileComfirmed,
     VfsError, VfsPtr, SQLITE3_HEADER,
+    x_methods_shim,
 };
 use crate::{bail, libsqlite3::*};
 
@@ -914,12 +915,6 @@ static IO_METHODS: sqlite3_io_methods = sqlite3_io_methods {
 };
 
 fn vfs(name: *const ::std::os::raw::c_char) -> sqlite3_vfs {
-    let default_vfs = unsafe { sqlite3_vfs_find(std::ptr::null()) };
-    let xRandomness = unsafe { (*default_vfs).xRandomness };
-    let xSleep = unsafe { (*default_vfs).xSleep };
-    let xCurrentTime = unsafe { (*default_vfs).xCurrentTime };
-    let xCurrentTimeInt64 = unsafe { (*default_vfs).xCurrentTimeInt64 };
-
     sqlite3_vfs {
         iVersion: 2,
         szOsFile: std::mem::size_of::<OpfsFile>() as i32,
@@ -935,11 +930,11 @@ fn vfs(name: *const ::std::os::raw::c_char) -> sqlite3_vfs {
         xDlError: None,
         xDlSym: None,
         xDlClose: None,
-        xRandomness,
-        xSleep,
-        xCurrentTime,
+        xRandomness: Some(x_methods_shim::xRandomness),
+        xSleep: Some(x_methods_shim::xSleep),
+        xCurrentTime: Some(x_methods_shim::xCurrentTime),
         xGetLastError: Some(xGetLastError),
-        xCurrentTimeInt64,
+        xCurrentTimeInt64: Some(x_methods_shim::xCurrentTimeInt64),
         xSetSystemCall: None,
         xGetSystemCall: None,
         xNextSystemCall: None,
