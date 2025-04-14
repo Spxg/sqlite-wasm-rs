@@ -232,21 +232,48 @@ pub enum VfsError {
     RegisterVfs,
 }
 
-/// Register vfs general method
-pub fn register_vfs(
+/// FIXME: delete later
+pub fn register_vfs_legacy(
     vfs_name: &str,
     default_vfs: bool,
-    register_fn: fn(*const std::os::raw::c_char) -> sqlite3_vfs,
+    register_vfs: fn(*const ::std::os::raw::c_char) -> sqlite3_vfs,
 ) -> Result<*mut sqlite3_vfs, VfsError> {
     let name = CString::new(vfs_name).map_err(|_| VfsError::ToCStr)?;
     let name_ptr = name.into_raw();
-    let vfs = Box::leak(Box::new(register_fn(name_ptr)));
-
+    let vfs = Box::leak(Box::new(register_vfs(name_ptr)));
     let ret = unsafe { sqlite3_vfs_register(vfs, i32::from(default_vfs)) };
+
     if ret != SQLITE_OK {
         unsafe {
             drop(Box::from_raw(vfs));
             drop(CString::from_raw(name_ptr));
+        }
+        return Err(VfsError::RegisterVfs);
+    }
+
+    Ok(vfs as *mut sqlite3_vfs)
+}
+
+/// Register vfs general method
+pub fn register_vfs<T, IO: SQLiteIoMethods, V: SQLiteVfs<IO>>(
+    vfs_name: &str,
+    app_data: IO::AppData,
+    default_vfs: bool,
+) -> Result<*mut sqlite3_vfs, VfsError> {
+    let name = CString::new(vfs_name).map_err(|_| VfsError::ToCStr)?;
+    let name_ptr = name.into_raw();
+    let app_data = VfsAppData::new(app_data).leak();
+
+    let vfs = Box::leak(Box::new(V::vfs(name_ptr, app_data.cast())));
+    let ret = unsafe { sqlite3_vfs_register(vfs, i32::from(default_vfs)) };
+
+    if ret != SQLITE_OK {
+        unsafe {
+            drop(Box::from_raw(vfs));
+            drop(CString::from_raw(name_ptr));
+            if !app_data.is_null() {
+                drop(VfsAppData::from_raw(app_data));
+            }
         }
         return Err(VfsError::RegisterVfs);
     }
@@ -407,8 +434,46 @@ impl VfsStore for MemPageStore {
     }
 }
 
+/// Wrapper for `pAppData`
+pub struct VfsAppData<T>(T);
+
+impl<T> VfsAppData<T> {
+    pub fn new(t: T) -> Self {
+        VfsAppData(t)
+    }
+
+    /// Leak, then pAppData can be set to VFS
+    pub fn leak(self) -> *mut Self {
+        Box::into_raw(Box::new(self))
+    }
+
+    /// # Safety
+    ///
+    /// You have to make sure the pointer is correct
+    pub unsafe fn from_raw(t: *mut Self) -> VfsAppData<T> {
+        *Box::from_raw(t)
+    }
+}
+
+/// Deref only, returns immutable reference, avoids race conditions
+impl<T> Deref for VfsAppData<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// Control the Store and make changes to files
-pub trait StoreControl<S> {
+pub trait StoreControl<S, A> {
+    /// Convert pAppData to the type we need
+    ///
+    /// # Safety
+    ///
+    /// As long as it is set through the abstract VFS interface, it is safe
+    unsafe fn app_data(vfs: *mut sqlite3_vfs) -> &'static VfsAppData<A> {
+        &*(*vfs).pAppData.cast()
+    }
     /// Adding files to the Store, use for `xOpen`
     fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32);
     /// Checks if the specified file exists in the Store, use for `xOpen`
@@ -426,14 +491,17 @@ pub trait StoreControl<S> {
 pub trait SQLiteVfs<IO: SQLiteIoMethods> {
     const VERSION: ::std::os::raw::c_int;
 
-    fn vfs(vfs_name: *const ::std::os::raw::c_char) -> sqlite3_vfs {
+    fn vfs(
+        vfs_name: *const ::std::os::raw::c_char,
+        app_data: *mut VfsAppData<IO::AppData>,
+    ) -> sqlite3_vfs {
         sqlite3_vfs {
             iVersion: Self::VERSION,
             szOsFile: std::mem::size_of::<SQLiteVfsFile>() as i32,
             mxPathname: 1024,
             pNext: std::ptr::null_mut(),
             zName: vfs_name,
-            pAppData: std::ptr::null_mut(),
+            pAppData: app_data.cast(),
             xOpen: Some(Self::xOpen),
             xDelete: Some(Self::xDelete),
             xAccess: Some(Self::xAccess),
@@ -542,7 +610,8 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
 #[allow(clippy::missing_safety_doc)]
 pub trait SQLiteIoMethods {
     type Store: VfsStore;
-    type StoreControl: StoreControl<Self::Store>;
+    type AppData;
+    type StoreControl: StoreControl<Self::Store, Self::AppData>;
 
     const VERSION: ::std::os::raw::c_int;
 

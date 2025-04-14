@@ -5,9 +5,9 @@
 //! <https://github.com/sqlite/sqlite/blob/master/ext/wasm/api/sqlite3-vfs-opfs-sahpool.c-pp.js>
 
 use crate::vfs::utils::{
-    copy_to_uint8_array_subarray, copy_to_vec, get_random_name, register_vfs, FragileComfirmed,
-    VfsError, VfsPtr, SQLITE3_HEADER,
-    x_methods_shim,
+    copy_to_uint8_array_subarray, copy_to_vec, get_random_name, x_methods_shim,
+    FragileComfirmed, VfsError, VfsPtr, SQLITE3_HEADER,
+    register_vfs_legacy,
 };
 use crate::{bail, libsqlite3::*};
 
@@ -1153,7 +1153,7 @@ pub async fn install(
         Arc::clone(pool)
     } else {
         let pool = Arc::new(create_pool.await?);
-        let vfs = register_vfs(vfs_name, default_vfs, vfs)?;
+        let vfs = register_vfs_legacy(vfs_name, default_vfs, vfs)?;
         name2vfs.insert(vfs_name.clone(), Arc::clone(&pool));
         VFS2POOL.write().insert(VfsPtr(vfs), Arc::clone(&pool));
         pool

@@ -3,7 +3,7 @@
 use crate::vfs::utils::{
     copy_to_slice, copy_to_uint8_array, copy_to_uint8_array_subarray, page_read, register_vfs,
     FragileComfirmed, MemLinearStore, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, StoreControl,
-    VfsError, VfsPtr, VfsStore, SQLITE3_HEADER,
+    VfsAppData, VfsError, VfsStore, SQLITE3_HEADER,
 };
 use crate::{bail, check_option, check_result, libsqlite3::*};
 
@@ -14,7 +14,6 @@ use js_sys::{Number, Object, Reflect, Uint8Array};
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use std::collections::{hash_map, HashSet};
-use std::sync::Arc;
 use std::{
     collections::HashMap,
     ffi::{c_char, CStr},
@@ -410,7 +409,7 @@ impl RelaxedIdb {
         Ok(())
     }
 
-    async fn commit_loop(self: Arc<Self>, mut rx: UnboundedReceiver<IdbCommit>) {
+    async fn commit_loop(&self, mut rx: UnboundedReceiver<IdbCommit>) {
         while let Some(commit) = rx.recv().await {
             let IdbCommit { file, op } = commit;
             if let Err(_e) = match op {
@@ -451,30 +450,24 @@ fn set_block(path: &JsValue, offset: usize, data: &Uint8Array) -> JsValue {
     block.into()
 }
 
-static VFS2POOL: Lazy<RwLock<HashMap<VfsPtr, Arc<RelaxedIdb>>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
-
-fn pool(vfs: *mut sqlite3_vfs) -> Arc<RelaxedIdb> {
-    // Already registered vfs will not be unregistered, so this is safe
-    Arc::clone(VFS2POOL.read().get(&VfsPtr(vfs)).unwrap())
-}
-
 struct RelaxedIdbStoreControl;
 
-impl StoreControl<IdbFile> for RelaxedIdbStoreControl {
+impl StoreControl<IdbFile, RelaxedIdb> for RelaxedIdbStoreControl {
     fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32) {
-        pool(vfs)
-            .name2file
-            .write()
-            .insert(file.into(), IdbFile::new(flags));
+        unsafe {
+            Self::app_data(vfs)
+                .name2file
+                .write()
+                .insert(file.into(), IdbFile::new(flags));
+        }
     }
 
     fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> bool {
-        pool(vfs).name2file.read().contains_key(file)
+        unsafe { Self::app_data(vfs).name2file.read().contains_key(file) }
     }
 
     fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> Option<IdbFile> {
-        let pool = pool(vfs);
+        let pool = unsafe { Self::app_data(vfs) };
         let idb_file = pool.name2file.write().remove(file);
         // temp db never put into indexed db, no need to delete
         if let Some(IdbFile::Main(_)) = &idb_file {
@@ -491,12 +484,12 @@ impl StoreControl<IdbFile> for RelaxedIdbStoreControl {
     }
 
     fn with_file<F: Fn(&IdbFile) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> Option<i32> {
-        Some(unsafe { f(pool(vfs_file.vfs).name2file.read().get(vfs_file.name())?) })
+        Some(unsafe { f(Self::app_data(vfs_file.vfs).name2file.read().get(vfs_file.name())?) })
     }
 
     fn with_file_mut<F: Fn(&mut IdbFile) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> Option<i32> {
         Some(unsafe {
-            f(pool(vfs_file.vfs)
+            f(Self::app_data(vfs_file.vfs)
                 .name2file
                 .write()
                 .get_mut(vfs_file.name())?)
@@ -508,6 +501,7 @@ struct RelaxedIdbIoMethods;
 
 impl SQLiteIoMethods for RelaxedIdbIoMethods {
     type Store = IdbFile;
+    type AppData = RelaxedIdb;
     type StoreControl = RelaxedIdbStoreControl;
 
     const VERSION: ::std::os::raw::c_int = 1;
@@ -518,7 +512,7 @@ impl SQLiteIoMethods for RelaxedIdbIoMethods {
         pArg: *mut ::std::os::raw::c_void,
     ) -> ::std::os::raw::c_int {
         let vfs_file = SQLiteVfsFile::from_file(pFile);
-        let pool = pool(vfs_file.vfs);
+        let pool = Self::StoreControl::app_data(vfs_file.vfs);
         let name = vfs_file.name();
 
         let mut name2file = pool.name2file.write();
@@ -663,7 +657,7 @@ impl Default for RelaxedIdbCfg {
 
 /// RelaxedIdb management tools exposed to clients.
 pub struct RelaxedIdbUtil {
-    pool: Arc<RelaxedIdb>,
+    pool: &'static VfsAppData<RelaxedIdb>,
 }
 
 impl RelaxedIdbUtil {
@@ -707,7 +701,7 @@ impl RelaxedIdbUtil {
 /// Register `relaxed-idb` vfs and return a utility object which can be used
 /// to perform basic administration of the file pool
 pub async fn install(options: Option<&RelaxedIdbCfg>, default_vfs: bool) -> Result<RelaxedIdbUtil> {
-    static NAME2VFS: Lazy<tokio::sync::Mutex<HashMap<String, Arc<RelaxedIdb>>>> =
+    static NAME2VFS: Lazy<tokio::sync::Mutex<HashMap<String, &'static VfsAppData<RelaxedIdb>>>> =
         Lazy::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
     let default_options = RelaxedIdbCfg::default();
@@ -716,16 +710,16 @@ pub async fn install(options: Option<&RelaxedIdbCfg>, default_vfs: bool) -> Resu
 
     let mut name2vfs = NAME2VFS.lock().await;
     let pool = if let Some(pool) = name2vfs.get(vfs_name) {
-        Arc::clone(pool)
+        pool
     } else {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let pool = Arc::new(RelaxedIdb::new(options, tx).await?);
-        let vfs = register_vfs(vfs_name, default_vfs, RelaxedIdbVfs::vfs)?;
+        let pool = RelaxedIdb::new(options, tx).await?;
+        let vfs = register_vfs::<RelaxedIdb, _, RelaxedIdbVfs>(vfs_name, pool, default_vfs)?;
+        let app_data = unsafe { RelaxedIdbStoreControl::app_data(vfs) };
 
-        name2vfs.insert(vfs_name.into(), Arc::clone(&pool));
-        VFS2POOL.write().insert(VfsPtr(vfs), Arc::clone(&pool));
-        wasm_bindgen_futures::spawn_local(Arc::clone(&pool).commit_loop(rx));
-        pool
+        name2vfs.insert(vfs_name.into(), app_data);
+        wasm_bindgen_futures::spawn_local(app_data.commit_loop(rx));
+        app_data
     };
 
     Ok(RelaxedIdbUtil { pool })

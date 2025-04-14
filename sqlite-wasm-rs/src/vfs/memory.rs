@@ -2,15 +2,14 @@
 
 use crate::libsqlite3::*;
 use crate::vfs::utils::{
-    MemLinearStore, MemPageStore, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, StoreControl, VfsStore,
+    MemLinearStore, MemPageStore, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, StoreControl,
+    VfsAppData, VfsStore,
 };
 
-use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 
-static NAME2FILE: Lazy<RwLock<HashMap<String, MemFile>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
+type MemAppData = RwLock<HashMap<String, MemFile>>;
 
 enum MemFile {
     Main(MemPageStore),
@@ -59,25 +58,33 @@ impl VfsStore for MemFile {
 
 struct MemStoreControl;
 
-impl StoreControl<MemFile> for MemStoreControl {
-    fn add_file(_vfs: *mut sqlite3_vfs, file: &str, flags: i32) {
-        NAME2FILE.write().insert(file.into(), MemFile::new(flags));
+impl StoreControl<MemFile, MemAppData> for MemStoreControl {
+    fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32) {
+        unsafe {
+            Self::app_data(vfs)
+                .write()
+                .insert(file.into(), MemFile::new(flags));
+        }
     }
 
-    fn contains_file(_vfs: *mut sqlite3_vfs, file: &str) -> bool {
-        NAME2FILE.read().contains_key(file)
+    fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> bool {
+        unsafe { Self::app_data(vfs).read().contains_key(file) }
     }
 
-    fn delete_file(_vfs: *mut sqlite3_vfs, file: &str) -> Option<MemFile> {
-        NAME2FILE.write().remove(file)
+    fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> Option<MemFile> {
+        unsafe { Self::app_data(vfs).write().remove(file) }
     }
 
     fn with_file<F: Fn(&MemFile) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> Option<i32> {
-        Some(unsafe { f(NAME2FILE.read().get(vfs_file.name())?) })
+        Some(unsafe { f(Self::app_data(vfs_file.vfs).read().get(vfs_file.name())?) })
     }
 
     fn with_file_mut<F: Fn(&mut MemFile) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> Option<i32> {
-        Some(unsafe { f(NAME2FILE.write().get_mut(vfs_file.name())?) })
+        Some(unsafe {
+            f(Self::app_data(vfs_file.vfs)
+                .write()
+                .get_mut(vfs_file.name())?)
+        })
     }
 }
 
@@ -85,6 +92,7 @@ struct MemIoMethods;
 
 impl SQLiteIoMethods for MemIoMethods {
     type Store = MemFile;
+    type AppData = MemAppData;
     type StoreControl = MemStoreControl;
 
     const VERSION: ::std::os::raw::c_int = 1;
@@ -99,7 +107,10 @@ impl SQLiteVfs<MemIoMethods> for MemVfs {
 pub fn install() -> ::std::os::raw::c_int {
     unsafe {
         sqlite3_vfs_register(
-            Box::leak(Box::new(MemVfs::vfs(c"memvfs".as_ptr().cast()))),
+            Box::leak(Box::new(MemVfs::vfs(
+                c"memvfs".as_ptr().cast(),
+                VfsAppData::new(MemAppData::default()).leak().cast(),
+            ))),
             1,
         )
     }
