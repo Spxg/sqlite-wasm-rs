@@ -254,13 +254,7 @@ impl RelaxedIdb {
         Ok(())
     }
 
-    async fn import_db(&self, path: &str, bytes: &[u8], page_size: usize) -> Result<()> {
-        if !(page_size.is_power_of_two() && (512..=65536).contains(&page_size)) {
-            return Err(RelaxedIdbError::Generic(
-                "The page size must be a power of two between 512 and 65536 inclusive.".into(),
-            ));
-        }
-
+    async fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
         if self.name2file.read().contains_key(path) {
             return Err(RelaxedIdbError::Generic(format!(
                 "{path} file already exists"
@@ -277,6 +271,17 @@ impl RelaxedIdb {
                 "Input does not contain an SQLite database header.".into(),
             ));
         }
+
+        // The database page size in bytes.
+        // Must be a power of two between 512 and 32768 inclusive, or the value 1 representing a page size of 65536.
+        let page_size = u16::from_be_bytes([bytes[16], bytes[17]]);
+        let page_size = if page_size == 1 {
+            65536
+        } else {
+            usize::from(page_size)
+        };
+
+        assert!(page_size.is_power_of_two() && (512..=65536).contains(&page_size));
 
         let mut blocks = HashMap::new();
         for (idx, chunk) in bytes.chunks(page_size).enumerate() {
@@ -674,9 +679,8 @@ impl RelaxedIdbUtil {
     }
 
     /// Import the db file into the pool and indexed db.
-    /// The page_size must be a power of two between 512 and 65536 inclusive.
-    pub async fn import_db(&self, path: &str, bytes: &[u8], page_size: usize) -> Result<()> {
-        self.pool.import_db(path, bytes, page_size).await
+    pub async fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
+        self.pool.import_db(path, bytes).await
     }
 
     /// Export database
