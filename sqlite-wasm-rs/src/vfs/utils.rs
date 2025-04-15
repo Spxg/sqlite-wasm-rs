@@ -271,9 +271,7 @@ pub fn register_vfs<T, IO: SQLiteIoMethods, V: SQLiteVfs<IO>>(
         unsafe {
             drop(Box::from_raw(vfs));
             drop(CString::from_raw(name_ptr));
-            if !app_data.is_null() {
-                drop(VfsAppData::from_raw(app_data));
-            }
+            drop(VfsAppData::from_raw(app_data));
         }
         return Err(VfsError::RegisterVfs);
     }
