@@ -6,7 +6,7 @@
 
 use crate::vfs::utils::{
     copy_to_uint8_array_subarray, copy_to_vec, get_random_name, register_vfs_legacy,
-    x_methods_shim, FragileComfirmed, VfsError, VfsPtr, SQLITE3_HEADER,
+    x_methods_shim, FragileComfirmed, RegisterVfsError, VfsPtr, SQLITE3_HEADER,
 };
 use crate::{bail, libsqlite3::*};
 
@@ -1018,7 +1018,7 @@ impl Default for OpfsSAHPoolCfg {
 #[derive(thiserror::Error, Debug)]
 pub enum OpfsSAHError {
     #[error(transparent)]
-    Vfs(#[from] VfsError),
+    Vfs(#[from] RegisterVfsError),
     #[error("This vfs is only available in dedicated worker")]
     NotSuported,
     #[error("An error occurred while getting the directory handle")]

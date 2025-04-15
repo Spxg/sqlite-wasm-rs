@@ -4,6 +4,7 @@ use crate::libsqlite3::*;
 
 use fragile::Fragile;
 use js_sys::{Date, Math, Number, Uint8Array, WebAssembly};
+use parking_lot::Mutex;
 use std::{
     ffi::{CStr, CString},
     ops::{Deref, DerefMut},
@@ -220,11 +221,16 @@ impl SQLiteVfsFile {
             self.name_length,
         ))
     }
+
+    /// Convert a `&'static SQLiteVfsFile` pointer to `*mut sqlite3_file` pointer.
+    pub fn sqlite3_file(&'static self) -> *mut sqlite3_file {
+        self as *const SQLiteVfsFile as *mut sqlite3_file
+    }
 }
 
 /// Possible errors when registering Vfs
 #[derive(thiserror::Error, Debug)]
-pub enum VfsError {
+pub enum RegisterVfsError {
     #[error("An error occurred converting the given vfs name to a CStr")]
     ToCStr,
     #[error("An error occurred while registering vfs with sqlite")]
@@ -236,8 +242,8 @@ pub fn register_vfs_legacy(
     vfs_name: &str,
     default_vfs: bool,
     register_vfs: fn(*const ::std::os::raw::c_char) -> sqlite3_vfs,
-) -> Result<*mut sqlite3_vfs, VfsError> {
-    let name = CString::new(vfs_name).map_err(|_| VfsError::ToCStr)?;
+) -> Result<*mut sqlite3_vfs, RegisterVfsError> {
+    let name = CString::new(vfs_name).map_err(|_| RegisterVfsError::ToCStr)?;
     let name_ptr = name.into_raw();
     let vfs = Box::leak(Box::new(register_vfs(name_ptr)));
     let ret = unsafe { sqlite3_vfs_register(vfs, i32::from(default_vfs)) };
@@ -247,7 +253,7 @@ pub fn register_vfs_legacy(
             drop(Box::from_raw(vfs));
             drop(CString::from_raw(name_ptr));
         }
-        return Err(VfsError::RegisterVfs);
+        return Err(RegisterVfsError::RegisterVfs);
     }
 
     Ok(vfs as *mut sqlite3_vfs)
@@ -258,8 +264,8 @@ pub fn register_vfs<T, IO: SQLiteIoMethods, V: SQLiteVfs<IO>>(
     vfs_name: &str,
     app_data: IO::AppData,
     default_vfs: bool,
-) -> Result<*mut sqlite3_vfs, VfsError> {
-    let name = CString::new(vfs_name).map_err(|_| VfsError::ToCStr)?;
+) -> Result<*mut sqlite3_vfs, RegisterVfsError> {
+    let name = CString::new(vfs_name).map_err(|_| RegisterVfsError::ToCStr)?;
     let name_ptr = name.into_raw();
     let app_data = VfsAppData::new(app_data).leak();
 
@@ -272,7 +278,7 @@ pub fn register_vfs<T, IO: SQLiteIoMethods, V: SQLiteVfs<IO>>(
             drop(CString::from_raw(name_ptr));
             drop(VfsAppData::from_raw(app_data));
         }
-        return Err(VfsError::RegisterVfs);
+        return Err(RegisterVfsError::RegisterVfs);
     }
 
     Ok(vfs as *mut sqlite3_vfs)
@@ -331,12 +337,12 @@ pub fn page_read<T, G: Fn(usize) -> Option<T>, R: Fn(T, &mut [u8], (usize, usize
 pub struct MemLinearFile(Vec<u8>);
 
 impl VfsFile for MemLinearFile {
-    fn read(&self, buf: &mut [u8], offset: usize) -> i32 {
+    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<i32> {
         let size = buf.len();
         let end = size + offset;
         if self.0.len() <= offset {
             buf.fill(0);
-            return SQLITE_IOERR_SHORT_READ;
+            return Ok(SQLITE_IOERR_SHORT_READ);
         }
 
         let read_end = end.min(self.0.len());
@@ -345,34 +351,57 @@ impl VfsFile for MemLinearFile {
 
         if read_size < size {
             buf[read_size..].fill(0);
-            return SQLITE_IOERR_SHORT_READ;
+            return Ok(SQLITE_IOERR_SHORT_READ);
         }
-        SQLITE_OK
+        Ok(SQLITE_OK)
     }
 
-    fn write(&mut self, buf: &[u8], offset: usize) {
+    fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()> {
         let end = buf.len() + offset;
         if end > self.0.len() {
             self.0.resize(end, 0);
         }
         self.0[offset..end].copy_from_slice(buf);
+        Ok(())
     }
 
-    fn truncate(&mut self, size: usize) {
+    fn truncate(&mut self, size: usize) -> VfsResult<()> {
         self.0.truncate(size);
+        Ok(())
     }
 
-    fn size(&self) -> usize {
-        self.0.len()
+    fn size(&self) -> VfsResult<usize> {
+        Ok(self.0.len())
     }
 }
 
+/// Used to log and retrieve Vfs errors
+pub struct VfsError {
+    code: i32,
+    message: String,
+}
+
+impl VfsError {
+    pub fn new(code: i32, message: String) -> Self {
+        VfsError { code, message }
+    }
+}
+
+/// Wrapper for `Result`
+pub type VfsResult<T> = Result<T, VfsError>;
+
 /// Wrapper for `pAppData`
-pub struct VfsAppData<T>(T);
+pub struct VfsAppData<T> {
+    data: T,
+    last_err: Mutex<Option<(i32, String)>>,
+}
 
 impl<T> VfsAppData<T> {
     pub fn new(t: T) -> Self {
-        VfsAppData(t)
+        VfsAppData {
+            data: t,
+            last_err: Mutex::new(None),
+        }
     }
 
     /// Leak, then pAppData can be set to VFS
@@ -386,6 +415,18 @@ impl<T> VfsAppData<T> {
     pub unsafe fn from_raw(t: *mut Self) -> VfsAppData<T> {
         *Box::from_raw(t)
     }
+
+    /// Pop vfs last errcode and errmsg
+    pub fn pop_err(&self) -> Option<(i32, String)> {
+        self.last_err.lock().take()
+    }
+
+    /// Store errcode and errmsg
+    pub fn store_err(&self, err: VfsError) -> i32 {
+        let VfsError { code, message } = err;
+        self.last_err.lock().replace((code, message));
+        code
+    }
 }
 
 /// Deref only, returns immutable reference, avoids race conditions
@@ -393,20 +434,20 @@ impl<T> Deref for VfsAppData<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.data
     }
 }
 
 /// Some basic capabilities of file
 pub trait VfsFile {
     /// Abstraction of `xRead`, returns `SQLITE_OK` or `SQLITE_IOERR_SHORT_READ`
-    fn read(&self, buf: &mut [u8], offset: usize) -> i32;
+    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<i32>;
     /// Abstraction of `xWrite`
-    fn write(&mut self, buf: &[u8], offset: usize);
+    fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()>;
     /// Abstraction of `xTruncate`
-    fn truncate(&mut self, size: usize);
+    fn truncate(&mut self, size: usize) -> VfsResult<()>;
     /// Get file size
-    fn size(&self) -> usize;
+    fn size(&self) -> VfsResult<usize>;
 }
 
 /// Make changes to files
@@ -420,15 +461,15 @@ pub trait VfsStore<File, AppData> {
         &*(*vfs).pAppData.cast()
     }
     /// Adding files to the Store, use for `xOpen`
-    fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32);
+    fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32) -> VfsResult<()>;
     /// Checks if the specified file exists in the Store, use for `xOpen`
     fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> bool;
     /// Delete the specified file in the Store, use for `xClose` and `xDelete`
-    fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> Option<File>;
+    fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<File>;
     /// Read the file contents, use for `xRead`, `xFileSize`
-    fn with_file<F: Fn(&File) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> Option<i32>;
+    fn with_file<F: Fn(&File) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> VfsResult<i32>;
     /// Write the file contents, use for `xWrite`, `xTruncate`
-    fn with_file_mut<F: Fn(&mut File) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> Option<i32>;
+    fn with_file_mut<F: Fn(&mut File) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> VfsResult<i32>;
 }
 
 /// Abstraction of SQLite vfs
@@ -473,6 +514,7 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
         flags: ::std::os::raw::c_int,
         pOutFlags: *mut ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int {
+        let app_data = IO::Store::app_data(pVfs);
         let name = if zName.is_null() {
             get_random_name()
         } else {
@@ -483,7 +525,9 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
             if flags & SQLITE_OPEN_CREATE == 0 {
                 return SQLITE_CANTOPEN;
             }
-            IO::Store::add_file(pVfs, &name, flags);
+            if let Err(err) = IO::Store::add_file(pVfs, &name, flags) {
+                return app_data.store_err(err);
+            }
         }
 
         let leak = name.leak();
@@ -507,10 +551,14 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
         zName: *const ::std::os::raw::c_char,
         _syncDir: ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int {
+        let app_data = IO::Store::app_data(pVfs);
         bail!(zName.is_null(), SQLITE_IOERR_DELETE);
         let s = check_result!(CStr::from_ptr(zName).to_str());
-        IO::Store::delete_file(pVfs, s);
-        SQLITE_OK
+        if let Err(err) = IO::Store::delete_file(pVfs, s) {
+            app_data.store_err(err)
+        } else {
+            SQLITE_OK
+        }
     }
 
     unsafe extern "C" fn xAccess(
@@ -543,11 +591,27 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
     }
 
     unsafe extern "C" fn xGetLastError(
-        _pVfs: *mut sqlite3_vfs,
-        _nOut: ::std::os::raw::c_int,
-        _zOut: *mut ::std::os::raw::c_char,
+        pVfs: *mut sqlite3_vfs,
+        nOut: ::std::os::raw::c_int,
+        zOut: *mut ::std::os::raw::c_char,
     ) -> ::std::os::raw::c_int {
-        SQLITE_OK
+        let app_data = IO::Store::app_data(pVfs);
+        let Some((code, msg)) = app_data.pop_err() else {
+            return SQLITE_OK;
+        };
+        if !zOut.is_null() {
+            let nOut = nOut as usize;
+            let count = msg.len().min(nOut);
+            msg.as_ptr().copy_to(zOut.cast(), count);
+            let zero = match nOut.cmp(&msg.len()) {
+                std::cmp::Ordering::Less | std::cmp::Ordering::Equal => nOut,
+                std::cmp::Ordering::Greater => msg.len() + 1,
+            };
+            if zero > 0 {
+                std::ptr::write(zOut.add(zero - 1), 0);
+            }
+        }
+        code
     }
 }
 
@@ -555,7 +619,7 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
 #[allow(clippy::missing_safety_doc)]
 pub trait SQLiteIoMethods {
     type File: VfsFile;
-    type AppData;
+    type AppData: 'static;
     type Store: VfsStore<Self::File, Self::AppData>;
 
     const VERSION: ::std::os::raw::c_int;
@@ -584,9 +648,14 @@ pub trait SQLiteIoMethods {
 
     unsafe extern "C" fn xClose(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
         let vfs_file = SQLiteVfsFile::from_file(pFile);
+        let app_data = Self::Store::app_data(vfs_file.vfs);
+
         if vfs_file.flags & SQLITE_OPEN_DELETEONCLOSE != 0 {
-            check_option!(Self::Store::delete_file(vfs_file.vfs, vfs_file.name()));
+            if let Err(err) = Self::Store::delete_file(vfs_file.vfs, vfs_file.name()) {
+                return app_data.store_err(err);
+            }
         }
+
         drop(unsafe { Box::from_raw(vfs_file.name()) });
         SQLITE_OK
     }
@@ -598,13 +667,22 @@ pub trait SQLiteIoMethods {
         iOfst: sqlite3_int64,
     ) -> ::std::os::raw::c_int {
         let vfs_file = SQLiteVfsFile::from_file(pFile);
+        let app_data = Self::Store::app_data(vfs_file.vfs);
+
         let f = |file: &Self::File| {
             let size = iAmt as usize;
             let offset = iOfst as usize;
             let slice = std::slice::from_raw_parts_mut(zBuf.cast::<u8>(), size);
-            file.read(slice, offset)
+            match file.read(slice, offset) {
+                Ok(code) => code,
+                Err(err) => app_data.store_err(err),
+            }
         };
-        check_option!(Self::Store::with_file(vfs_file, f))
+
+        match Self::Store::with_file(vfs_file, f) {
+            Ok(code) => code,
+            Err(err) => app_data.store_err(err),
+        }
     }
 
     unsafe extern "C" fn xWrite(
@@ -614,13 +692,22 @@ pub trait SQLiteIoMethods {
         iOfst: sqlite3_int64,
     ) -> ::std::os::raw::c_int {
         let vfs_file = SQLiteVfsFile::from_file(pFile);
+        let app_data = Self::Store::app_data(vfs_file.vfs);
+
         let f = |file: &mut Self::File| {
             let (offset, size) = (iOfst as usize, iAmt as usize);
             let slice = std::slice::from_raw_parts(zBuf.cast::<u8>(), size);
-            file.write(slice, offset);
-            SQLITE_OK
+            if let Err(err) = file.write(slice, offset) {
+                app_data.store_err(err)
+            } else {
+                SQLITE_OK
+            }
         };
-        check_option!(Self::Store::with_file_mut(vfs_file, f))
+
+        match Self::Store::with_file_mut(vfs_file, f) {
+            Ok(code) => code,
+            Err(err) => app_data.store_err(err),
+        }
     }
 
     unsafe extern "C" fn xTruncate(
@@ -628,11 +715,20 @@ pub trait SQLiteIoMethods {
         size: sqlite3_int64,
     ) -> ::std::os::raw::c_int {
         let vfs_file = SQLiteVfsFile::from_file(pFile);
+        let app_data = Self::Store::app_data(vfs_file.vfs);
+
         let f = |file: &mut Self::File| {
-            file.truncate(size as usize);
-            SQLITE_OK
+            if let Err(err) = file.truncate(size as usize) {
+                app_data.store_err(err)
+            } else {
+                SQLITE_OK
+            }
         };
-        check_option!(Self::Store::with_file_mut(vfs_file, f))
+
+        match Self::Store::with_file_mut(vfs_file, f) {
+            Ok(code) => code,
+            Err(err) => app_data.store_err(err),
+        }
     }
 
     unsafe extern "C" fn xSync(
@@ -647,11 +743,20 @@ pub trait SQLiteIoMethods {
         pSize: *mut sqlite3_int64,
     ) -> ::std::os::raw::c_int {
         let vfs_file = SQLiteVfsFile::from_file(pFile);
-        let f = |file: &Self::File| {
-            *pSize = file.size() as sqlite3_int64;
-            SQLITE_OK
+        let app_data = Self::Store::app_data(vfs_file.vfs);
+
+        let f = |file: &Self::File| match file.size() {
+            Ok(size) => {
+                *pSize = size as sqlite3_int64;
+                SQLITE_OK
+            }
+            Err(err) => app_data.store_err(err),
         };
-        check_option!(Self::Store::with_file(vfs_file, f))
+
+        match Self::Store::with_file(vfs_file, f) {
+            Ok(code) => code,
+            Err(err) => app_data.store_err(err),
+        }
     }
 
     unsafe extern "C" fn xLock(
