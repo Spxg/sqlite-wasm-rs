@@ -5,7 +5,6 @@ use crate::libsqlite3::*;
 use fragile::Fragile;
 use js_sys::{Date, Math, Number, Uint8Array, WebAssembly};
 use std::{
-    collections::HashMap,
     ffi::{CStr, CString},
     ops::{Deref, DerefMut},
 };
@@ -327,23 +326,11 @@ pub fn page_read<T, G: Fn(usize) -> Option<T>, R: Fn(T, &mut [u8], (usize, usize
     SQLITE_OK
 }
 
-/// Some basic capabilities of Store
-pub trait VfsStore {
-    /// Abstraction of `xRead`, returns `SQLITE_OK` or `SQLITE_IOERR_SHORT_READ`
-    fn read(&self, buf: &mut [u8], offset: usize) -> i32;
-    /// Abstraction of `xWrite`
-    fn write(&mut self, buf: &[u8], offset: usize);
-    /// Abstraction of `xTruncate`
-    fn truncate(&mut self, size: usize);
-    /// Get file size
-    fn size(&self) -> usize;
-}
-
 /// Linear storage in memory, used for temporary DB
 #[derive(Default)]
-pub struct MemLinearStore(Vec<u8>);
+pub struct MemLinearFile(Vec<u8>);
 
-impl VfsStore for MemLinearStore {
+impl VfsFile for MemLinearFile {
     fn read(&self, buf: &mut [u8], offset: usize) -> i32 {
         let size = buf.len();
         let end = size + offset;
@@ -380,58 +367,6 @@ impl VfsStore for MemLinearStore {
     }
 }
 
-/// Memory storage structure by page (block)
-///
-/// Used by memory vfs and relaxed-idb vfs
-#[derive(Default)]
-pub struct MemPageStore {
-    pages: HashMap<usize, Vec<u8>>,
-    file_size: usize,
-    page_size: usize,
-}
-
-impl VfsStore for MemPageStore {
-    fn read(&self, buf: &mut [u8], offset: usize) -> i32 {
-        page_read(
-            buf,
-            self.page_size,
-            self.file_size,
-            offset,
-            |addr| self.pages.get(&addr),
-            |page, buf, (start, end)| {
-                buf.copy_from_slice(&page[start..end]);
-            },
-        )
-    }
-
-    fn write(&mut self, buf: &[u8], offset: usize) {
-        let page_size = buf.len();
-
-        for fill in (self.file_size..offset).step_by(page_size) {
-            self.pages.insert(fill, vec![0; page_size]);
-        }
-        if let Some(buffer) = self.pages.get_mut(&offset) {
-            buffer.copy_from_slice(buf);
-        } else {
-            self.pages.insert(offset, buf.to_vec());
-        }
-
-        self.page_size = page_size;
-        self.file_size = self.file_size.max(offset + page_size);
-    }
-
-    fn truncate(&mut self, size: usize) {
-        for offset in size..self.file_size {
-            self.pages.remove(&offset);
-        }
-        self.file_size = size;
-    }
-
-    fn size(&self) -> usize {
-        self.file_size
-    }
-}
-
 /// Wrapper for `pAppData`
 pub struct VfsAppData<T>(T);
 
@@ -462,14 +397,26 @@ impl<T> Deref for VfsAppData<T> {
     }
 }
 
-/// Control the Store and make changes to files
-pub trait StoreControl<S, A> {
+/// Some basic capabilities of file
+pub trait VfsFile {
+    /// Abstraction of `xRead`, returns `SQLITE_OK` or `SQLITE_IOERR_SHORT_READ`
+    fn read(&self, buf: &mut [u8], offset: usize) -> i32;
+    /// Abstraction of `xWrite`
+    fn write(&mut self, buf: &[u8], offset: usize);
+    /// Abstraction of `xTruncate`
+    fn truncate(&mut self, size: usize);
+    /// Get file size
+    fn size(&self) -> usize;
+}
+
+/// Make changes to files
+pub trait VfsStore<File, AppData> {
     /// Convert pAppData to the type we need
     ///
     /// # Safety
     ///
     /// As long as it is set through the abstract VFS interface, it is safe
-    unsafe fn app_data(vfs: *mut sqlite3_vfs) -> &'static VfsAppData<A> {
+    unsafe fn app_data(vfs: *mut sqlite3_vfs) -> &'static VfsAppData<AppData> {
         &*(*vfs).pAppData.cast()
     }
     /// Adding files to the Store, use for `xOpen`
@@ -477,11 +424,11 @@ pub trait StoreControl<S, A> {
     /// Checks if the specified file exists in the Store, use for `xOpen`
     fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> bool;
     /// Delete the specified file in the Store, use for `xClose` and `xDelete`
-    fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> Option<S>;
+    fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> Option<File>;
     /// Read the file contents, use for `xRead`, `xFileSize`
-    fn with_file<F: Fn(&S) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> Option<i32>;
+    fn with_file<F: Fn(&File) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> Option<i32>;
     /// Write the file contents, use for `xWrite`, `xTruncate`
-    fn with_file_mut<F: Fn(&mut S) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> Option<i32>;
+    fn with_file_mut<F: Fn(&mut File) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> Option<i32>;
 }
 
 /// Abstraction of SQLite vfs
@@ -532,11 +479,11 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
             check_result!(CStr::from_ptr(zName).to_str()).into()
         };
 
-        if !IO::StoreControl::contains_file(pVfs, &name) {
+        if !IO::Store::contains_file(pVfs, &name) {
             if flags & SQLITE_OPEN_CREATE == 0 {
                 return SQLITE_CANTOPEN;
             }
-            IO::StoreControl::add_file(pVfs, &name, flags);
+            IO::Store::add_file(pVfs, &name, flags);
         }
 
         let leak = name.leak();
@@ -562,7 +509,7 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
     ) -> ::std::os::raw::c_int {
         bail!(zName.is_null(), SQLITE_IOERR_DELETE);
         let s = check_result!(CStr::from_ptr(zName).to_str());
-        IO::StoreControl::delete_file(pVfs, s);
+        IO::Store::delete_file(pVfs, s);
         SQLITE_OK
     }
 
@@ -576,7 +523,7 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
             0
         } else {
             let s = check_result!(CStr::from_ptr(zName).to_str());
-            i32::from(IO::StoreControl::contains_file(pVfs, s))
+            i32::from(IO::Store::contains_file(pVfs, s))
         };
 
         SQLITE_OK
@@ -607,9 +554,9 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
 /// Abstraction of SQLite vfs's io methods
 #[allow(clippy::missing_safety_doc)]
 pub trait SQLiteIoMethods {
-    type Store: VfsStore;
+    type File: VfsFile;
     type AppData;
-    type StoreControl: StoreControl<Self::Store, Self::AppData>;
+    type Store: VfsStore<Self::File, Self::AppData>;
 
     const VERSION: ::std::os::raw::c_int;
 
@@ -638,10 +585,7 @@ pub trait SQLiteIoMethods {
     unsafe extern "C" fn xClose(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
         let vfs_file = SQLiteVfsFile::from_file(pFile);
         if vfs_file.flags & SQLITE_OPEN_DELETEONCLOSE != 0 {
-            check_option!(Self::StoreControl::delete_file(
-                vfs_file.vfs,
-                vfs_file.name()
-            ));
+            check_option!(Self::Store::delete_file(vfs_file.vfs, vfs_file.name()));
         }
         drop(unsafe { Box::from_raw(vfs_file.name()) });
         SQLITE_OK
@@ -654,13 +598,13 @@ pub trait SQLiteIoMethods {
         iOfst: sqlite3_int64,
     ) -> ::std::os::raw::c_int {
         let vfs_file = SQLiteVfsFile::from_file(pFile);
-        let f = |store: &Self::Store| {
+        let f = |file: &Self::File| {
             let size = iAmt as usize;
             let offset = iOfst as usize;
             let slice = std::slice::from_raw_parts_mut(zBuf.cast::<u8>(), size);
-            store.read(slice, offset)
+            file.read(slice, offset)
         };
-        check_option!(Self::StoreControl::with_file(vfs_file, f))
+        check_option!(Self::Store::with_file(vfs_file, f))
     }
 
     unsafe extern "C" fn xWrite(
@@ -670,13 +614,13 @@ pub trait SQLiteIoMethods {
         iOfst: sqlite3_int64,
     ) -> ::std::os::raw::c_int {
         let vfs_file = SQLiteVfsFile::from_file(pFile);
-        let f = |store: &mut Self::Store| {
+        let f = |file: &mut Self::File| {
             let (offset, size) = (iOfst as usize, iAmt as usize);
             let slice = std::slice::from_raw_parts(zBuf.cast::<u8>(), size);
-            store.write(slice, offset);
+            file.write(slice, offset);
             SQLITE_OK
         };
-        check_option!(Self::StoreControl::with_file_mut(vfs_file, f))
+        check_option!(Self::Store::with_file_mut(vfs_file, f))
     }
 
     unsafe extern "C" fn xTruncate(
@@ -684,11 +628,11 @@ pub trait SQLiteIoMethods {
         size: sqlite3_int64,
     ) -> ::std::os::raw::c_int {
         let vfs_file = SQLiteVfsFile::from_file(pFile);
-        let f = |store: &mut Self::Store| {
-            store.truncate(size as usize);
+        let f = |file: &mut Self::File| {
+            file.truncate(size as usize);
             SQLITE_OK
         };
-        check_option!(Self::StoreControl::with_file_mut(vfs_file, f))
+        check_option!(Self::Store::with_file_mut(vfs_file, f))
     }
 
     unsafe extern "C" fn xSync(
@@ -703,11 +647,11 @@ pub trait SQLiteIoMethods {
         pSize: *mut sqlite3_int64,
     ) -> ::std::os::raw::c_int {
         let vfs_file = SQLiteVfsFile::from_file(pFile);
-        let f = |store: &Self::Store| {
-            *pSize = store.size() as sqlite3_int64;
+        let f = |file: &Self::File| {
+            *pSize = file.size() as sqlite3_int64;
             SQLITE_OK
         };
-        check_option!(Self::StoreControl::with_file(vfs_file, f))
+        check_option!(Self::Store::with_file(vfs_file, f))
     }
 
     unsafe extern "C" fn xLock(

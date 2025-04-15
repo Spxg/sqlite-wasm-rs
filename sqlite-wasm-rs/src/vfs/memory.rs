@@ -2,8 +2,8 @@
 
 use crate::libsqlite3::*;
 use crate::vfs::utils::{
-    MemLinearStore, MemPageStore, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, StoreControl,
-    VfsAppData, VfsStore,
+    page_read, MemLinearFile, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsFile,
+    VfsStore,
 };
 
 use parking_lot::RwLock;
@@ -11,54 +11,103 @@ use std::collections::HashMap;
 
 type MemAppData = RwLock<HashMap<String, MemFile>>;
 
+#[derive(Default)]
+struct MemPageFile {
+    pages: HashMap<usize, Vec<u8>>,
+    file_size: usize,
+    page_size: usize,
+}
+
+impl VfsFile for MemPageFile {
+    fn read(&self, buf: &mut [u8], offset: usize) -> i32 {
+        page_read(
+            buf,
+            self.page_size,
+            self.file_size,
+            offset,
+            |addr| self.pages.get(&addr),
+            |page, buf, (start, end)| {
+                buf.copy_from_slice(&page[start..end]);
+            },
+        )
+    }
+
+    fn write(&mut self, buf: &[u8], offset: usize) {
+        let page_size = buf.len();
+
+        for fill in (self.file_size..offset).step_by(page_size) {
+            self.pages.insert(fill, vec![0; page_size]);
+        }
+        if let Some(buffer) = self.pages.get_mut(&offset) {
+            buffer.copy_from_slice(buf);
+        } else {
+            self.pages.insert(offset, buf.to_vec());
+        }
+
+        self.page_size = page_size;
+        self.file_size = self.file_size.max(offset + page_size);
+    }
+
+    fn truncate(&mut self, size: usize) {
+        for offset in size..self.file_size {
+            self.pages.remove(&offset);
+        }
+        self.file_size = size;
+    }
+
+    fn size(&self) -> usize {
+        self.file_size
+    }
+}
+
 enum MemFile {
-    Main(MemPageStore),
-    Temp(MemLinearStore),
+    Main(MemPageFile),
+    Temp(MemLinearFile),
 }
 
 impl MemFile {
     fn new(flags: i32) -> Self {
         if flags & SQLITE_OPEN_MAIN_DB == 0 {
-            Self::Temp(MemLinearStore::default())
+            Self::Temp(MemLinearFile::default())
         } else {
-            Self::Main(MemPageStore::default())
+            Self::Main(MemPageFile::default())
         }
     }
 }
 
-impl VfsStore for MemFile {
+impl VfsFile for MemFile {
     fn read(&self, buf: &mut [u8], offset: usize) -> i32 {
         match self {
-            MemFile::Main(mem_page_store) => mem_page_store.read(buf, offset),
-            MemFile::Temp(mem_linear_store) => mem_linear_store.read(buf, offset),
+            MemFile::Main(mem_page_file) => mem_page_file.read(buf, offset),
+            MemFile::Temp(mem_linear_file) => mem_linear_file.read(buf, offset),
         }
     }
 
     fn write(&mut self, buf: &[u8], offset: usize) {
         match self {
-            MemFile::Main(mem_page_store) => mem_page_store.write(buf, offset),
-            MemFile::Temp(mem_linear_store) => mem_linear_store.write(buf, offset),
+            MemFile::Main(mem_page_file) => mem_page_file.write(buf, offset),
+            MemFile::Temp(mem_linear_file) => mem_linear_file.write(buf, offset),
         }
     }
 
     fn truncate(&mut self, size: usize) {
         match self {
-            MemFile::Main(mem_page_store) => mem_page_store.truncate(size),
-            MemFile::Temp(mem_linear_store) => mem_linear_store.truncate(size),
+            MemFile::Main(mem_page_file) => mem_page_file.truncate(size),
+            MemFile::Temp(mem_linear_file) => mem_linear_file.truncate(size),
         }
     }
 
     fn size(&self) -> usize {
         match self {
-            MemFile::Main(mem_page_store) => mem_page_store.size(),
-            MemFile::Temp(mem_linear_store) => mem_linear_store.size(),
+            MemFile::Main(mem_page_file) => mem_page_file.size(),
+            MemFile::Temp(mem_linear_file) => mem_linear_file.size(),
         }
     }
 }
 
-struct MemStoreControl;
+struct MemStore;
 
-impl StoreControl<MemFile, MemAppData> for MemStoreControl {
+impl VfsStore<MemFile, MemAppData> for MemStore {
     fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32) {
         unsafe {
             Self::app_data(vfs)
@@ -91,9 +140,9 @@ impl StoreControl<MemFile, MemAppData> for MemStoreControl {
 struct MemIoMethods;
 
 impl SQLiteIoMethods for MemIoMethods {
-    type Store = MemFile;
+    type File = MemFile;
     type AppData = MemAppData;
-    type StoreControl = MemStoreControl;
+    type Store = MemStore;
 
     const VERSION: ::std::os::raw::c_int = 1;
 }
