@@ -2,8 +2,8 @@
 
 use crate::vfs::utils::{
     copy_to_slice, copy_to_uint8_array, copy_to_uint8_array_subarray, page_read, register_vfs,
-    FragileComfirmed, MemLinearFile, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData,
-    VfsError, VfsFile, VfsStore, SQLITE3_HEADER,
+    FragileComfirmed, MemLinearFile, RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile,
+    VfsAppData, VfsError, VfsFile, VfsResult, VfsStore, SQLITE3_HEADER,
 };
 use crate::{bail, check_option, check_result, libsqlite3::*};
 
@@ -58,8 +58,8 @@ struct IdbPageFile {
 }
 
 impl VfsFile for IdbPageFile {
-    fn read(&self, buf: &mut [u8], offset: usize) -> i32 {
-        page_read(
+    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<i32> {
+        Ok(page_read(
             buf,
             self.block_size,
             self.file_size,
@@ -68,10 +68,10 @@ impl VfsFile for IdbPageFile {
             |page, buf, (start, end)| {
                 copy_to_slice(&page.subarray(start as u32, end as u32), buf);
             },
-        )
+        ))
     }
 
-    fn write(&mut self, buf: &[u8], offset: usize) {
+    fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()> {
         let page_size = buf.len();
 
         for fill in (self.file_size..offset).step_by(page_size) {
@@ -92,40 +92,42 @@ impl VfsFile for IdbPageFile {
         self.tx_blocks.insert(offset);
         self.block_size = page_size;
         self.file_size = self.file_size.max(offset + page_size);
+        Ok(())
     }
 
-    fn truncate(&mut self, size: usize) {
+    fn truncate(&mut self, size: usize) -> VfsResult<()> {
         self.file_size = size;
+        Ok(())
     }
 
-    fn size(&self) -> usize {
-        self.file_size
+    fn size(&self) -> VfsResult<usize> {
+        Ok(self.file_size)
     }
 }
 
 impl VfsFile for IdbFile {
-    fn read(&self, buf: &mut [u8], offset: usize) -> i32 {
+    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<i32> {
         match self {
             IdbFile::Main(idb_page_file) => idb_page_file.read(buf, offset),
             IdbFile::Temp(mem_linear_file) => mem_linear_file.read(buf, offset),
         }
     }
 
-    fn write(&mut self, buf: &[u8], offset: usize) {
+    fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()> {
         match self {
             IdbFile::Main(idb_page_file) => idb_page_file.write(buf, offset),
             IdbFile::Temp(mem_linear_file) => mem_linear_file.write(buf, offset),
         }
     }
 
-    fn truncate(&mut self, size: usize) {
+    fn truncate(&mut self, size: usize) -> VfsResult<()> {
         match self {
             IdbFile::Main(idb_page_file) => idb_page_file.truncate(size),
             IdbFile::Temp(mem_linear_file) => mem_linear_file.truncate(size),
         }
     }
 
-    fn size(&self) -> usize {
+    fn size(&self) -> VfsResult<usize> {
         match self {
             IdbFile::Main(idb_page_file) => idb_page_file.size(),
             IdbFile::Temp(mem_linear_file) => mem_linear_file.size(),
@@ -458,24 +460,33 @@ fn set_block(path: &JsValue, offset: usize, data: &Uint8Array) -> JsValue {
 struct RelaxedIdbStore;
 
 impl VfsStore<IdbFile, RelaxedIdb> for RelaxedIdbStore {
-    fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32) {
+    fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32) -> VfsResult<()> {
         unsafe {
             Self::app_data(vfs)
                 .name2file
                 .write()
                 .insert(file.into(), IdbFile::new(flags));
         }
+        Ok(())
     }
 
     fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> bool {
         unsafe { Self::app_data(vfs).name2file.read().contains_key(file) }
     }
 
-    fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> Option<IdbFile> {
+    fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<IdbFile> {
         let pool = unsafe { Self::app_data(vfs) };
-        let idb_file = pool.name2file.write().remove(file);
+        let idb_file = match pool.name2file.write().remove(file) {
+            Some(file) => file,
+            None => {
+                return Err(VfsError::new(
+                    SQLITE_IOERR_DELETE,
+                    format!("{file} not found"),
+                ))
+            }
+        };
         // temp db never put into indexed db, no need to delete
-        if let Some(IdbFile::Main(_)) = &idb_file {
+        if let IdbFile::Main(_) = &idb_file {
             if pool
                 .tx
                 .send(IdbCommit {
@@ -485,24 +496,30 @@ impl VfsStore<IdbFile, RelaxedIdb> for RelaxedIdbStore {
                 .is_err()
             {}
         }
-        idb_file
+        Ok(idb_file)
     }
 
-    fn with_file<F: Fn(&IdbFile) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> Option<i32> {
-        Some(unsafe {
-            f(Self::app_data(vfs_file.vfs)
-                .name2file
-                .read()
-                .get(vfs_file.name())?)
+    fn with_file<F: Fn(&IdbFile) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> VfsResult<i32> {
+        Ok(unsafe {
+            let name = vfs_file.name();
+            match Self::app_data(vfs_file.vfs).name2file.read().get(name) {
+                Some(file) => f(file),
+                None => return Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
+            }
         })
     }
 
-    fn with_file_mut<F: Fn(&mut IdbFile) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> Option<i32> {
-        Some(unsafe {
-            f(Self::app_data(vfs_file.vfs)
+    fn with_file_mut<F: Fn(&mut IdbFile) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> VfsResult<i32> {
+        Ok(unsafe {
+            let name = vfs_file.name();
+            match Self::app_data(vfs_file.vfs)
                 .name2file
                 .write()
-                .get_mut(vfs_file.name())?)
+                .get_mut(vfs_file.name())
+            {
+                Some(file) => f(file),
+                None => return Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
+            }
         })
     }
 }
@@ -551,10 +568,16 @@ impl SQLiteIoMethods for RelaxedIdbIoMethods {
                     } else if file.block_size == 0 {
                         file.block_size = page_size;
                     } else {
-                        return SQLITE_ERROR;
+                        return pool.store_err(VfsError::new(
+                            SQLITE_ERROR,
+                            "page_size cannot be changed".into(),
+                        ));
                     }
                 } else if key == "synchronous" && value != "off" {
-                    return SQLITE_ERROR;
+                    return pool.store_err(VfsError::new(
+                        SQLITE_ERROR,
+                        "relaxed-idb vfs only supports synchronous=off".into(),
+                    ));
                 };
             }
             SQLITE_FCNTL_SYNC | SQLITE_FCNTL_COMMIT_PHASETWO => {
@@ -567,7 +590,10 @@ impl SQLiteIoMethods for RelaxedIdbIoMethods {
                         })
                         .is_err()
                     {
-                        return SQLITE_ERROR;
+                        return pool.store_err(VfsError::new(
+                            SQLITE_ERROR,
+                            format!("failed to send sync task, file: {name}"),
+                        ));
                     }
                     file.sync_notified = true;
                 }
@@ -588,7 +614,7 @@ impl SQLiteVfs<RelaxedIdbIoMethods> for RelaxedIdbVfs {
 #[derive(thiserror::Error, Debug)]
 pub enum RelaxedIdbError {
     #[error(transparent)]
-    Vfs(#[from] VfsError),
+    Vfs(#[from] RegisterVfsError),
     #[error(transparent)]
     OpenDb(#[from] indexed_db_futures::error::OpenDbError),
     #[error(transparent)]
