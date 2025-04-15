@@ -2,8 +2,8 @@
 
 use crate::vfs::utils::{
     copy_to_slice, copy_to_uint8_array, copy_to_uint8_array_subarray, page_read, register_vfs,
-    FragileComfirmed, MemLinearStore, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, StoreControl,
-    VfsAppData, VfsError, VfsStore, SQLITE3_HEADER,
+    FragileComfirmed, MemLinearFile, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData,
+    VfsError, VfsFile, VfsStore, SQLITE3_HEADER,
 };
 use crate::{bail, check_option, check_result, libsqlite3::*};
 
@@ -34,22 +34,22 @@ enum IdbCommitOp {
 }
 
 enum IdbFile {
-    Main(IdbPageStore),
-    Temp(MemLinearStore),
+    Main(IdbPageFile),
+    Temp(MemLinearFile),
 }
 
 impl IdbFile {
     fn new(flags: i32) -> Self {
         if flags & SQLITE_OPEN_MAIN_DB == 0 {
-            Self::Temp(MemLinearStore::default())
+            Self::Temp(MemLinearFile::default())
         } else {
-            Self::Main(IdbPageStore::default())
+            Self::Main(IdbPageFile::default())
         }
     }
 }
 
 #[derive(Default)]
-struct IdbPageStore {
+struct IdbPageFile {
     file_size: usize,
     block_size: usize,
     blocks: HashMap<usize, FragileComfirmed<Uint8Array>>,
@@ -57,7 +57,7 @@ struct IdbPageStore {
     sync_notified: bool,
 }
 
-impl VfsStore for IdbPageStore {
+impl VfsFile for IdbPageFile {
     fn read(&self, buf: &mut [u8], offset: usize) -> i32 {
         page_read(
             buf,
@@ -103,32 +103,32 @@ impl VfsStore for IdbPageStore {
     }
 }
 
-impl VfsStore for IdbFile {
+impl VfsFile for IdbFile {
     fn read(&self, buf: &mut [u8], offset: usize) -> i32 {
         match self {
-            IdbFile::Main(idb_page_store) => idb_page_store.read(buf, offset),
-            IdbFile::Temp(mem_linear_store) => mem_linear_store.read(buf, offset),
+            IdbFile::Main(idb_page_file) => idb_page_file.read(buf, offset),
+            IdbFile::Temp(mem_linear_file) => mem_linear_file.read(buf, offset),
         }
     }
 
     fn write(&mut self, buf: &[u8], offset: usize) {
         match self {
-            IdbFile::Main(idb_page_store) => idb_page_store.write(buf, offset),
-            IdbFile::Temp(mem_linear_store) => mem_linear_store.write(buf, offset),
+            IdbFile::Main(idb_page_file) => idb_page_file.write(buf, offset),
+            IdbFile::Temp(mem_linear_file) => mem_linear_file.write(buf, offset),
         }
     }
 
     fn truncate(&mut self, size: usize) {
         match self {
-            IdbFile::Main(idb_page_store) => idb_page_store.truncate(size),
-            IdbFile::Temp(mem_linear_store) => mem_linear_store.truncate(size),
+            IdbFile::Main(idb_page_file) => idb_page_file.truncate(size),
+            IdbFile::Temp(mem_linear_file) => mem_linear_file.truncate(size),
         }
     }
 
     fn size(&self) -> usize {
         match self {
-            IdbFile::Main(idb_page_store) => idb_page_store.size(),
-            IdbFile::Temp(mem_linear_store) => mem_linear_store.size(),
+            IdbFile::Main(idb_page_file) => idb_page_file.size(),
+            IdbFile::Temp(mem_linear_file) => mem_linear_file.size(),
         }
     }
 }
@@ -177,7 +177,7 @@ async fn preload_db_impl(
                 db.blocks.insert(offset, FragileComfirmed::new(data));
             }
             hash_map::Entry::Vacant(vacant_entry) => {
-                vacant_entry.insert(IdbFile::Main(IdbPageStore {
+                vacant_entry.insert(IdbFile::Main(IdbPageFile {
                     file_size: data.length() as _,
                     block_size: data.length() as _,
                     blocks: HashMap::from([(offset, FragileComfirmed::new(data))]),
@@ -293,7 +293,7 @@ impl RelaxedIdb {
         let tx_blocks = blocks.keys().copied().collect();
         self.name2file.write().insert(
             path.into(),
-            IdbFile::Main(IdbPageStore {
+            IdbFile::Main(IdbPageFile {
                 file_size: blocks.len() * page_size,
                 block_size: page_size,
                 blocks,
@@ -450,9 +450,9 @@ fn set_block(path: &JsValue, offset: usize, data: &Uint8Array) -> JsValue {
     block.into()
 }
 
-struct RelaxedIdbStoreControl;
+struct RelaxedIdbStore;
 
-impl StoreControl<IdbFile, RelaxedIdb> for RelaxedIdbStoreControl {
+impl VfsStore<IdbFile, RelaxedIdb> for RelaxedIdbStore {
     fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32) {
         unsafe {
             Self::app_data(vfs)
@@ -484,7 +484,12 @@ impl StoreControl<IdbFile, RelaxedIdb> for RelaxedIdbStoreControl {
     }
 
     fn with_file<F: Fn(&IdbFile) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> Option<i32> {
-        Some(unsafe { f(Self::app_data(vfs_file.vfs).name2file.read().get(vfs_file.name())?) })
+        Some(unsafe {
+            f(Self::app_data(vfs_file.vfs)
+                .name2file
+                .read()
+                .get(vfs_file.name())?)
+        })
     }
 
     fn with_file_mut<F: Fn(&mut IdbFile) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> Option<i32> {
@@ -500,9 +505,9 @@ impl StoreControl<IdbFile, RelaxedIdb> for RelaxedIdbStoreControl {
 struct RelaxedIdbIoMethods;
 
 impl SQLiteIoMethods for RelaxedIdbIoMethods {
-    type Store = IdbFile;
+    type File = IdbFile;
     type AppData = RelaxedIdb;
-    type StoreControl = RelaxedIdbStoreControl;
+    type Store = RelaxedIdbStore;
 
     const VERSION: ::std::os::raw::c_int = 1;
 
@@ -512,7 +517,7 @@ impl SQLiteIoMethods for RelaxedIdbIoMethods {
         pArg: *mut ::std::os::raw::c_void,
     ) -> ::std::os::raw::c_int {
         let vfs_file = SQLiteVfsFile::from_file(pFile);
-        let pool = Self::StoreControl::app_data(vfs_file.vfs);
+        let pool = Self::Store::app_data(vfs_file.vfs);
         let name = vfs_file.name();
 
         let mut name2file = pool.name2file.write();
@@ -715,7 +720,7 @@ pub async fn install(options: Option<&RelaxedIdbCfg>, default_vfs: bool) -> Resu
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let pool = RelaxedIdb::new(options, tx).await?;
         let vfs = register_vfs::<RelaxedIdb, _, RelaxedIdbVfs>(vfs_name, pool, default_vfs)?;
-        let app_data = unsafe { RelaxedIdbStoreControl::app_data(vfs) };
+        let app_data = unsafe { RelaxedIdbStore::app_data(vfs) };
 
         name2vfs.insert(vfs_name.into(), app_data);
         wasm_bindgen_futures::spawn_local(app_data.commit_loop(rx));

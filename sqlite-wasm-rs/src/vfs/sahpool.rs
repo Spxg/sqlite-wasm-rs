@@ -5,9 +5,8 @@
 //! <https://github.com/sqlite/sqlite/blob/master/ext/wasm/api/sqlite3-vfs-opfs-sahpool.c-pp.js>
 
 use crate::vfs::utils::{
-    copy_to_uint8_array_subarray, copy_to_vec, get_random_name, x_methods_shim,
-    FragileComfirmed, VfsError, VfsPtr, SQLITE3_HEADER,
-    register_vfs_legacy,
+    copy_to_uint8_array_subarray, copy_to_vec, get_random_name, register_vfs_legacy,
+    x_methods_shim, FragileComfirmed, VfsError, VfsPtr, SQLITE3_HEADER,
 };
 use crate::{bail, libsqlite3::*};
 
