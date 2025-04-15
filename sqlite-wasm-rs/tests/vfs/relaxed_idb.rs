@@ -108,7 +108,7 @@ async fn test_idb_vfs_utils() {
 
     // export and import to new.db
     let db = util.export_file("test_idb_vfs_utils.db").unwrap();
-    util.import_db("new.db", &db, 512).await.unwrap();
+    util.import_db("new.db", &db).await.unwrap();
 
     let mut db = std::ptr::null_mut();
 
@@ -121,6 +121,7 @@ async fn test_idb_vfs_utils() {
         )
     };
     assert_eq!(SQLITE_OK, ret);
+    prepare_simple_db(db);
 
     unsafe {
         sqlite3_close(db);
