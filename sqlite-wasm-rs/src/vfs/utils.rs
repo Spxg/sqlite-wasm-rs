@@ -14,24 +14,6 @@ use wasm_bindgen::{prelude::wasm_bindgen, JsCast};
 /// The header of the SQLite file is used to determine whether the imported file is legal.
 pub const SQLITE3_HEADER: &str = "SQLite format 3";
 
-/// Wrap the pVfs pointer, which is often used in VFS implementation.
-///
-/// Use vfs pointer as the map key to find the corresponding vfs handle, such as `OpfsSAHPool`.
-#[derive(Hash, PartialEq, Eq)]
-pub struct VfsPtr(pub *mut sqlite3_vfs);
-
-unsafe impl Send for VfsPtr {}
-unsafe impl Sync for VfsPtr {}
-
-/// Wrap the pFile pointer, which is often used in VFS implementation.
-///
-/// Use file pointer as the map key to find the corresponding file handle, such as `MemFile`.
-#[derive(Hash, PartialEq, Eq)]
-pub struct FilePtr(pub *mut sqlite3_file);
-
-unsafe impl Send for FilePtr {}
-unsafe impl Sync for FilePtr {}
-
 /// A [`FragileComfirmed<T>`] wraps a non sendable `T` to be safely send to other threads.
 ///
 /// Once the value has been wrapped it can be sent to other threads but access
@@ -217,11 +199,13 @@ impl SQLiteVfsFile {
         &*file.cast::<Self>()
     }
 
-    /// Get the file name. When xClose, you can release the memory by `drop(Box::from_raw(ptr));`.
+    /// Get the file name.
     ///
     /// # Safety
+    /// 
+    /// When xClose, you can free the memory by `drop(Box::from_raw(ptr));`.
     ///
-    /// You must ensure that the pointer passed in is `SQLiteVfsFile`
+    /// Do not use again after free.
     pub unsafe fn name(&self) -> &'static mut str {
         // emm, `from_raw_parts_mut` is unstable
         std::str::from_utf8_unchecked_mut(std::slice::from_raw_parts_mut(
@@ -243,28 +227,6 @@ pub enum RegisterVfsError {
     ToCStr,
     #[error("An error occurred while registering vfs with sqlite")]
     RegisterVfs,
-}
-
-/// FIXME: delete later
-pub fn register_vfs_legacy(
-    vfs_name: &str,
-    default_vfs: bool,
-    register_vfs: fn(*const ::std::os::raw::c_char) -> sqlite3_vfs,
-) -> Result<*mut sqlite3_vfs, RegisterVfsError> {
-    let name = CString::new(vfs_name).map_err(|_| RegisterVfsError::ToCStr)?;
-    let name_ptr = name.into_raw();
-    let vfs = Box::leak(Box::new(register_vfs(name_ptr)));
-    let ret = unsafe { sqlite3_vfs_register(vfs, i32::from(default_vfs)) };
-
-    if ret != SQLITE_OK {
-        unsafe {
-            drop(Box::from_raw(vfs));
-            drop(CString::from_raw(name_ptr));
-        }
-        return Err(RegisterVfsError::RegisterVfs);
-    }
-
-    Ok(vfs as *mut sqlite3_vfs)
 }
 
 /// Register vfs general method
