@@ -180,6 +180,14 @@ macro_rules! check_result {
     };
 }
 
+/// Mark unused parameter
+#[macro_export]
+macro_rules! unused {
+    ($ex:expr) => {
+        let _ = $ex;
+    };
+}
+
 /// The actual pFile type in Vfs.
 ///
 /// `szOsFile` must be set to the size of `SQLiteVfsFile`.
@@ -370,6 +378,10 @@ impl VfsFile for MemLinearFile {
         Ok(())
     }
 
+    fn flush(&mut self) -> VfsResult<()> {
+        Ok(())
+    }
+
     fn size(&self) -> VfsResult<usize> {
         Ok(self.0.len())
     }
@@ -446,6 +458,8 @@ pub trait VfsFile {
     fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()>;
     /// Abstraction of `xTruncate`
     fn truncate(&mut self, size: usize) -> VfsResult<()>;
+    /// Abstraction of `xSync`
+    fn flush(&mut self) -> VfsResult<()>;
     /// Get file size
     fn size(&self) -> VfsResult<usize>;
 }
@@ -460,15 +474,20 @@ pub trait VfsStore<File, AppData> {
     unsafe fn app_data(vfs: *mut sqlite3_vfs) -> &'static VfsAppData<AppData> {
         &*(*vfs).pAppData.cast()
     }
+    /// Get file path, use for `xOpen`
+    fn name2path(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<String> {
+        unused!(vfs);
+        Ok(file.into())
+    }
     /// Adding files to the Store, use for `xOpen`
     fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32) -> VfsResult<()>;
     /// Checks if the specified file exists in the Store, use for `xOpen`
     fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> bool;
     /// Delete the specified file in the Store, use for `xClose` and `xDelete`
-    fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<File>;
+    fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<()>;
     /// Read the file contents, use for `xRead`, `xFileSize`
     fn with_file<F: Fn(&File) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> VfsResult<i32>;
-    /// Write the file contents, use for `xWrite`, `xTruncate`
+    /// Write the file contents, use for `xWrite`, `xTruncate` and `xSync`
     fn with_file_mut<F: Fn(&mut File) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> VfsResult<i32>;
 }
 
@@ -515,15 +534,24 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
         pOutFlags: *mut ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int {
         let app_data = IO::Store::app_data(pVfs);
+
         let name = if zName.is_null() {
             get_random_name()
         } else {
             check_result!(CStr::from_ptr(zName).to_str()).into()
         };
 
+        let name = match IO::Store::name2path(pVfs, &name) {
+            Ok(name) => name,
+            Err(err) => return app_data.store_err(err),
+        };
+
         if !IO::Store::contains_file(pVfs, &name) {
             if flags & SQLITE_OPEN_CREATE == 0 {
-                return SQLITE_CANTOPEN;
+                return app_data.store_err(VfsError::new(
+                    SQLITE_CANTOPEN,
+                    format!("file not found: {name}"),
+                ));
             }
             if let Err(err) = IO::Store::add_file(pVfs, &name, flags) {
                 return app_data.store_err(err);
@@ -549,8 +577,10 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
     unsafe extern "C" fn xDelete(
         pVfs: *mut sqlite3_vfs,
         zName: *const ::std::os::raw::c_char,
-        _syncDir: ::std::os::raw::c_int,
+        syncDir: ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int {
+        unused!(syncDir);
+
         let app_data = IO::Store::app_data(pVfs);
         bail!(zName.is_null(), SQLITE_IOERR_DELETE);
         let s = check_result!(CStr::from_ptr(zName).to_str());
@@ -564,9 +594,11 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
     unsafe extern "C" fn xAccess(
         pVfs: *mut sqlite3_vfs,
         zName: *const ::std::os::raw::c_char,
-        _flags: ::std::os::raw::c_int,
+        flags: ::std::os::raw::c_int,
         pResOut: *mut ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int {
+        unused!(flags);
+
         *pResOut = if zName.is_null() {
             0
         } else {
@@ -578,11 +610,12 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
     }
 
     unsafe extern "C" fn xFullPathname(
-        _pVfs: *mut sqlite3_vfs,
+        pVfs: *mut sqlite3_vfs,
         zName: *const ::std::os::raw::c_char,
         nOut: ::std::os::raw::c_int,
         zOut: *mut ::std::os::raw::c_char,
     ) -> ::std::os::raw::c_int {
+        unused!(pVfs);
         bail!(zName.is_null() || zOut.is_null(), SQLITE_CANTOPEN);
         let len = CStr::from_ptr(zName).count_bytes() + 1;
         bail!(len > nOut as usize, SQLITE_CANTOPEN);
@@ -656,7 +689,8 @@ pub trait SQLiteIoMethods {
             }
         }
 
-        drop(unsafe { Box::from_raw(vfs_file.name()) });
+        drop(Box::from_raw(vfs_file.name()));
+
         SQLITE_OK
     }
 
@@ -732,10 +766,26 @@ pub trait SQLiteIoMethods {
     }
 
     unsafe extern "C" fn xSync(
-        _pFile: *mut sqlite3_file,
-        _flags: ::std::os::raw::c_int,
+        pFile: *mut sqlite3_file,
+        flags: ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int {
-        SQLITE_OK
+        unused!(flags);
+
+        let vfs_file = SQLiteVfsFile::from_file(pFile);
+        let app_data = Self::Store::app_data(vfs_file.vfs);
+
+        let f = |file: &mut Self::File| {
+            if let Err(err) = file.flush() {
+                app_data.store_err(err)
+            } else {
+                SQLITE_OK
+            }
+        };
+
+        match Self::Store::with_file_mut(vfs_file, f) {
+            Ok(code) => code,
+            Err(err) => app_data.store_err(err),
+        }
     }
 
     unsafe extern "C" fn xFileSize(
@@ -760,40 +810,46 @@ pub trait SQLiteIoMethods {
     }
 
     unsafe extern "C" fn xLock(
-        _pFile: *mut sqlite3_file,
-        _eLock: ::std::os::raw::c_int,
+        pFile: *mut sqlite3_file,
+        eLock: ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int {
+        unused!((pFile, eLock));
         SQLITE_OK
     }
 
     unsafe extern "C" fn xUnlock(
-        _pFile: *mut sqlite3_file,
-        _eLock: ::std::os::raw::c_int,
+        pFile: *mut sqlite3_file,
+        eLock: ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int {
+        unused!((pFile, eLock));
         SQLITE_OK
     }
 
     unsafe extern "C" fn xCheckReservedLock(
-        _pFile: *mut sqlite3_file,
+        pFile: *mut sqlite3_file,
         pResOut: *mut ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int {
+        unused!(pFile);
         *pResOut = 0;
         SQLITE_OK
     }
 
     unsafe extern "C" fn xFileControl(
-        _pFile: *mut sqlite3_file,
-        _op: ::std::os::raw::c_int,
-        _pArg: *mut ::std::os::raw::c_void,
+        pFile: *mut sqlite3_file,
+        op: ::std::os::raw::c_int,
+        pArg: *mut ::std::os::raw::c_void,
     ) -> ::std::os::raw::c_int {
+        unused!((pFile, op, pArg));
         SQLITE_NOTFOUND
     }
 
-    unsafe extern "C" fn xSectorSize(_pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
+    unsafe extern "C" fn xSectorSize(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
+        unused!(pFile);
         512
     }
 
-    unsafe extern "C" fn xDeviceCharacteristics(_arg1: *mut sqlite3_file) -> ::std::os::raw::c_int {
+    unsafe extern "C" fn xDeviceCharacteristics(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
+        unused!(pFile);
         0
     }
 }
@@ -810,7 +866,6 @@ pub mod x_methods_shim {
         microseconds: ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int {
         use std::{thread, time::Duration};
-
         thread::sleep(Duration::from_micros(microseconds as u64));
         SQLITE_OK
     }
