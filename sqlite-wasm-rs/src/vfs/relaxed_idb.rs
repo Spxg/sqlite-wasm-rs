@@ -100,6 +100,10 @@ impl VfsFile for IdbPageFile {
         Ok(())
     }
 
+    fn flush(&mut self) -> VfsResult<()> {
+        Ok(())
+    }
+
     fn size(&self) -> VfsResult<usize> {
         Ok(self.file_size)
     }
@@ -124,6 +128,13 @@ impl VfsFile for IdbFile {
         match self {
             IdbFile::Main(idb_page_file) => idb_page_file.truncate(size),
             IdbFile::Temp(mem_linear_file) => mem_linear_file.truncate(size),
+        }
+    }
+
+    fn flush(&mut self) -> VfsResult<()> {
+        match self {
+            IdbFile::Main(idb_page_file) => idb_page_file.flush(),
+            IdbFile::Temp(mem_linear_file) => mem_linear_file.flush(),
         }
     }
 
@@ -461,20 +472,19 @@ struct RelaxedIdbStore;
 
 impl VfsStore<IdbFile, RelaxedIdb> for RelaxedIdbStore {
     fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32) -> VfsResult<()> {
-        unsafe {
-            Self::app_data(vfs)
-                .name2file
-                .write()
-                .insert(file.into(), IdbFile::new(flags));
-        }
+        let pool = unsafe { Self::app_data(vfs) };
+        pool.name2file
+            .write()
+            .insert(file.into(), IdbFile::new(flags));
         Ok(())
     }
 
     fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> bool {
-        unsafe { Self::app_data(vfs).name2file.read().contains_key(file) }
+        let pool = unsafe { Self::app_data(vfs) };
+        pool.name2file.read().contains_key(file)
     }
 
-    fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<IdbFile> {
+    fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<()> {
         let pool = unsafe { Self::app_data(vfs) };
         let idb_file = match pool.name2file.write().remove(file) {
             Some(file) => file,
@@ -496,31 +506,25 @@ impl VfsStore<IdbFile, RelaxedIdb> for RelaxedIdbStore {
                 .is_err()
             {}
         }
-        Ok(idb_file)
+        Ok(())
     }
 
     fn with_file<F: Fn(&IdbFile) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> VfsResult<i32> {
-        Ok(unsafe {
-            let name = vfs_file.name();
-            match Self::app_data(vfs_file.vfs).name2file.read().get(name) {
-                Some(file) => f(file),
-                None => return Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
-            }
-        })
+        let name = unsafe { vfs_file.name() };
+        let pool = unsafe { Self::app_data(vfs_file.vfs) };
+        match pool.name2file.read().get(name) {
+            Some(file) => Ok(f(file)),
+            None => Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
+        }
     }
 
     fn with_file_mut<F: Fn(&mut IdbFile) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> VfsResult<i32> {
-        Ok(unsafe {
-            let name = vfs_file.name();
-            match Self::app_data(vfs_file.vfs)
-                .name2file
-                .write()
-                .get_mut(vfs_file.name())
-            {
-                Some(file) => f(file),
-                None => return Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
-            }
-        })
+        let name = unsafe { vfs_file.name() };
+        let pool = unsafe { Self::app_data(vfs_file.vfs) };
+        match pool.name2file.write().get_mut(name) {
+            Some(file) => Ok(f(file)),
+            None => Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
+        }
     }
 }
 

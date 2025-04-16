@@ -58,6 +58,10 @@ impl VfsFile for MemPageFile {
         Ok(())
     }
 
+    fn flush(&mut self) -> VfsResult<()> {
+        Ok(())
+    }
+
     fn size(&self) -> VfsResult<usize> {
         Ok(self.file_size)
     }
@@ -100,6 +104,13 @@ impl VfsFile for MemFile {
         }
     }
 
+    fn flush(&mut self) -> VfsResult<()> {
+        match self {
+            MemFile::Main(mem_page_file) => mem_page_file.flush(),
+            MemFile::Temp(mem_linear_file) => mem_linear_file.flush(),
+        }
+    }
+
     fn size(&self) -> VfsResult<usize> {
         match self {
             MemFile::Main(mem_page_file) => mem_page_file.size(),
@@ -112,51 +123,43 @@ struct MemStore;
 
 impl VfsStore<MemFile, MemAppData> for MemStore {
     fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32) -> VfsResult<()> {
-        unsafe {
-            Self::app_data(vfs)
-                .write()
-                .insert(file.into(), MemFile::new(flags));
-        }
+        let app_data = unsafe { Self::app_data(vfs) };
+        app_data.write().insert(file.into(), MemFile::new(flags));
         Ok(())
     }
 
     fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> bool {
-        unsafe { Self::app_data(vfs).read().contains_key(file) }
+        let app_data = unsafe { Self::app_data(vfs) };
+        app_data.read().contains_key(file)
     }
 
-    fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<MemFile> {
-        unsafe {
-            match Self::app_data(vfs).write().remove(file) {
-                Some(file) => Ok(file),
-                None => Err(VfsError::new(
-                    SQLITE_IOERR_DELETE,
-                    format!("{file} not found"),
-                )),
-            }
+    fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<()> {
+        let app_data = unsafe { Self::app_data(vfs) };
+        if app_data.write().remove(file).is_none() {
+            return Err(VfsError::new(
+                SQLITE_IOERR_DELETE,
+                format!("{file} not found"),
+            ));
         }
+        Ok(())
     }
 
     fn with_file<F: Fn(&MemFile) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> VfsResult<i32> {
-        Ok(unsafe {
-            let name = vfs_file.name();
-            match Self::app_data(vfs_file.vfs).read().get(name) {
-                Some(file) => f(file),
-                None => return Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
-            }
-        })
+        let name = unsafe { vfs_file.name() };
+        let app_data = unsafe { Self::app_data(vfs_file.vfs) };
+        match app_data.read().get(name) {
+            Some(file) => Ok(f(file)),
+            None => Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
+        }
     }
 
     fn with_file_mut<F: Fn(&mut MemFile) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> VfsResult<i32> {
-        Ok(unsafe {
-            let name = vfs_file.name();
-            match Self::app_data(vfs_file.vfs)
-                .write()
-                .get_mut(vfs_file.name())
-            {
-                Some(file) => f(file),
-                None => return Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
-            }
-        })
+        let name = unsafe { vfs_file.name() };
+        let app_data = unsafe { Self::app_data(vfs_file.vfs) };
+        match app_data.write().get_mut(name) {
+            Some(file) => Ok(f(file)),
+            None => Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
+        }
     }
 }
 

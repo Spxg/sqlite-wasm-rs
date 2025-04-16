@@ -4,17 +4,16 @@
 //!
 //! <https://github.com/sqlite/sqlite/blob/master/ext/wasm/api/sqlite3-vfs-opfs-sahpool.c-pp.js>
 
+use crate::libsqlite3::*;
 use crate::vfs::utils::{
-    copy_to_uint8_array_subarray, copy_to_vec, get_random_name, register_vfs_legacy,
-    x_methods_shim, FragileComfirmed, RegisterVfsError, VfsPtr, SQLITE3_HEADER,
+    copy_to_uint8_array_subarray, copy_to_vec, get_random_name, register_vfs, FragileComfirmed,
+    RegisterVfsError, SQLiteIoMethods, SQLiteVfs, VfsAppData, VfsError, VfsFile, VfsResult,
+    VfsStore, SQLITE3_HEADER,
 };
-use crate::{bail, libsqlite3::*};
 
-use js_sys::{Array, DataView, IteratorNext, Map, Object, Reflect, Set, Uint32Array, Uint8Array};
+use js_sys::{Array, DataView, IteratorNext, Map, Reflect, Set, Uint32Array, Uint8Array};
 use once_cell::sync::Lazy;
-use parking_lot::{Mutex, RwLock};
-use std::sync::Arc;
-use std::{collections::HashMap, ffi::CStr};
+use std::collections::HashMap;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
@@ -37,62 +36,17 @@ const PERSISTENT_FILE_TYPES: i32 =
 
 type Result<T> = std::result::Result<T, OpfsSAHError>;
 
-static VFS2POOL: Lazy<RwLock<HashMap<VfsPtr, Arc<FragileComfirmed<OpfsSAHPool>>>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
-
-fn pool(vfs: *mut sqlite3_vfs) -> Arc<FragileComfirmed<OpfsSAHPool>> {
-    // Already registered vfs will not be unregistered, so this is safe
-    Arc::clone(VFS2POOL.read().get(&VfsPtr(vfs)).unwrap())
-}
-
 fn read_write_options(at: f64) -> FileSystemReadWriteOptions {
     let options = FileSystemReadWriteOptions::new();
     options.set_at(at);
     options
 }
 
-unsafe fn file2vfs(file: *mut sqlite3_file) -> *mut sqlite3_vfs {
-    (*(file.cast::<OpfsFile>())).vfs
-}
-
 // this function only return [0, 0] for now
 //
 // https://github.com/sqlite/sqlite-wasm/issues/97
 fn compute_digest(_byte_array: &Uint8Array) -> Uint32Array {
-    let u32_array = Uint32Array::new_with_length(2);
-    u32_array.set_index(0, 0);
-    u32_array.set_index(1, 0);
-    u32_array
-}
-
-#[repr(C)]
-struct OpfsFile {
-    io_methods: sqlite3_file,
-    vfs: *mut sqlite3_vfs,
-}
-
-struct FileObject {
-    path: String,
-    flags: i32,
-    sah: FileSystemSyncAccessHandle,
-}
-
-impl FileObject {
-    fn new(obj: Object) -> Result<Self> {
-        let path = Reflect::get(&obj, &JsValue::from("path"))
-            .unwrap()
-            .as_string()
-            .unwrap();
-
-        let flags = Reflect::get(&obj, &JsValue::from("flags"))
-            .unwrap()
-            .as_f64()
-            .unwrap() as i32;
-
-        let sah = Reflect::get(&obj, &JsValue::from("sah")).unwrap().into();
-
-        Ok(Self { path, flags, sah })
-    }
+    Uint32Array::new_with_length(2)
 }
 
 /// Class for managing OPFS-related state for the OPFS
@@ -112,10 +66,6 @@ struct OpfsSAHPool {
     available_sah: Set,
     /// Maps SAHs to their opaque file names
     map_sah_to_name: Map,
-    /// Maps (sqlite3_file*) to xOpen's file objects
-    map_s3_file_to_o_file: Map,
-    /// Store last_error, never poison, unwrap `lock()` is fine
-    last_error: Mutex<Option<(i32, String)>>,
 }
 
 impl OpfsSAHPool {
@@ -171,8 +121,6 @@ impl OpfsSAHPool {
             map_filename_to_sah: Map::new(),
             available_sah: Set::default(),
             map_sah_to_name: Map::new(),
-            map_s3_file_to_o_file: Map::new(),
-            last_error: Mutex::new(None),
         };
 
         pool.acquire_access_handles(clear_files).await?;
@@ -399,7 +347,6 @@ impl OpfsSAHPool {
         };
 
         if let Err(e) = fut.await {
-            self.store_err(&e, None);
             self.release_access_handles();
             return Err(e);
         }
@@ -419,43 +366,6 @@ impl OpfsSAHPool {
         self.available_sah.clear();
     }
 
-    /// Pops this object's Error object and returns
-    /// it (a falsy value if no error is set).
-    fn pop_err(&self) -> Option<(i32, String)> {
-        self.last_error.lock().take()
-    }
-
-    /// Sets e (an Error object) as this object's current error. Pass a
-    /// falsy (or no) value to clear it. If code is truthy it is
-    /// assumed to be an SQLITE_xxx result code, defaulting to
-    /// SQLITE_IOERR if code is falsy.
-    fn store_err(&self, err: &OpfsSAHError, code: Option<i32>) -> i32 {
-        let code = code.unwrap_or(SQLITE_IOERR);
-        self.last_error.lock().replace((code, format!("{:?}", err)));
-        code
-    }
-
-    /// Given an (sqlite3_file*), returns the mapped
-    /// xOpen file object.
-    fn get_o_file_for_s3_file(&self, p_file: *mut sqlite3_file) -> Result<FileObject> {
-        let file = self.map_s3_file_to_o_file.get(&JsValue::from(p_file));
-        if file.is_undefined() {
-            return Err(OpfsSAHError::Generic("open file not exists".into()));
-        }
-        FileObject::new(file.into())
-    }
-
-    /// Maps or unmaps (if file is falsy) the given (sqlite3_file*)
-    /// to an xOpen file object and to this pool object.
-    fn map_s3_file_to_o_file(&self, p_file: *mut sqlite3_file, file: Option<Object>) {
-        if let Some(file) = file {
-            self.map_s3_file_to_o_file
-                .set(&JsValue::from(p_file), &JsValue::from(file));
-        } else {
-            self.map_s3_file_to_o_file.delete(&JsValue::from(p_file));
-        }
-    }
-
     /// Removes the association of the given client-specified file
     /// name (JS string) from the pool. Returns true if a mapping
     /// is found, else false.
@@ -472,15 +382,7 @@ impl OpfsSAHPool {
 
     /// All "../" parts and duplicate slashes are resolve/removed from
     /// the returned result.
-    fn get_path(&self, name: *const ::std::os::raw::c_char) -> Result<String> {
-        if name.is_null() {
-            return Err(OpfsSAHError::Generic("name is null ptr".into()));
-        }
-        let name = unsafe {
-            CStr::from_ptr(name)
-                .to_str()
-                .map_err(|e| OpfsSAHError::Generic(format!("{e:?}")))?
-        };
+    fn get_path(&self, name: &str) -> Result<String> {
         Url::new_with_base(name, "file://localhost/")
             .map(|x| x.pathname())
             .map_err(OpfsSAHError::GetPath)
@@ -583,361 +485,156 @@ impl OpfsSAHPool {
     }
 }
 
-unsafe extern "C" fn xCheckReservedLock(
-    pFile: *mut sqlite3_file,
-    pResOut: *mut ::std::os::raw::c_int,
-) -> ::std::os::raw::c_int {
-    let vfs = file2vfs(pFile);
-    let pool = pool(vfs);
-    pool.pop_err();
-
-    *pResOut = 1;
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xClose(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
-    let vfs = file2vfs(pFile);
-    let pool = pool(vfs);
-    pool.pop_err();
-
-    let f = || {
-        if let Ok(file) = pool.get_o_file_for_s3_file(pFile) {
-            pool.map_s3_file_to_o_file(pFile, None);
-            file.sah.flush().map_err(OpfsSAHError::Flush)?;
-            if (file.flags & SQLITE_OPEN_DELETEONCLOSE) != 0 {
-                pool.delete_path(&file.path)?;
-            }
-        }
-        Ok::<_, OpfsSAHError>(())
-    };
-
-    if let Err(e) = f() {
-        return pool.store_err(&e, Some(SQLITE_IOERR));
-    }
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xDeviceCharacteristics(_pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
-    SQLITE_IOCAP_UNDELETABLE_WHEN_OPEN
-}
-
-unsafe extern "C" fn xFileControl(
-    _pFile: *mut sqlite3_file,
-    _op: ::std::os::raw::c_int,
-    _pArg: *mut ::std::os::raw::c_void,
-) -> ::std::os::raw::c_int {
-    SQLITE_NOTFOUND
-}
-
-unsafe extern "C" fn xFileSize(
-    pFile: *mut sqlite3_file,
-    pSize: *mut sqlite3_int64,
-) -> ::std::os::raw::c_int {
-    let vfs = file2vfs(pFile);
-    let pool = pool(vfs);
-
-    if let Ok(file) = pool.get_o_file_for_s3_file(pFile) {
-        let size = file.sah.get_size().unwrap() as i64 - HEADER_OFFSET_DATA as i64;
-        *pSize = size;
-    }
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xLock(
-    _pFile: *mut sqlite3_file,
-    _eLock: ::std::os::raw::c_int,
-) -> ::std::os::raw::c_int {
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xRead(
-    pFile: *mut sqlite3_file,
-    zBuf: *mut ::std::os::raw::c_void,
-    iAmt: ::std::os::raw::c_int,
-    iOfst: sqlite3_int64,
-) -> ::std::os::raw::c_int {
-    let vfs = file2vfs(pFile);
-    let pool = pool(vfs);
-    pool.pop_err();
-
-    let f = || {
-        let file = pool.get_o_file_for_s3_file(pFile)?;
-        let slice = std::slice::from_raw_parts_mut(zBuf.cast::<u8>(), iAmt as usize);
-
-        let n_read = file
-            .sah
+impl VfsFile for FileSystemSyncAccessHandle {
+    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<i32> {
+        let n_read = self
             .read_with_u8_array_and_options(
-                slice,
-                &read_write_options((HEADER_OFFSET_DATA as i64 + iOfst) as f64),
+                buf,
+                &read_write_options((HEADER_OFFSET_DATA + offset) as f64),
             )
-            .map_err(OpfsSAHError::Read)?;
+            .map_err(OpfsSAHError::Read)
+            .map_err(|err| err.vfs_err(SQLITE_IOERR))?;
 
-        if (n_read as i32) < iAmt {
-            slice[n_read as usize..iAmt as usize].fill(0);
+        if (n_read as usize) < buf.len() {
+            buf[n_read as usize..].fill(0);
             return Ok(SQLITE_IOERR_SHORT_READ);
         }
 
-        Ok::<i32, OpfsSAHError>(SQLITE_OK)
-    };
-
-    match f() {
-        Ok(ret) => ret,
-        Err(e) => pool.store_err(&e, Some(SQLITE_IOERR)),
-    }
-}
-
-unsafe extern "C" fn xSectorSize(_pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
-    SECTOR_SIZE as i32
-}
-
-unsafe extern "C" fn xSync(
-    pFile: *mut sqlite3_file,
-    _flags: ::std::os::raw::c_int,
-) -> ::std::os::raw::c_int {
-    let vfs = file2vfs(pFile);
-    let pool = pool(vfs);
-    pool.pop_err();
-
-    if let Err(e) = pool
-        .get_o_file_for_s3_file(pFile)
-        .and_then(|file| file.sah.flush().map_err(OpfsSAHError::Flush))
-    {
-        return pool.store_err(&e, Some(SQLITE_IOERR));
+        Ok(SQLITE_OK)
     }
 
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xTruncate(
-    pFile: *mut sqlite3_file,
-    size: sqlite3_int64,
-) -> ::std::os::raw::c_int {
-    let vfs = file2vfs(pFile);
-    let pool = pool(vfs);
-    pool.pop_err();
-
-    if let Err(e) = pool.get_o_file_for_s3_file(pFile).and_then(|file| {
-        file.sah
-            .truncate_with_f64((HEADER_OFFSET_DATA as i64 + size) as f64)
-            .map_err(OpfsSAHError::Truncate)
-    }) {
-        return pool.store_err(&e, Some(SQLITE_IOERR));
-    }
-
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xUnlock(
-    _pFile: *mut sqlite3_file,
-    _eLock: ::std::os::raw::c_int,
-) -> ::std::os::raw::c_int {
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xWrite(
-    pFile: *mut sqlite3_file,
-    zBuf: *const ::std::os::raw::c_void,
-    iAmt: ::std::os::raw::c_int,
-    iOfst: sqlite3_int64,
-) -> ::std::os::raw::c_int {
-    let vfs = file2vfs(pFile);
-    let pool = pool(vfs);
-    pool.pop_err();
-
-    let f = || {
-        let file = pool.get_o_file_for_s3_file(pFile)?;
-        let slice = std::slice::from_raw_parts(zBuf.cast::<u8>(), iAmt as usize);
-
-        let n_write = file
-            .sah
+    fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()> {
+        let n_write = self
             .write_with_u8_array_and_options(
-                slice,
-                &read_write_options((HEADER_OFFSET_DATA as i64 + iOfst) as f64),
+                buf,
+                &read_write_options((HEADER_OFFSET_DATA + offset) as f64),
             )
-            .map_err(OpfsSAHError::Read)?;
+            .map_err(OpfsSAHError::Read)
+            .map_err(|err| err.vfs_err(SQLITE_IOERR))?;
 
-        let ret = if iAmt == n_write as i32 {
-            SQLITE_OK
-        } else {
-            SQLITE_ERROR
-        };
-
-        Ok::<i32, OpfsSAHError>(ret)
-    };
-
-    match f() {
-        Ok(ret) => ret,
-        Err(e) => pool.store_err(&e, Some(SQLITE_IOERR)),
-    }
-}
-
-unsafe extern "C" fn xAccess(
-    pVfs: *mut sqlite3_vfs,
-    zName: *const ::std::os::raw::c_char,
-    _flags: ::std::os::raw::c_int,
-    pResOut: *mut ::std::os::raw::c_int,
-) -> ::std::os::raw::c_int {
-    let pool = pool(pVfs);
-    pool.pop_err();
-
-    *pResOut = match pool.get_path(zName) {
-        Ok(s) => i32::from(pool.has_filename(&s)),
-        Err(_) => 0,
-    };
-
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xDelete(
-    pVfs: *mut sqlite3_vfs,
-    zName: *const ::std::os::raw::c_char,
-    _syncDir: ::std::os::raw::c_int,
-) -> ::std::os::raw::c_int {
-    let pool = pool(pVfs);
-    pool.pop_err();
-
-    if let Err(e) = pool.get_path(zName).map(|name| pool.delete_path(&name)) {
-        return pool.store_err(&e, Some(SQLITE_IOERR_DELETE));
-    }
-
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xFullPathname(
-    _pVfs: *mut sqlite3_vfs,
-    zName: *const ::std::os::raw::c_char,
-    nOut: ::std::os::raw::c_int,
-    zOut: *mut ::std::os::raw::c_char,
-) -> ::std::os::raw::c_int {
-    bail!(zName.is_null() || zOut.is_null(), SQLITE_CANTOPEN);
-    let len = CStr::from_ptr(zName).count_bytes() + 1;
-    bail!(len > nOut as usize, SQLITE_CANTOPEN);
-    zName.copy_to(zOut, len);
-    SQLITE_OK
-}
-
-unsafe extern "C" fn xGetLastError(
-    pVfs: *mut sqlite3_vfs,
-    nOut: ::std::os::raw::c_int,
-    zOut: *mut ::std::os::raw::c_char,
-) -> ::std::os::raw::c_int {
-    let pool = pool(pVfs);
-    let Some((code, msg)) = pool.pop_err() else {
-        return SQLITE_OK;
-    };
-    if !zOut.is_null() {
-        let count = msg.len().min(nOut as usize);
-        msg.as_ptr().copy_to(zOut.cast(), count);
-        let zero = match count.cmp(&msg.len()) {
-            std::cmp::Ordering::Less | std::cmp::Ordering::Equal => nOut as usize,
-            std::cmp::Ordering::Greater => msg.len() + 1,
-        };
-        if zero > 0 {
-            std::ptr::write(zOut.add(zero - 1), 0);
-        }
-    }
-    code
-}
-
-unsafe extern "C" fn xOpen(
-    pVfs: *mut sqlite3_vfs,
-    zName: sqlite3_filename,
-    pFile: *mut sqlite3_file,
-    flags: ::std::os::raw::c_int,
-    pOutFlags: *mut ::std::os::raw::c_int,
-) -> ::std::os::raw::c_int {
-    let pool = pool(pVfs);
-
-    let f = || {
-        let name = if zName.is_null() {
-            get_random_name()
-        } else {
-            pool.get_path(zName)?
-        };
-        let sah = match pool.get_sah_for_path(&name) {
-            Some(sah) => sah,
-            None => {
-                if flags & SQLITE_OPEN_CREATE == 0 {
-                    return Err(OpfsSAHError::Generic(format!("file not found: {name}")));
-                }
-                if let Some(sah) = pool.next_available_sah() {
-                    pool.set_associated_path(&sah, &name, flags)?;
-                    sah
-                } else {
-                    return Err(OpfsSAHError::Generic(
-                        "SAH pool is full. Cannot create file".into(),
-                    ));
-                }
-            }
-        };
-        let file = Object::new();
-        Reflect::set(&file, &JsValue::from("path"), &JsValue::from(name)).unwrap();
-        Reflect::set(&file, &JsValue::from("flags"), &JsValue::from(flags)).unwrap();
-        Reflect::set(&file, &JsValue::from("sah"), &JsValue::from(sah)).unwrap();
-        pool.map_s3_file_to_o_file(pFile, Some(file));
-
-        (*(pFile.cast::<OpfsFile>())).vfs = pVfs;
-        (*pFile).pMethods = &IO_METHODS;
-
-        if !pOutFlags.is_null() {
-            *pOutFlags = flags;
+        if buf.len() != n_write as usize {
+            return Err(VfsError::new(SQLITE_ERROR, "failed to write file".into()));
         }
 
-        Ok::<i32, OpfsSAHError>(SQLITE_OK)
-    };
-    match f() {
-        Ok(ret) => ret,
-        Err(e) => pool.store_err(&e, Some(SQLITE_CANTOPEN)),
+        Ok(())
+    }
+
+    fn truncate(&mut self, size: usize) -> VfsResult<()> {
+        self.truncate_with_f64((HEADER_OFFSET_DATA + size) as f64)
+            .map_err(OpfsSAHError::Truncate)
+            .map_err(|err| err.vfs_err(SQLITE_IOERR))
+    }
+
+    fn flush(&mut self) -> VfsResult<()> {
+        FileSystemSyncAccessHandle::flush(self)
+            .map_err(OpfsSAHError::Flush)
+            .map_err(|err| err.vfs_err(SQLITE_IOERR))
+    }
+
+    fn size(&self) -> VfsResult<usize> {
+        Ok(self
+            .get_size()
+            .map_err(OpfsSAHError::GetSize)
+            .map_err(|err| err.vfs_err(SQLITE_IOERR))? as usize
+            - HEADER_OFFSET_DATA)
     }
 }
 
-static IO_METHODS: sqlite3_io_methods = sqlite3_io_methods {
-    iVersion: 1,
-    xClose: Some(xClose),
-    xRead: Some(xRead),
-    xWrite: Some(xWrite),
-    xTruncate: Some(xTruncate),
-    xSync: Some(xSync),
-    xFileSize: Some(xFileSize),
-    xLock: Some(xLock),
-    xUnlock: Some(xUnlock),
-    xCheckReservedLock: Some(xCheckReservedLock),
-    xFileControl: Some(xFileControl),
-    xSectorSize: Some(xSectorSize),
-    xDeviceCharacteristics: Some(xDeviceCharacteristics),
-    xShmMap: None,
-    xShmLock: None,
-    xShmBarrier: None,
-    xShmUnmap: None,
-    xFetch: None,
-    xUnfetch: None,
-};
+type SyncAccessHandleAppData = FragileComfirmed<OpfsSAHPool>;
 
-fn vfs(name: *const ::std::os::raw::c_char) -> sqlite3_vfs {
-    sqlite3_vfs {
-        iVersion: 2,
-        szOsFile: std::mem::size_of::<OpfsFile>() as i32,
-        mxPathname: HEADER_MAX_PATH_SIZE as i32,
-        pNext: std::ptr::null_mut(),
-        zName: name,
-        pAppData: std::ptr::null_mut(),
-        xOpen: Some(xOpen),
-        xDelete: Some(xDelete),
-        xAccess: Some(xAccess),
-        xFullPathname: Some(xFullPathname),
-        xDlOpen: None,
-        xDlError: None,
-        xDlSym: None,
-        xDlClose: None,
-        xRandomness: Some(x_methods_shim::xRandomness),
-        xSleep: Some(x_methods_shim::xSleep),
-        xCurrentTime: Some(x_methods_shim::xCurrentTime),
-        xGetLastError: Some(xGetLastError),
-        xCurrentTimeInt64: Some(x_methods_shim::xCurrentTimeInt64),
-        xSetSystemCall: None,
-        xGetSystemCall: None,
-        xNextSystemCall: None,
+struct SyncAccessHandleStore;
+
+impl VfsStore<FileSystemSyncAccessHandle, SyncAccessHandleAppData> for SyncAccessHandleStore {
+    fn name2path(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<String> {
+        let pool = unsafe { Self::app_data(vfs) };
+        let file = pool
+            .get_path(file)
+            .map_err(|err| err.vfs_err(SQLITE_CANTOPEN))?;
+        Ok(file)
     }
+
+    fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32) -> VfsResult<()> {
+        let pool = unsafe { Self::app_data(vfs) };
+
+        if let Some(sah) = pool.next_available_sah() {
+            pool.set_associated_path(&sah, file, flags)
+                .map_err(|err| err.vfs_err(SQLITE_CANTOPEN))?;
+        } else {
+            return Err(VfsError::new(
+                SQLITE_CANTOPEN,
+                "SAH pool is full. Cannot create file".into(),
+            ));
+        };
+
+        Ok(())
+    }
+
+    fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> bool {
+        let pool = unsafe { Self::app_data(vfs) };
+        pool.has_filename(file)
+    }
+
+    fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<()> {
+        let pool = unsafe { Self::app_data(vfs) };
+        if let Err(err) = pool.get_path(file).map(|file| pool.delete_path(&file)) {
+            return Err(err.vfs_err(SQLITE_IOERR_DELETE));
+        }
+        Ok(())
+    }
+
+    fn with_file<F: Fn(&FileSystemSyncAccessHandle) -> i32>(
+        vfs_file: &super::utils::SQLiteVfsFile,
+        f: F,
+    ) -> VfsResult<i32> {
+        let name = unsafe { vfs_file.name() };
+        let pool = unsafe { Self::app_data(vfs_file.vfs) };
+        match pool.get_sah_for_path(name) {
+            Some(file) => Ok(f(&file)),
+            None => Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
+        }
+    }
+
+    fn with_file_mut<F: Fn(&mut FileSystemSyncAccessHandle) -> i32>(
+        vfs_file: &super::utils::SQLiteVfsFile,
+        f: F,
+    ) -> VfsResult<i32> {
+        let name = unsafe { vfs_file.name() };
+        let pool = unsafe { Self::app_data(vfs_file.vfs) };
+        match pool.get_sah_for_path(name) {
+            Some(mut file) => Ok(f(&mut file)),
+            None => Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
+        }
+    }
+}
+
+struct SyncAccessHandleIoMethods;
+
+impl SQLiteIoMethods for SyncAccessHandleIoMethods {
+    type File = FileSystemSyncAccessHandle;
+    type AppData = SyncAccessHandleAppData;
+    type Store = SyncAccessHandleStore;
+
+    const VERSION: ::std::os::raw::c_int = 1;
+
+    unsafe extern "C" fn xCheckReservedLock(
+        _pFile: *mut sqlite3_file,
+        pResOut: *mut ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int {
+        *pResOut = 1;
+        SQLITE_OK
+    }
+
+    unsafe extern "C" fn xDeviceCharacteristics(
+        _pFile: *mut sqlite3_file,
+    ) -> ::std::os::raw::c_int {
+        SQLITE_IOCAP_UNDELETABLE_WHEN_OPEN
+    }
+}
+
+struct SyncAccessHandleVfs;
+
+impl SQLiteVfs<SyncAccessHandleIoMethods> for SyncAccessHandleVfs {
+    const VERSION: ::std::os::raw::c_int = 2;
 }
 
 /// Build `OpfsSAHPoolCfg`
@@ -1052,12 +749,18 @@ pub enum OpfsSAHError {
     Custom(String),
 }
 
+impl OpfsSAHError {
+    fn vfs_err(&self, code: i32) -> VfsError {
+        VfsError::new(code, format!("{self:?}"))
+    }
+}
+
 /// A OpfsSAHPoolUtil instance is exposed to clients in order to
 /// manipulate an OpfsSAHPool object without directly exposing that
 /// object and allowing for some semantic changes compared to that
 /// class.
 pub struct OpfsSAHPoolUtil {
-    pool: Arc<FragileComfirmed<OpfsSAHPool>>,
+    pool: &'static VfsAppData<SyncAccessHandleAppData>,
 }
 
 impl OpfsSAHPoolUtil {
@@ -1134,6 +837,10 @@ pub async fn install(
     options: Option<&OpfsSAHPoolCfg>,
     default_vfs: bool,
 ) -> Result<OpfsSAHPoolUtil> {
+    static NAME2VFS: Lazy<
+        tokio::sync::Mutex<HashMap<String, &'static VfsAppData<SyncAccessHandleAppData>>>,
+    > = Lazy::new(|| tokio::sync::Mutex::new(HashMap::new()));
+
     let default_options = OpfsSAHPoolCfg::default();
     let options = options.unwrap_or(&default_options);
     let vfs_name = &options.vfs_name;
@@ -1143,18 +850,19 @@ pub async fn install(
         Ok::<_, OpfsSAHError>(FragileComfirmed::new(pool))
     };
 
-    static NAME2VFS: Lazy<tokio::sync::Mutex<HashMap<String, Arc<FragileComfirmed<OpfsSAHPool>>>>> =
-        Lazy::new(|| tokio::sync::Mutex::new(HashMap::new()));
-
     let mut name2vfs = NAME2VFS.lock().await;
 
     let pool = if let Some(pool) = name2vfs.get(vfs_name) {
-        Arc::clone(pool)
+        pool
     } else {
-        let pool = Arc::new(create_pool.await?);
-        let vfs = register_vfs_legacy(vfs_name, default_vfs, vfs)?;
-        name2vfs.insert(vfs_name.clone(), Arc::clone(&pool));
-        VFS2POOL.write().insert(VfsPtr(vfs), Arc::clone(&pool));
+        let pool = create_pool.await?;
+        let vfs = register_vfs::<FileSystemSyncAccessHandle, _, SyncAccessHandleVfs>(
+            vfs_name,
+            pool,
+            default_vfs,
+        )?;
+        let pool = unsafe { SyncAccessHandleStore::app_data(vfs) };
+        name2vfs.insert(vfs_name.clone(), pool);
         pool
     };
 
