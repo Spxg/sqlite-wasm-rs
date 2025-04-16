@@ -444,7 +444,7 @@ pub trait VfsStore<File, AppData> {
     /// Adding files to the Store, use for `xOpen` and `xAccess`
     fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32) -> VfsResult<()>;
     /// Checks if the specified file exists in the Store, use for `xOpen` and `xAccess`
-    fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> bool;
+    fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<bool>;
     /// Delete the specified file in the Store, use for `xClose` and `xDelete`
     fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<()>;
     /// Read the file contents, use for `xRead`, `xFileSize`
@@ -508,7 +508,12 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
             Err(err) => return app_data.store_err(err),
         };
 
-        if !IO::Store::contains_file(pVfs, &name) {
+        let exist = match IO::Store::contains_file(pVfs, &name) {
+            Ok(exist) => exist,
+            Err(err) => return app_data.store_err(err),
+        };
+
+        if !exist {
             if flags & SQLITE_OPEN_CREATE == 0 {
                 return app_data.store_err(VfsError::new(
                     SQLITE_CANTOPEN,
@@ -564,8 +569,13 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
         *pResOut = if zName.is_null() {
             0
         } else {
-            let s = check_result!(CStr::from_ptr(zName).to_str());
-            i32::from(IO::Store::contains_file(pVfs, s))
+            let app_data = IO::Store::app_data(pVfs);
+            let file = check_result!(CStr::from_ptr(zName).to_str());
+            let exist = match IO::Store::contains_file(pVfs, file) {
+                Ok(exist) => exist,
+                Err(err) => return app_data.store_err(err),
+            };
+            i32::from(exist)
         };
 
         SQLITE_OK

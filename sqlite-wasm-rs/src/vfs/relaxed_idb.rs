@@ -479,9 +479,9 @@ impl VfsStore<IdbFile, RelaxedIdb> for RelaxedIdbStore {
         Ok(())
     }
 
-    fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> bool {
+    fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<bool> {
         let pool = unsafe { Self::app_data(vfs) };
-        pool.name2file.read().contains_key(file)
+        Ok(pool.name2file.read().contains_key(file))
     }
 
     fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<()> {

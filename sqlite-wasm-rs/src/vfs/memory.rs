@@ -128,9 +128,9 @@ impl VfsStore<MemFile, MemAppData> for MemStore {
         Ok(())
     }
 
-    fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> bool {
+    fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<bool> {
         let app_data = unsafe { Self::app_data(vfs) };
-        app_data.read().contains_key(file)
+        Ok(app_data.read().contains_key(file))
     }
 
     fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<()> {

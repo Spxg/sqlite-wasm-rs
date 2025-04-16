@@ -569,9 +569,9 @@ impl VfsStore<FileSystemSyncAccessHandle, SyncAccessHandleAppData> for SyncAcces
         Ok(())
     }
 
-    fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> bool {
+    fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<bool> {
         let pool = unsafe { Self::app_data(vfs) };
-        pool.has_filename(file)
+        Ok(pool.has_filename(file))
     }
 
     fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<()> {

@@ -109,10 +109,10 @@ impl VfsStore<MemFile, MemAppData> for MemFileStore {
     /// Called by `xOpen` and `xAccess`
     ///
     /// Check if the file already exists, which will affect the behavior of opening the db
-    fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> bool {
+    fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<bool> {
         console_log!("contains_file() called, vfs: {vfs:?} file: {file}");
         let app_data = unsafe { Self::app_data(vfs) };
-        app_data.read().contains_key(file)
+        Ok(app_data.read().contains_key(file))
     }
 
     /// Called by `xDelete` and `xClose`
