@@ -202,7 +202,7 @@ impl SQLiteVfsFile {
     /// Get the file name.
     ///
     /// # Safety
-    /// 
+    ///
     /// When xClose, you can free the memory by `drop(Box::from_raw(ptr));`.
     ///
     /// Do not use again after free.
@@ -230,7 +230,7 @@ pub enum RegisterVfsError {
 }
 
 /// Register vfs general method
-pub fn register_vfs<T, IO: SQLiteIoMethods, V: SQLiteVfs<IO>>(
+pub fn register_vfs<IO: SQLiteIoMethods, V: SQLiteVfs<IO>>(
     vfs_name: &str,
     app_data: IO::AppData,
     default_vfs: bool,
@@ -422,7 +422,7 @@ pub trait VfsFile {
     fn truncate(&mut self, size: usize) -> VfsResult<()>;
     /// Abstraction of `xSync`
     fn flush(&mut self) -> VfsResult<()>;
-    /// Get file size
+    /// Abstraction of `xFileSize`
     fn size(&self) -> VfsResult<usize>;
 }
 
@@ -441,9 +441,9 @@ pub trait VfsStore<File, AppData> {
         unused!(vfs);
         Ok(file.into())
     }
-    /// Adding files to the Store, use for `xOpen`
+    /// Adding files to the Store, use for `xOpen` and `xAccess`
     fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32) -> VfsResult<()>;
-    /// Checks if the specified file exists in the Store, use for `xOpen`
+    /// Checks if the specified file exists in the Store, use for `xOpen` and `xAccess`
     fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> bool;
     /// Delete the specified file in the Store, use for `xClose` and `xDelete`
     fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<()>;

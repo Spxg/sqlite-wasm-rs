@@ -1,0 +1,10 @@
+[package]
+name = "implement-a-vfs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+parking_lot = "0.12.3"
+sqlite-wasm-rs = { path = "../../sqlite-wasm-rs", default-features = false, features = ["precompiled"] }
+wasm-bindgen-test = "0.3.50"
+

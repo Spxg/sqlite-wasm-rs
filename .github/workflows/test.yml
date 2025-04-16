@@ -80,6 +80,17 @@ jobs:
         cd sqlite-wasm-rs
         cargo clippy --no-default-features --features precompiled
 
+  test_implement_a_vfs:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install wasm-pack
+      run: cargo install wasm-pack
+    - name: Test implement-a-vfs example
+      run: |
+        cd examples/implement-a-vfs
+        wasm-pack test --chrome --headless -- -- --nocapture
+
   test_precompiled:
     strategy:
       matrix:

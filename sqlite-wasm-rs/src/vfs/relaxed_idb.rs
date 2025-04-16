@@ -753,7 +753,7 @@ pub async fn install(options: Option<&RelaxedIdbCfg>, default_vfs: bool) -> Resu
     } else {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let pool = RelaxedIdb::new(options, tx).await?;
-        let vfs = register_vfs::<RelaxedIdb, _, RelaxedIdbVfs>(vfs_name, pool, default_vfs)?;
+        let vfs = register_vfs::<RelaxedIdbIoMethods, RelaxedIdbVfs>(vfs_name, pool, default_vfs)?;
         let app_data = unsafe { RelaxedIdbStore::app_data(vfs) };
 
         name2vfs.insert(vfs_name.into(), app_data);

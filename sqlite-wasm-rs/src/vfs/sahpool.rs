@@ -856,7 +856,7 @@ pub async fn install(
         pool
     } else {
         let pool = create_pool.await?;
-        let vfs = register_vfs::<FileSystemSyncAccessHandle, _, SyncAccessHandleVfs>(
+        let vfs = register_vfs::<SyncAccessHandleIoMethods, SyncAccessHandleVfs>(
             vfs_name,
             pool,
             default_vfs,

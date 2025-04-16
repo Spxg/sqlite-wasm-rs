@@ -4,5 +4,6 @@ members = [
   "sqlite-wasm-rs",
   "sqlite-wasm-libc",
 
-  "examples/custom-libc"
+  "examples/custom-libc",
+  "examples/implement-a-vfs"
 ]

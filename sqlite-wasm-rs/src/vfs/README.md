@@ -40,3 +40,8 @@ The VFS is based on [`FileSystemSyncAccessHandle`](https://developer.mozilla.org
 |Relaxed durability|:x:|✅|:x:|
 |Multi-database transactions|✅|✅|✅|
 |No COOP/COEP requirements|✅|✅|✅|
+
+## How to implement a VFS
+
+Here is an example showing how to use `sqlite-wasm-rs` to implement a simple in-memory VFS, see [`implement-a-vfs`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/examples/implement-a-vfs) example.
+
