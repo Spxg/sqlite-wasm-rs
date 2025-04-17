@@ -635,6 +635,7 @@ struct SyncAccessHandleVfs;
 
 impl SQLiteVfs<SyncAccessHandleIoMethods> for SyncAccessHandleVfs {
     const VERSION: ::std::os::raw::c_int = 2;
+    const MAX_PATH_SIZE: ::std::os::raw::c_int = HEADER_MAX_PATH_SIZE as _;
 }
 
 /// Build `OpfsSAHPoolCfg`
