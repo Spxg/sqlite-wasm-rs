@@ -127,10 +127,49 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_emscripten_get_now() -> std::os::
     } else if let Ok(worker) = js_sys::global().dyn_into::<ServiceWorkerGlobalScope>() {
         worker.performance()
     } else {
-        panic!("sqlite not run in main_thread or web worker");
+        panic!("unsupported operating environment");
     }
     .expect("performance should be available");
     performance.now()
+}
+
+/// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/include/wasi/api.h#L2652
+#[no_mangle]
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_wasi_random_get(
+    buf: *mut u8,
+    buf_len: usize,
+) -> std::os::raw::c_ushort {
+    let crypto = if let Some(window) = web_sys::window() {
+        window.crypto()
+    } else if let Ok(worker) = js_sys::global().dyn_into::<WorkerGlobalScope>() {
+        worker.crypto()
+    } else if let Ok(worker) = js_sys::global().dyn_into::<SharedWorkerGlobalScope>() {
+        worker.crypto()
+    } else if let Ok(worker) = js_sys::global().dyn_into::<ServiceWorkerGlobalScope>() {
+        worker.crypto()
+    } else {
+        panic!("unsupported operating environment");
+    }
+    .expect("crypto should be available");
+
+    // https://developer.mozilla.org/en-US/docs/Web/API/Crypto/getRandomValues#exceptions
+    crypto
+        .get_random_values_with_u8_array(std::slice::from_raw_parts_mut(buf, buf_len))
+        .expect("buffer size exceeds 65,536.");
+
+    0
+}
+
+/// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/musl/src/exit/exit.c#L27
+#[no_mangle]
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_exit(code: std::os::raw::c_int) {
+    panic!("{}", format!("wasm exit, code: {code}"));
+}
+
+/// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/emscripten_internal.h#L29
+#[no_mangle]
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_abort_js() {
+    panic!("{}", format!("wasm abort"));
 }
 
 // https://github.com/alexcrichton/dlmalloc-rs/blob/fb116603713825b43b113cc734bb7d663cb64be9/src/dlmalloc.rs#L141
@@ -175,6 +214,16 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_realloc(ptr: *mut u8, new_size: u
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_calloc(num: usize, size: usize) -> *mut u8 {
+    let total = num * size;
+    let ptr = rust_sqlite_wasm_shim_malloc(total);
+    if !ptr.is_null() {
+        std::ptr::write_bytes(ptr, 0, total);
+    }
+    ptr
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn sqlite3_os_init() -> std::os::raw::c_int {
     super::vfs::memory::install()
 }
@@ -189,11 +238,19 @@ mod tests {
     };
 
     use super::{
-        rust_sqlite_wasm_shim_emscripten_get_now, rust_sqlite_wasm_shim_free,
-        rust_sqlite_wasm_shim_localtime_js, rust_sqlite_wasm_shim_malloc,
-        rust_sqlite_wasm_shim_realloc, rust_sqlite_wasm_shim_tzset_js, tm,
+        rust_sqlite_wasm_shim_calloc, rust_sqlite_wasm_shim_emscripten_get_now,
+        rust_sqlite_wasm_shim_free, rust_sqlite_wasm_shim_localtime_js,
+        rust_sqlite_wasm_shim_malloc, rust_sqlite_wasm_shim_realloc,
+        rust_sqlite_wasm_shim_tzset_js, rust_sqlite_wasm_shim_wasi_random_get, tm,
     };
     use wasm_bindgen_test::{console_log, wasm_bindgen_test};
+
+    #[wasm_bindgen_test]
+    fn test_random_get() {
+        let mut buf = [0u8; 10];
+        unsafe { rust_sqlite_wasm_shim_wasi_random_get(buf.as_mut_ptr(), buf.len()) };
+        console_log!("test_random_get: {buf:?}");
+    }
 
     #[wasm_bindgen_test]
     fn test_memory() {
@@ -202,6 +259,11 @@ mod tests {
             let ptr2 = rust_sqlite_wasm_shim_realloc(ptr1, 100);
             rust_sqlite_wasm_shim_free(ptr2);
             console_log!("test_memory: {ptr1:?} {ptr2:?}");
+
+            let ptr = rust_sqlite_wasm_shim_calloc(2, 8);
+            let buf = std::slice::from_raw_parts(ptr, 2 * 8);
+
+            assert!(buf.iter().all(|&x| x == 0));
         }
     }
 

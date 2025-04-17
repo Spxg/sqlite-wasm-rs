@@ -9,6 +9,7 @@ repository = "https://github.com/Spxg/sqlite-wasm-rs"
 description = "Provide sqlite solution for wasm32-unknown-unknown target."
 categories = ["development-tools::ffi", "wasm", "database"]
 keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "javascript"]
+build = "build.rs"
 
 [dependencies]
 fragile = "2.0.0"
@@ -35,6 +36,7 @@ web-sys = { version = "0.3.77", features = [
   "FileSystemGetFileOptions",
   "FileSystemFileHandle",
   "Url",
+  "Crypto"
 ]}
 indexed_db_futures = "0.6.1"
 
@@ -48,10 +50,14 @@ parking_lot = { version = "0.12", features = ["nightly"] }
 
 [features]
 default = ["bundled"]
-bundled = ["xshell"]
+bundled = []
 buildtime-bindgen = ["bindgen"]
 precompiled = []
 custom-libc = ["sqlite-wasm-libc"]
+# SQLite3MultipleCiphers
+# <https://github.com/utelle/SQLite3MultipleCiphers>
+# <https://utelle.github.io/SQLite3MultipleCiphers>
+sqlite3mc = ["bundled"]
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.49"
