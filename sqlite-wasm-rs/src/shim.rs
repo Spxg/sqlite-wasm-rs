@@ -40,6 +40,8 @@ fn yday_from_date(date: &Date) -> u32 {
     month_days_cumulative[date.get_month() as usize] + date.get_date() - 1
 }
 
+/// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/emscripten_internal.h#L42
+///
 /// https://github.com/sqlite/sqlite-wasm/blob/7c1b309c3bd07d8e6d92f82344108cebbd14f161/sqlite-wasm/jswasm/sqlite3-bundler-friendly.mjs#L3404
 #[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_shim_localtime_js(t: time_t, tm: *mut tm) {
@@ -66,10 +68,12 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_localtime_js(t: time_t, tm: *mut 
     (*tm).tm_gmtoff = -(date.get_timezone_offset() * 60.0) as _;
 }
 
+/// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/emscripten_internal.h#L45
+///
 /// https://github.com/sqlite/sqlite-wasm/blob/7c1b309c3bd07d8e6d92f82344108cebbd14f161/sqlite-wasm/jswasm/sqlite3-bundler-friendly.mjs#L3460
 #[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_shim_tzset_js(
-    timezone: *mut std::os::raw::c_longlong,
+    timezone: *mut std::os::raw::c_long,
     daylight: *mut std::os::raw::c_int,
     std_name: *mut std::os::raw::c_char,
     dst_name: *mut std::os::raw::c_char,
@@ -209,7 +213,7 @@ mod tests {
 
     #[wasm_bindgen_test]
     fn test_tzset() {
-        let mut timezone: std::os::raw::c_longlong = 0;
+        let mut timezone: std::os::raw::c_long = 0;
         let mut daylight: std::os::raw::c_int = 0;
         let mut std_name = [0i8; 9];
         let mut dst_name = [0i8; 9];
