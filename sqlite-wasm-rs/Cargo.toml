@@ -9,7 +9,6 @@ repository = "https://github.com/Spxg/sqlite-wasm-rs"
 description = "Provide sqlite solution for wasm32-unknown-unknown target."
 categories = ["development-tools::ffi", "wasm", "database"]
 keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "javascript"]
-build = "build.rs"
 
 [dependencies]
 fragile = "2.0.0"
