@@ -1,11 +1,12 @@
 //! This module fills in the external functions needed to link to `sqlite.o`
 
-use js_sys::Date;
+use js_sys::{Date, Number};
 use wasm_bindgen::JsCast;
 use web_sys::{ServiceWorkerGlobalScope, SharedWorkerGlobalScope, WorkerGlobalScope};
 
 pub type time_t = std::os::raw::c_longlong;
 
+/// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/musl/include/time.h#L40
 #[repr(C)]
 pub struct tm {
     pub tm_sec: std::os::raw::c_int,
@@ -20,9 +21,6 @@ pub struct tm {
     pub tm_gmtoff: std::os::raw::c_long,
     pub tm_zone: *mut std::os::raw::c_char,
 }
-
-const INT53_MAX: time_t = 9007199254740992;
-const INT53_MIN: time_t = -9007199254740992;
 
 fn yday_from_date(date: &Date) -> u32 {
     const MONTH_DAYS_LEAP_CUMULATIVE: [u32; 12] =
@@ -45,9 +43,8 @@ fn yday_from_date(date: &Date) -> u32 {
 /// https://github.com/sqlite/sqlite-wasm/blob/7c1b309c3bd07d8e6d92f82344108cebbd14f161/sqlite-wasm/jswasm/sqlite3-bundler-friendly.mjs#L3404
 #[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_shim_localtime_js(t: time_t, tm: *mut tm) {
-    assert!(!(INT53_MIN..=INT53_MAX).contains(&t), "wrong time range");
+    let date = Date::new(&Number::from((t * 1000) as f64).into());
 
-    let date = Date::new(&(t * 1000).into());
     (*tm).tm_sec = date.get_seconds() as _;
     (*tm).tm_min = date.get_minutes() as _;
     (*tm).tm_hour = date.get_hours() as _;
@@ -66,7 +63,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_localtime_js(t: time_t, tm: *mut 
             && date.get_timezone_offset() == winter_offset.min(summer_offset),
     );
 
-    (*tm).tm_gmtoff = (date.get_timezone_offset() * 60.0) as _;
+    (*tm).tm_gmtoff = -(date.get_timezone_offset() * 60.0) as _;
 }
 
 /// https://github.com/sqlite/sqlite-wasm/blob/7c1b309c3bd07d8e6d92f82344108cebbd14f161/sqlite-wasm/jswasm/sqlite3-bundler-friendly.mjs#L3460
@@ -176,4 +173,121 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_realloc(ptr: *mut u8, new_size: u
 #[no_mangle]
 pub unsafe extern "C" fn sqlite3_os_init() -> std::os::raw::c_int {
     super::vfs::memory::install()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::CStr;
+
+    use crate::{
+        sqlite3_column_count, sqlite3_column_name, sqlite3_column_text, sqlite3_column_type,
+        sqlite3_open, sqlite3_prepare_v3, sqlite3_step, SQLITE_OK, SQLITE_ROW, SQLITE_TEXT,
+    };
+
+    use super::{
+        rust_sqlite_wasm_shim_emscripten_get_now, rust_sqlite_wasm_shim_free,
+        rust_sqlite_wasm_shim_localtime_js, rust_sqlite_wasm_shim_malloc,
+        rust_sqlite_wasm_shim_realloc, rust_sqlite_wasm_shim_tzset_js, tm,
+    };
+    use wasm_bindgen_test::{console_log, wasm_bindgen_test};
+
+    #[wasm_bindgen_test]
+    fn test_memory() {
+        unsafe {
+            let ptr1 = rust_sqlite_wasm_shim_malloc(10);
+            let ptr2 = rust_sqlite_wasm_shim_realloc(ptr1, 100);
+            rust_sqlite_wasm_shim_free(ptr2);
+            console_log!("test_memory: {ptr1:?} {ptr2:?}");
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn test_get_now() {
+        let now = unsafe { rust_sqlite_wasm_shim_emscripten_get_now() };
+        console_log!("test_get_now: {now}");
+    }
+
+    #[wasm_bindgen_test]
+    fn test_tzset() {
+        let mut timezone: std::os::raw::c_longlong = 0;
+        let mut daylight: std::os::raw::c_int = 0;
+        let mut std_name = [0i8; 9];
+        let mut dst_name = [0i8; 9];
+
+        unsafe {
+            rust_sqlite_wasm_shim_tzset_js(
+                &mut timezone as _,
+                &mut daylight as _,
+                std_name.as_mut_ptr(),
+                dst_name.as_mut_ptr(),
+            );
+        }
+
+        let std_name = unsafe { CStr::from_ptr(std_name.as_ptr()) };
+        let dst_name = unsafe { CStr::from_ptr(dst_name.as_ptr()) };
+
+        console_log!("test_tzset: {timezone} {daylight} {std_name:?} {dst_name:?}");
+    }
+
+    #[wasm_bindgen_test]
+    fn test_localtime_sqlite() {
+        unsafe {
+            let mut db = std::ptr::null_mut();
+            let ret = sqlite3_open(c":memory:".as_ptr().cast(), &mut db as *mut _);
+            assert_eq!(ret, SQLITE_OK);
+            let mut stmt = std::ptr::null_mut();
+            let ret = sqlite3_prepare_v3(
+                db,
+                c"SELECT datetime('now', 'localtime');".as_ptr().cast(),
+                -1,
+                0,
+                &mut stmt as *mut _,
+                std::ptr::null_mut(),
+            );
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let count = sqlite3_column_count(stmt);
+                for col in 0..count {
+                    let name = sqlite3_column_name(stmt, col);
+                    let ty = sqlite3_column_type(stmt, col);
+                    assert_eq!(ty, SQLITE_TEXT);
+                    console_log!(
+                        "col {:?}, time: {:?}",
+                        CStr::from_ptr(name),
+                        CStr::from_ptr(sqlite3_column_text(stmt, col).cast())
+                    );
+                }
+            }
+            assert_eq!(ret, SQLITE_OK);
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn test_localtime() {
+        let mut tm = tm {
+            tm_sec: 0,
+            tm_min: 0,
+            tm_hour: 0,
+            tm_mday: 0,
+            tm_mon: 0,
+            tm_year: 0,
+            tm_wday: 0,
+            tm_yday: 0,
+            tm_isdst: 0,
+            tm_gmtoff: 0,
+            tm_zone: std::ptr::null_mut(),
+        };
+        unsafe {
+            rust_sqlite_wasm_shim_localtime_js(1733976732, &mut tm as *mut tm);
+        };
+
+        let gmtoff = tm.tm_gmtoff / 3600;
+        assert_eq!(tm.tm_year, 2024 - 1900);
+        assert_eq!(tm.tm_mon, 12 - 1);
+        assert_eq!(tm.tm_mday, 12);
+        assert_eq!(tm.tm_hour, 12 - 8 + gmtoff);
+        assert_eq!(tm.tm_min, 12);
+        assert_eq!(tm.tm_sec, 12);
+        assert_eq!(tm.tm_wday, 4);
+        assert_eq!(tm.tm_yday, 346);
+    }
 }
