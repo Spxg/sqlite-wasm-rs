@@ -857,8 +857,8 @@ pub mod x_methods_shim {
         nByte: ::std::os::raw::c_int,
         zOut: *mut ::std::os::raw::c_char,
     ) -> ::std::os::raw::c_int {
-        for i in 0..nByte {
-            *zOut.offset(i as isize) = (Math::random() * 255000.0) as _;
+        for i in 0..nByte as usize {
+            *zOut.add(i) = (Math::random() * 255000.0) as _;
         }
         nByte
     }
