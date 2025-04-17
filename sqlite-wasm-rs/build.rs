@@ -286,10 +286,8 @@ or use the precompiled binaries via the `default-features = false` and `precompi
         #[cfg(feature = "sqlite3mc")]
         cmd.args(SQLITE3_MC_FEATURED);
         cmd.arg(SQLITE3_SOURCE)
-            .arg("shim/wasm-shim.c")
             .arg("-o")
             .arg(format!("{output}/sqlite3.o"))
-            .arg("-Ishim")
             .arg("-r")
             .arg("-Oz")
             .status()
