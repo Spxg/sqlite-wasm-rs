@@ -300,21 +300,28 @@ impl RelaxedIdb {
             usize::from(page_size)
         };
 
-        assert!(page_size.is_power_of_two() && (512..=65536).contains(&page_size));
+        if !(page_size.is_power_of_two() && (512..=65536).contains(&page_size))
+            || bytes.len() % page_size != 0
+        {
+            return Err(RelaxedIdbError::Generic(
+                "Wrong page_size or wrong file length. \
+                The file length needs to be an integer multiple of page_size."
+                    .into(),
+            ));
+        }
 
         let mut blocks = HashMap::new();
+
+        let mut buffer = vec![0; page_size];
         for (idx, chunk) in bytes.chunks(page_size).enumerate() {
-            let mut buffer = chunk.to_vec();
-            if buffer.len() < page_size {
-                buffer.resize(page_size, 0);
-            }
+            buffer.copy_from_slice(chunk);
             blocks.insert(
                 idx * page_size,
                 FragileComfirmed::new(copy_to_uint8_array(&buffer)),
             );
         }
-
         let tx_blocks = blocks.keys().copied().collect();
+
         self.name2file.write().insert(
             path.into(),
             IdbFile::Main(IdbPageFile {

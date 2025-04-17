@@ -60,12 +60,12 @@ struct OpfsSAHPool {
     ap_body: Uint8Array,
     /// DataView for self.apBody
     dv_body: DataView,
-    /// Maps client-side file names to SAHs
-    map_filename_to_sah: Map,
     /// Set of currently-unused SAHs
     available_sah: Set,
+    /// Maps client-side file names to SAHs
+    map_filename_to_sah: Map,
     /// Maps SAHs to their opaque file names
-    map_sah_to_name: Map,
+    map_sah_to_opaque_name: Map,
 }
 
 impl OpfsSAHPool {
@@ -120,7 +120,7 @@ impl OpfsSAHPool {
             dv_body,
             map_filename_to_sah: Map::new(),
             available_sah: Set::default(),
-            map_sah_to_name: Map::new(),
+            map_sah_to_opaque_name: Map::new(),
         };
 
         pool.acquire_access_handles(clear_files).await?;
@@ -151,7 +151,7 @@ impl OpfsSAHPool {
                     .await
                     .map_err(OpfsSAHError::CreateSyncAccessHandle)?
                     .into();
-            self.map_sah_to_name.set(&sah, &JsValue::from(name));
+            self.map_sah_to_opaque_name.set(&sah, &JsValue::from(name));
             self.set_associated_path(&sah, None, 0)?;
         }
         Ok(self.get_capacity())
@@ -168,7 +168,7 @@ impl OpfsSAHPool {
             }
             let sah = FileSystemSyncAccessHandle::from(sah);
 
-            let name = self.map_sah_to_name.get(&sah);
+            let name = self.map_sah_to_opaque_name.get(&sah);
             assert!(!name.is_undefined(), "name must exists");
             let name = name.as_string().unwrap();
 
@@ -176,7 +176,7 @@ impl OpfsSAHPool {
             JsFuture::from(self.dh_opaque.remove_entry(&name))
                 .await
                 .map_err(OpfsSAHError::RemoveEntity)?;
-            self.map_sah_to_name.delete(&sah);
+            self.map_sah_to_opaque_name.delete(&sah);
             self.available_sah.delete(&sah);
             result += 1;
         }
@@ -185,7 +185,7 @@ impl OpfsSAHPool {
 
     /// Current pool capacity.
     fn get_capacity(&self) -> u32 {
-        self.map_sah_to_name.size()
+        self.map_sah_to_opaque_name.size()
     }
 
     /// Current number of in-use files from pool.
@@ -317,7 +317,7 @@ impl OpfsSAHPool {
                 let sah = JsFuture::from(handle.create_sync_access_handle())
                     .await
                     .map_err(OpfsSAHError::CreateSyncAccessHandle)?;
-                self.map_sah_to_name.set(&sah, &file);
+                self.map_sah_to_opaque_name.set(&sah, &file);
                 let sah = FileSystemSyncAccessHandle::from(sah);
                 if clear_files {
                     self.set_associated_path(&sah, None, 0)?;
@@ -341,11 +341,11 @@ impl OpfsSAHPool {
     /// Releases all currently-opened SAHs. The only legal
     /// operation after this is acquireAccessHandles().
     fn release_access_handles(&self) {
-        for sah in self.map_sah_to_name.keys().into_iter().flatten() {
+        for sah in self.map_sah_to_opaque_name.keys().into_iter().flatten() {
             let sah = FileSystemSyncAccessHandle::from(sah);
             sah.close();
         }
-        self.map_sah_to_name.clear();
+        self.map_sah_to_opaque_name.clear();
         self.map_filename_to_sah.clear();
         self.available_sah.clear();
     }
@@ -493,7 +493,7 @@ impl VfsFile for FileSystemSyncAccessHandle {
                 buf,
                 &read_write_options((HEADER_OFFSET_DATA + offset) as f64),
             )
-            .map_err(OpfsSAHError::Read)
+            .map_err(OpfsSAHError::Write)
             .map_err(|err| err.vfs_err(SQLITE_IOERR))?;
 
         if buf.len() != n_write as usize {
@@ -599,6 +599,10 @@ impl SQLiteIoMethods for SyncAccessHandleIoMethods {
     type Store = SyncAccessHandleStore;
 
     const VERSION: ::std::os::raw::c_int = 1;
+
+    unsafe extern "C" fn xSectorSize(_pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
+        SECTOR_SIZE as i32
+    }
 
     unsafe extern "C" fn xCheckReservedLock(
         _pFile: *mut sqlite3_file,
