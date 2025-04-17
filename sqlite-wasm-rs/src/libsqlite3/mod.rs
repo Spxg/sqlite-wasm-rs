@@ -1,11 +1,25 @@
 //! This module is codegen from build.rs
 
-mod bindings {
+#[cfg(all(not(feature = "buildtime-bindgen"), feature = "sqlite3mc"))]
+mod sqlite3mc_bindgen;
+
+#[cfg(all(not(feature = "buildtime-bindgen"), not(feature = "sqlite3mc")))]
+mod sqlite3_bindgen;
+
+mod bindgen {
+    #[cfg(feature = "buildtime-bindgen")]
     include!(concat!(env!("OUT_DIR"), "/bindgen.rs"));
+
+    #[cfg(all(not(feature = "buildtime-bindgen"), feature = "sqlite3mc"))]
+    pub use super::sqlite3mc_bindgen::*;
+
+    #[cfg(all(not(feature = "buildtime-bindgen"), not(feature = "sqlite3mc")))]
+    pub use super::sqlite3_bindgen::*;
 }
+
 mod error;
 
-pub use bindings::*;
+pub use bindgen::*;
 pub use error::*;
 
 use std::mem;
