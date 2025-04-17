@@ -274,6 +274,12 @@ impl RelaxedIdb {
             )));
         }
 
+        if bytes.len() < 512 && bytes.len() % 512 != 0 {
+            return Err(RelaxedIdbError::Generic(
+                "Byte array size is invalid for an SQLite db.".into(),
+            ));
+        }
+
         if SQLITE3_HEADER
             .as_bytes()
             .iter()
