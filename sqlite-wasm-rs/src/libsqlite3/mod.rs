@@ -1,11 +1,8 @@
 //! This module is codegen from build.rs
 
-#[cfg(feature = "buildtime-bindgen")]
 mod bindings {
-    include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+    include!(concat!(env!("OUT_DIR"), "/bindgen.rs"));
 }
-#[cfg(not(feature = "buildtime-bindgen"))]
-mod bindings;
 mod error;
 
 pub use bindings::*;
