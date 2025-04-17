@@ -152,9 +152,21 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_wasi_random_get(
     }
     .expect("crypto should be available");
 
-    // https://developer.mozilla.org/en-US/docs/Web/API/Crypto/getRandomValues#exceptions
+    #[cfg(target_feature = "atomics")]
+    {
+        let array = js_sys::Uint8Array::new_with_length(buf_len as u32);
+        crypto
+            // The provided ArrayBufferView value must not be shared.
+            .get_random_values_with_js_u8_array(&array)
+            // https://developer.mozilla.org/en-US/docs/Web/API/Crypto/getRandomValues#exceptions
+            .expect("buffer size exceeds 65,536.");
+        crate::utils::copy_to_slice(&array, std::slice::from_raw_parts_mut(buf, buf_len));
+    }
+
+    #[cfg(not(target_feature = "atomics"))]
     crypto
         .get_random_values_with_u8_array(std::slice::from_raw_parts_mut(buf, buf_len))
+        // https://developer.mozilla.org/en-US/docs/Web/API/Crypto/getRandomValues#exceptions
         .expect("buffer size exceeds 65,536.");
 
     0
