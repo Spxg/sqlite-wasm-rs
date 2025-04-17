@@ -87,7 +87,7 @@ About security:
 * You can specify the bundled feature to compile sqlite locally, which requires the emscripten toolchain.
 * Currently all precompiled products are compiled and committed through Github Actions, which can be tracked, downloaded and compared.
 
-[Precompile Workflow](https://github.com/Spxg/sqlite-wasm-rs/blob/master/.github/workflows/precompile.yml) | [Change History](https://github.com/Spxg/sqlite-wasm-rs/commits/master/sqlite-wasm-rs/library) | [Actions](https://github.com/Spxg/sqlite-wasm-rs/actions?query=event%3Aworkflow_dispatch)
+[Precompile Workflow](https://github.com/Spxg/sqlite-wasm-rs/blob/master/.github/workflows/precompile.yml) | [Change History](https://github.com/Spxg/sqlite-wasm-rs/commits/master/sqlite-wasm-rs/sqlite3) | [Actions](https://github.com/Spxg/sqlite-wasm-rs/actions?query=event%3Aworkflow_dispatch)
 
 ## Related Project
 

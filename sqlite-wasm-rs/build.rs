@@ -31,9 +31,13 @@ static FULL_FEATURED: [&str; 12] = [
 
 #[cfg(all(not(feature = "bundled"), feature = "precompiled"))]
 fn main() {
-    let path = std::env::current_dir().unwrap().join("library");
+    let output = std::env::var("OUT_DIR").expect("OUT_DIR env not set");
+    std::fs::copy("sqlite3/bindgen.rs", format!("{output}/bindgen.rs")).unwrap();
+
+    let path = std::env::current_dir().unwrap().join("sqlite3");
     let lib_path = path.to_str().unwrap();
-    println!("cargo::rerun-if-changed=library");
+    println!("cargo::rerun-if-changed={lib_path}");
+
     static_linking(lib_path);
 }
 
@@ -42,7 +46,7 @@ fn main() {
     const UPDATE_LIB_ENV: &str = "SQLITE_WASM_RS_UPDATE_PREBUILD";
 
     println!("cargo::rerun-if-env-changed={UPDATE_LIB_ENV}");
-    println!("cargo::rerun-if-changed=source");
+    println!("cargo::rerun-if-changed=sqlite3");
 
     let update_precompiled = std::env::var(UPDATE_LIB_ENV).is_ok();
     let output = std::env::var("OUT_DIR").expect("OUT_DIR env not set");
@@ -55,17 +59,13 @@ fn main() {
     if update_precompiled {
         std::fs::copy(
             format!("{output}/libsqlite3linked.a"),
-            "library/libsqlite3linked.a",
+            "sqlite3/libsqlite3linked.a",
         )
         .unwrap();
-        std::fs::copy(format!("{output}/libsqlite3.a"), "library/libsqlite3.a").unwrap();
+        std::fs::copy(format!("{output}/libsqlite3.a"), "sqlite3/libsqlite3.a").unwrap();
 
         #[cfg(feature = "buildtime-bindgen")]
-        std::fs::copy(
-            format!("{output}/bindings.rs"),
-            "src/libsqlite3/bindings.rs",
-        )
-        .unwrap();
+        std::fs::copy(format!("{output}/bindgen.rs"), "sqlite3/bindgen.rs").unwrap();
     }
     static_linking(&output);
 }
@@ -128,7 +128,7 @@ fn bindgen(output: &str) {
         .disable_nested_struct_naming()
         .generate_cstr(true)
         .trust_clang_mangling(false)
-        .header("source/sqlite3.h")
+        .header("sqlite3/sqlite3.h")
         .parse_callbacks(Box::new(SqliteTypeChooser));
 
     bindings = bindings
@@ -166,8 +166,6 @@ fn bindgen(output: &str) {
         // DSQLITE_OMIT_DEPRECATED
         .blocklist_function("sqlite3_profile")
         .blocklist_function("sqlite3_trace")
-        // DSQLITE_THREADSAFE=0
-        .blocklist_function("sqlite3_unlock_notify")
         .blocklist_function(".*16.*")
         .blocklist_function("sqlite3_close_v2")
         .blocklist_function("sqlite3_create_collation")
@@ -198,7 +196,7 @@ fn bindgen(output: &str) {
         .unwrap();
 
     bindings
-        .write_to_file(format!("{output}/bindings.rs"))
+        .write_to_file(format!("{output}/bindgen.rs"))
         .unwrap();
 }
 
@@ -226,7 +224,7 @@ or use the precompiled binaries via the `default-features = false` and `precompi
     }
 
     if !cfg!(feature = "custom-libc") || build_all {
-        cmd!(sh, "{CC} {COMMON...} {FULL_FEATURED...} source/sqlite3.c source/wasm-shim.c -o {output}/sqlite3.o -I source -r -Oz -lc").read().unwrap();
+        cmd!(sh, "{CC} {COMMON...} {FULL_FEATURED...} sqlite3/sqlite3.c shim/wasm-shim.c -o {output}/sqlite3.o -I shim -r -Oz -lc").read().unwrap();
 
         cmd!(
             sh,
@@ -239,7 +237,7 @@ or use the precompiled binaries via the `default-features = false` and `precompi
     if cfg!(feature = "custom-libc") || build_all {
         cmd!(
             sh,
-            "{CC} {COMMON...} {FULL_FEATURED...} source/sqlite3.c -o {output}/sqlite3.o -r -Oz"
+            "{CC} {COMMON...} {FULL_FEATURED...} sqlite3/sqlite3.c -o {output}/sqlite3.o -r -Oz"
         )
         .read()
         .unwrap();
