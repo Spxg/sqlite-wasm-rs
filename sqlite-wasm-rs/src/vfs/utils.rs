@@ -457,6 +457,7 @@ pub trait VfsStore<File, AppData> {
 #[allow(clippy::missing_safety_doc)]
 pub trait SQLiteVfs<IO: SQLiteIoMethods> {
     const VERSION: ::std::os::raw::c_int;
+    const MAX_PATH_SIZE: ::std::os::raw::c_int = 1024;
 
     fn vfs(
         vfs_name: *const ::std::os::raw::c_char,
@@ -465,7 +466,7 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
         sqlite3_vfs {
             iVersion: Self::VERSION,
             szOsFile: std::mem::size_of::<SQLiteVfsFile>() as i32,
-            mxPathname: 1024,
+            mxPathname: Self::MAX_PATH_SIZE,
             pNext: std::ptr::null_mut(),
             zName: vfs_name,
             pAppData: app_data.cast(),
