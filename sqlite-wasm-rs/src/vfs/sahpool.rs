@@ -11,7 +11,7 @@ use crate::vfs::utils::{
     VfsStore, SQLITE3_HEADER,
 };
 
-use js_sys::{Array, DataView, IteratorNext, Map, Reflect, Set, Uint32Array, Uint8Array};
+use js_sys::{Array, DataView, IteratorNext, Map, Reflect, Set, Uint8Array};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use wasm_bindgen::{JsCast, JsValue};
@@ -25,11 +25,18 @@ use web_sys::{
 const SECTOR_SIZE: usize = 4096;
 const HEADER_MAX_PATH_SIZE: usize = 512;
 const HEADER_FLAGS_SIZE: usize = 4;
-const HEADER_DIGEST_SIZE: usize = 8;
 const HEADER_CORPUS_SIZE: usize = HEADER_MAX_PATH_SIZE + HEADER_FLAGS_SIZE;
 const HEADER_OFFSET_FLAGS: usize = HEADER_MAX_PATH_SIZE;
-const HEADER_OFFSET_DIGEST: usize = HEADER_CORPUS_SIZE;
 const HEADER_OFFSET_DATA: usize = SECTOR_SIZE;
+
+// Will be enabled after sqlite fix is released
+//
+// <https://sqlite.org/src/forumpost/042d53c928382021>
+//
+// <https://github.com/sqlite/sqlite-wasm/issues/97>
+//
+// const HEADER_DIGEST_SIZE: usize = 8;
+// const HEADER_OFFSET_DIGEST: usize = HEADER_CORPUS_SIZE;
 
 const PERSISTENT_FILE_TYPES: i32 =
     SQLITE_OPEN_MAIN_DB | SQLITE_OPEN_MAIN_JOURNAL | SQLITE_OPEN_SUPER_JOURNAL | SQLITE_OPEN_WAL;
@@ -40,13 +47,6 @@ fn read_write_options(at: f64) -> FileSystemReadWriteOptions {
     let options = FileSystemReadWriteOptions::new();
     options.set_at(at);
     options
-}
-
-// this function only return [0, 0] for now
-//
-// https://github.com/sqlite/sqlite-wasm/issues/97
-fn compute_digest(_byte_array: &Uint8Array) -> Uint32Array {
-    Uint32Array::new_with_length(2)
 }
 
 /// Class for managing OPFS-related state for the OPFS
@@ -219,35 +219,20 @@ impl OpfsSAHPool {
             return Ok(None);
         }
 
-        // size is 2
-        let file_digest = Uint32Array::new_with_length(HEADER_DIGEST_SIZE as u32 / 4);
-        sah.read_with_buffer_source_and_options(
-            &file_digest,
-            &read_write_options(HEADER_OFFSET_DIGEST as f64),
-        )
-        .map_err(OpfsSAHError::Read)?;
-
-        let comp_digest = compute_digest(&self.ap_body);
-        if Array::from(&file_digest)
-            .every(&mut |v, i, _| v.as_f64().unwrap() as u32 == comp_digest.get_index(i))
-        {
-            let path_size = Array::from(&self.ap_body)
-                .find_index(&mut |x, _, _| x.as_f64().unwrap() as u8 == 0)
-                as u32;
-            if path_size == 0 {
-                sah.truncate_with_u32(HEADER_OFFSET_DATA as u32)
-                    .map_err(OpfsSAHError::Truncate)?;
-                return Ok(None);
-            }
-            let path_bytes = self.ap_body.subarray(0, path_size);
-            let vec = copy_to_vec(&path_bytes);
-            // set_associated_path ensures that it is utf8
-            let path = String::from_utf8(vec).unwrap();
-            Ok(Some(path))
-        } else {
-            self.set_associated_path(sah, "", 0)?;
-            Ok(None)
+        let path_size = Array::from(&self.ap_body)
+            .iter()
+            .position(|x| x.as_f64().unwrap() as u8 == 0)
+            .unwrap_or_default();
+        if path_size == 0 {
+            sah.truncate_with_u32(HEADER_OFFSET_DATA as u32)
+                .map_err(OpfsSAHError::Truncate)?;
+            return Ok(None);
         }
+        let path_bytes = self.ap_body.subarray(0, path_size as u32);
+        let vec = copy_to_vec(&path_bytes);
+        // set_associated_path ensures that it is utf8
+        let path = String::from_utf8(vec).unwrap();
+        Ok(Some(path))
     }
 
     /// Stores the given client-defined path and SQLITE_OPEN_xyz flags
@@ -272,16 +257,8 @@ impl OpfsSAHPool {
             .fill(0, path.len() as u32, HEADER_MAX_PATH_SIZE as u32);
         self.dv_body.set_uint32(HEADER_OFFSET_FLAGS, flags as u32);
 
-        let digest = compute_digest(&self.ap_body);
-
         sah.write_with_js_u8_array_and_options(&self.ap_body, &read_write_options(0.0))
             .map_err(OpfsSAHError::Write)?;
-        sah.write_with_buffer_source_and_options(
-            &digest,
-            &read_write_options(HEADER_OFFSET_DIGEST as f64),
-        )
-        .map_err(OpfsSAHError::Write)?;
-        sah.flush().map_err(OpfsSAHError::Flush)?;
 
         if path.is_empty() {
             sah.truncate_with_u32(HEADER_OFFSET_DATA as u32)
