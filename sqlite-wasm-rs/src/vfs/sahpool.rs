@@ -260,7 +260,7 @@ impl OpfsSAHPool {
         path: &str,
         flags: i32,
     ) -> Result<()> {
-        if HEADER_MAX_PATH_SIZE < path.len() {
+        if HEADER_MAX_PATH_SIZE <= path.len() + 1 {
             return Err(OpfsSAHError::Generic(format!("Path too long: {path}")));
         }
         copy_to_uint8_array_subarray(
