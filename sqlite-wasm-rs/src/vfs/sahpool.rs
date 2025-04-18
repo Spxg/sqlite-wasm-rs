@@ -397,7 +397,9 @@ impl OpfsSAHPool {
     }
 
     fn export_file(&self, name: &str) -> Result<Vec<u8>> {
-        let sah = self.map_filename_to_sah.get(&JsValue::from(name));
+        let name = self.get_path(name)?;
+
+        let sah = self.map_filename_to_sah.get(&JsValue::from(&name));
         if sah.is_undefined() {
             return Err(OpfsSAHError::Generic(format!("File not found: {name}")));
         }
@@ -423,7 +425,9 @@ impl OpfsSAHPool {
     }
 
     fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
-        let sah = self.map_filename_to_sah.get(&JsValue::from(path));
+        let path = self.get_path(path)?;
+
+        let sah = self.map_filename_to_sah.get(&JsValue::from(&path));
         let sah = if sah.is_undefined() {
             self.next_available_sah()
                 .ok_or_else(|| OpfsSAHError::Generic("No available handles to import to.".into()))?
@@ -458,13 +462,14 @@ impl OpfsSAHPool {
             )));
         }
 
-        let bytes = [1, 1];
+        // <https://sqlite.org/forum/forumpost/67882c5b04>
+        #[cfg(not(feature = "sqlite3mc"))]
         sah.write_with_u8_array_and_options(
-            &bytes,
+            &[1, 1],
             &read_write_options((HEADER_OFFSET_DATA + 18) as f64),
         )
         .map_err(OpfsSAHError::Write)?;
-        self.set_associated_path(&sah, Some(path), SQLITE_OPEN_MAIN_DB)?;
+        self.set_associated_path(&sah, Some(&path), SQLITE_OPEN_MAIN_DB)?;
 
         Ok(())
     }
@@ -806,9 +811,6 @@ impl OpfsSAHPoolUtil {
     ///
     /// path must start with '/'
     pub fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
-        if !path.starts_with('/') {
-            return Err(OpfsSAHError::Generic("path must start with '/'".into()));
-        }
         self.pool.import_db(path, bytes)
     }
 
