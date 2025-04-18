@@ -215,9 +215,8 @@ fn bindgen(output: &str) {
     bindings = bindings
         .rust_edition(Edition2021)
         .rust_target(RustTarget::Stable_1_77)
-        // Unfortunately, we need to specify the target
-        // because `wasm32-unknown-unknown` cannot codegen anything.
-        .clang_arg("--target=x86_64-unknown-linux-gnu");
+        // https://github.com/rust-lang/rust-bindgen/issues/1941
+        .clang_arg("-fvisibility=default");
 
     let bindings = bindings
         .layout_tests(false)
