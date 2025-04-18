@@ -1,4 +1,4 @@
-use sqlite_wasm_rs::{export::OpfsSAHPoolCfgBuilder, sahpool_vfs::install, *};
+use sqlite_wasm_rs::{export::OpfsSAHPoolCfgBuilder, relaxed_idb_vfs::RelaxedIdbCfgBuilder, *};
 use std::ffi::{CStr, CString};
 use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -16,7 +16,6 @@ unsafe fn set_cipher(cipher: &str, db: *mut sqlite3) {
     assert_eq!(ret, SQLITE_OK);
 
     let set_key = c"PRAGMA key = 'My very secret passphrase';";
-
     let ret = sqlite3_exec(
         db,
         set_key.as_ptr().cast(),
@@ -27,17 +26,101 @@ unsafe fn set_cipher(cipher: &str, db: *mut sqlite3) {
     assert_eq!(ret, SQLITE_OK);
 }
 
+unsafe fn test_memvfs_cipher(cipher: &str) {
+    let mut db = std::ptr::null_mut();
+    let db_name = format!("test_memvfs_vfs_{cipher}.db");
+
+    let ret = sqlite3_open_v2(
+        CString::new(db_name.clone()).unwrap().as_ptr().cast(),
+        &mut db as *mut _,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+        // https://utelle.github.io/SQLite3MultipleCiphers/docs/faq/faq_overview/#how-can-i-enable-encryption-for-a-non-default-sqlite-vfs
+        c"multipleciphers-memvfs".as_ptr().cast(),
+    );
+    assert_eq!(SQLITE_OK, ret);
+
+    set_cipher(cipher, db);
+    prepare_simple_db(db);
+    check_result(db);
+    sqlite3_close(db);
+
+    let mut db = std::ptr::null_mut();
+    let ret = sqlite3_open_v2(
+        CString::new(db_name).unwrap().as_ptr().cast(),
+        &mut db as *mut _,
+        SQLITE_OPEN_READWRITE,
+        // https://utelle.github.io/SQLite3MultipleCiphers/docs/faq/faq_overview/#how-can-i-enable-encryption-for-a-non-default-sqlite-vfs
+        c"multipleciphers-memvfs".as_ptr().cast(),
+    );
+    assert_eq!(SQLITE_OK, ret);
+
+    set_cipher(cipher, db);
+    check_result(db);
+    sqlite3_close(db);
+}
+
+async unsafe fn test_relaxed_db_vfs_cipher(cipher: &str) {
+    let util = sqlite_wasm_rs::relaxed_idb_vfs::install(
+        Some(
+            &RelaxedIdbCfgBuilder::new()
+                .vfs_name("relaxed-db-cipher")
+                .clear_on_init(true)
+                .build(),
+        ),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let mut db = std::ptr::null_mut();
+    let db_name = format!("test_relaxed_db_vfs_{cipher}.db");
+
+    let ret = sqlite3_open_v2(
+        CString::new(db_name.clone()).unwrap().as_ptr().cast(),
+        &mut db as *mut _,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+        c"multipleciphers-relaxed-db-cipher".as_ptr().cast(),
+    );
+    assert_eq!(SQLITE_OK, ret);
+
+    set_cipher(cipher, db);
+    prepare_simple_db(db);
+    check_result(db);
+    sqlite3_close(db);
+
+    let db1 = util.export_file(&db_name).unwrap();
+    let new_db_name = format!("test_relaxed_db_vfs_{cipher}2.db");
+    util.import_db_unchecked(&new_db_name, &db1, 4096)
+        .await
+        .unwrap();
+    let db2 = util.export_file(&new_db_name).unwrap();
+    assert_eq!(db1, db2);
+
+    let mut db = std::ptr::null_mut();
+    let ret = sqlite3_open_v2(
+        CString::new(new_db_name).unwrap().as_ptr().cast(),
+        &mut db as *mut _,
+        SQLITE_OPEN_READWRITE,
+        c"multipleciphers-relaxed-db-cipher".as_ptr().cast(),
+    );
+    assert_eq!(SQLITE_OK, ret);
+
+    set_cipher(cipher, db);
+    check_result(db);
+    sqlite3_close(db);
+}
+
 async unsafe fn test_opfs_sah_vfs_cipher(cipher: &str) {
-    let util = install(
+    let util = sqlite_wasm_rs::sahpool_vfs::install(
         Some(
             &OpfsSAHPoolCfgBuilder::new()
-                .vfs_name("cipher")
-                .directory("cipher")
+                .vfs_name("sah-cipher")
+                .directory("sah-cipher")
                 .initial_capacity(20)
                 .clear_on_init(true)
                 .build(),
         ),
-        true,
+        false,
     )
     .await
     .unwrap();
@@ -49,8 +132,7 @@ async unsafe fn test_opfs_sah_vfs_cipher(cipher: &str) {
         CString::new(db_name.clone()).unwrap().as_ptr().cast(),
         &mut db as *mut _,
         SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-        // https://utelle.github.io/SQLite3MultipleCiphers/docs/faq/faq_overview/#how-can-i-enable-encryption-for-a-non-default-sqlite-vfs
-        c"multipleciphers-cipher".as_ptr().cast(),
+        c"multipleciphers-sah-cipher".as_ptr().cast(),
     );
     assert_eq!(SQLITE_OK, ret);
 
@@ -61,7 +143,7 @@ async unsafe fn test_opfs_sah_vfs_cipher(cipher: &str) {
 
     let db1 = util.export_file(&db_name).unwrap();
     let new_db_name = format!("test_opfs_sah_vfs_{cipher}2.db");
-    util.import_db(&new_db_name, &db1).unwrap();
+    util.import_db_unchecked(&new_db_name, &db1).unwrap();
     let db2 = util.export_file(&new_db_name).unwrap();
     assert_eq!(db1, db2);
 
@@ -70,8 +152,7 @@ async unsafe fn test_opfs_sah_vfs_cipher(cipher: &str) {
         CString::new(new_db_name).unwrap().as_ptr().cast(),
         &mut db as *mut _,
         SQLITE_OPEN_READWRITE,
-        // https://utelle.github.io/SQLite3MultipleCiphers/docs/faq/faq_overview/#how-can-i-enable-encryption-for-a-non-default-sqlite-vfs
-        c"multipleciphers-cipher".as_ptr().cast(),
+        c"multipleciphers-sah-cipher".as_ptr().cast(),
     );
     assert_eq!(SQLITE_OK, ret);
 
@@ -80,7 +161,7 @@ async unsafe fn test_opfs_sah_vfs_cipher(cipher: &str) {
     sqlite3_close(db);
 }
 
-macro_rules! test_cipher {
+macro_rules! test_sah_cipher {
     ($cipher:literal) => {
         paste::paste! {
             #[wasm_bindgen_test]
@@ -93,9 +174,49 @@ macro_rules! test_cipher {
     };
 }
 
-test_cipher!("aes128cbc");
-test_cipher!("aes256cbc");
-test_cipher!("chacha20");
-test_cipher!("sqlcipher");
-test_cipher!("rc4");
-test_cipher!("ascon128");
+macro_rules! test_relaxed_db_cipher {
+    ($cipher:literal) => {
+        paste::paste! {
+            #[wasm_bindgen_test]
+            async fn [<test_relaxed_db_vfs_cipher_$cipher>]() {
+                unsafe {
+                    test_relaxed_db_vfs_cipher($cipher).await;
+                }
+            }
+        }
+    };
+}
+
+macro_rules! test_mem_cipher {
+    ($cipher:literal) => {
+        paste::paste! {
+            #[wasm_bindgen_test]
+            fn [<test_memvfs_cipher_$cipher>]() {
+                unsafe {
+                    test_memvfs_cipher($cipher);
+                }
+            }
+        }
+    };
+}
+
+test_sah_cipher!("aes128cbc");
+test_sah_cipher!("aes256cbc");
+test_sah_cipher!("chacha20");
+test_sah_cipher!("sqlcipher");
+test_sah_cipher!("rc4");
+test_sah_cipher!("ascon128");
+
+test_relaxed_db_cipher!("aes128cbc");
+test_relaxed_db_cipher!("aes256cbc");
+test_relaxed_db_cipher!("chacha20");
+test_relaxed_db_cipher!("sqlcipher");
+test_relaxed_db_cipher!("rc4");
+test_relaxed_db_cipher!("ascon128");
+
+test_mem_cipher!("aes128cbc");
+test_mem_cipher!("aes256cbc");
+test_mem_cipher!("chacha20");
+test_mem_cipher!("sqlcipher");
+test_mem_cipher!("rc4");
+test_mem_cipher!("ascon128");
