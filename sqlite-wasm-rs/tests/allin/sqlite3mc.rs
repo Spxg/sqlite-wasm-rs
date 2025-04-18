@@ -15,7 +15,8 @@ unsafe fn set_cipher(cipher: &str, db: *mut sqlite3) {
     );
     assert_eq!(ret, SQLITE_OK);
 
-    let set_key = c"PRAGMA key = 114514;";
+    let set_key = c"PRAGMA key = 'My very secret passphrase';";
+
     let ret = sqlite3_exec(
         db,
         set_key.as_ptr().cast(),
@@ -33,6 +34,7 @@ async unsafe fn test_opfs_sah_vfs_cipher(cipher: &str) {
                 .vfs_name("cipher")
                 .directory("cipher")
                 .initial_capacity(20)
+                .clear_on_init(true)
                 .build(),
         ),
         true,
@@ -41,7 +43,7 @@ async unsafe fn test_opfs_sah_vfs_cipher(cipher: &str) {
     .unwrap();
 
     let mut db = std::ptr::null_mut();
-    let db_name = format!("/test_opfs_sah_vfs_{cipher}.db");
+    let db_name = format!("test_opfs_sah_vfs_{cipher}.db");
 
     let ret = sqlite3_open_v2(
         CString::new(db_name.clone()).unwrap().as_ptr().cast(),
@@ -54,11 +56,14 @@ async unsafe fn test_opfs_sah_vfs_cipher(cipher: &str) {
 
     set_cipher(cipher, db);
     prepare_simple_db(db);
+    check_result(db);
     sqlite3_close(db);
 
-    let new_db_name = format!("/test_opfs_sah_vfs_{cipher}2.db");
-    util.import_db(&new_db_name, &util.export_file(&db_name).unwrap())
-        .unwrap();
+    let db1 = util.export_file(&db_name).unwrap();
+    let new_db_name = format!("test_opfs_sah_vfs_{cipher}2.db");
+    util.import_db(&new_db_name, &db1).unwrap();
+    let db2 = util.export_file(&new_db_name).unwrap();
+    assert_eq!(db1, db2);
 
     let mut db = std::ptr::null_mut();
     let ret = sqlite3_open_v2(
@@ -92,5 +97,5 @@ test_cipher!("aes128cbc");
 test_cipher!("aes256cbc");
 test_cipher!("chacha20");
 test_cipher!("sqlcipher");
-// test_cipher!("rc4");
+test_cipher!("rc4");
 test_cipher!("ascon128");
