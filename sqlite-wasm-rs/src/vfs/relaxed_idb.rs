@@ -268,19 +268,12 @@ impl RelaxedIdb {
     }
 
     async fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
-        if self.name2file.read().contains_key(path) {
-            return Err(RelaxedIdbError::Generic(format!(
-                "{path} file already exists"
-            )));
-        }
-
         if bytes.len() < 512 && bytes.len() % 512 != 0 {
             return Err(RelaxedIdbError::Generic(
                 "Byte array size is invalid for an SQLite db.".into(),
             ));
         }
 
-        #[cfg(not(feature = "sqlite3mc"))]
         if crate::utils::SQLITE3_HEADER
             .as_bytes()
             .iter()
@@ -301,6 +294,10 @@ impl RelaxedIdb {
             usize::from(page_size)
         };
 
+        self.import_db_unchecked(path, bytes, page_size).await
+    }
+
+    async fn import_db_unchecked(&self, path: &str, bytes: &[u8], page_size: usize) -> Result<()> {
         if !(page_size.is_power_of_two() && (512..=65536).contains(&page_size))
             || bytes.len() % page_size != 0
         {
@@ -309,6 +306,12 @@ impl RelaxedIdb {
                 The file length needs to be an integer multiple of page_size."
                     .into(),
             ));
+        }
+
+        if self.name2file.read().contains_key(path) {
+            return Err(RelaxedIdbError::Generic(format!(
+                "{path} file already exists"
+            )));
         }
 
         let mut blocks = HashMap::new();
@@ -723,8 +726,20 @@ impl RelaxedIdbUtil {
     }
 
     /// Import the db file into the pool and indexed db.
+    ///
+    /// If the imported DB is encrypted, use `import_db_unchecked`
     pub async fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
         self.pool.import_db(path, bytes).await
+    }
+
+    /// Can be used to import encrypted DB
+    pub async fn import_db_unchecked(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        page_size: usize,
+    ) -> Result<()> {
+        self.pool.import_db_unchecked(path, bytes, page_size).await
     }
 
     /// Export database

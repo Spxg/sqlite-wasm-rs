@@ -425,22 +425,13 @@ impl OpfsSAHPool {
     }
 
     fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
-        let path = self.get_path(path)?;
-
-        let sah = self.map_filename_to_sah.get(&JsValue::from(&path));
-        let sah = if sah.is_undefined() {
-            self.next_available_sah()
-                .ok_or_else(|| OpfsSAHError::Generic("No available handles to import to.".into()))?
-        } else {
-            FileSystemSyncAccessHandle::from(sah)
-        };
         let length = bytes.len();
         if length < 512 && length % 512 != 0 {
             return Err(OpfsSAHError::Generic(
                 "Byte array size is invalid for an SQLite db.".into(),
             ));
         }
-        #[cfg(not(feature = "sqlite3mc"))]
+
         if crate::utils::SQLITE3_HEADER
             .as_bytes()
             .iter()
@@ -451,6 +442,21 @@ impl OpfsSAHPool {
                 "Input does not contain an SQLite database header.".into(),
             ));
         }
+        self.import_db_unchecked(path, bytes)
+    }
+
+    fn import_db_unchecked(&self, path: &str, bytes: &[u8]) -> Result<()> {
+        let length = bytes.len();
+        let path = self.get_path(path)?;
+
+        let sah = self.map_filename_to_sah.get(&JsValue::from(&path));
+        let sah = if sah.is_undefined() {
+            self.next_available_sah()
+                .ok_or_else(|| OpfsSAHError::Generic("No available handles to import to.".into()))?
+        } else {
+            FileSystemSyncAccessHandle::from(sah)
+        };
+
         let write = sah
             .write_with_u8_array_and_options(bytes, &read_write_options(HEADER_OFFSET_DATA as f64))
             .map_err(OpfsSAHError::Write)?;
@@ -801,17 +807,22 @@ impl OpfsSAHPoolUtil {
         self.pool.delete_path(name)
     }
 
-    /// Synchronously reads the contents of the given file into a Uint8Array and returns it.
+    /// Synchronously reads the contents of the given file into a Vec<u8> and returns it.
     pub fn export_file(&self, name: &str) -> Result<Vec<u8>> {
         self.pool.export_file(name)
     }
 
-    /// Imports the contents of an SQLite database, provided as a byte array or ArrayBuffer,
+    /// Imports the contents of an SQLite database, provided as a byte array
     /// under the given name, overwriting any existing content.
     ///
-    /// path must start with '/'
+    /// If the imported DB is encrypted, use `import_db_unchecked`
     pub fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
         self.pool.import_db(path, bytes)
+    }
+
+    /// Can be used to import encrypted DB
+    pub fn import_db_unchecked(&self, path: &str, bytes: &[u8]) -> Result<()> {
+        self.pool.import_db_unchecked(path, bytes)
     }
 
     /// Clears all client-defined state of all SAHs and makes all of them available
