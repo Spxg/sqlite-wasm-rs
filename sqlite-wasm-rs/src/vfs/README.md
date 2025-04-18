@@ -1,7 +1,7 @@
 ## VFS
 
 We have written several tests to make it easier for you to know how to use it.
-Go to [`here`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-rs/tests/vfs) to check it out.
+Go to [`here`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-rs/tests/allin/vfs) to check it out.
 
 ### MemoryVFS
 

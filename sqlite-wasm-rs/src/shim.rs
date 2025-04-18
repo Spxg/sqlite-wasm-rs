@@ -322,6 +322,7 @@ mod tests {
                 &mut stmt as *mut _,
                 std::ptr::null_mut(),
             );
+            assert_eq!(ret, SQLITE_OK);
             while sqlite3_step(stmt) == SQLITE_ROW {
                 let count = sqlite3_column_count(stmt);
                 for col in 0..count {
@@ -335,7 +336,6 @@ mod tests {
                     );
                 }
             }
-            assert_eq!(ret, SQLITE_OK);
         }
     }
 

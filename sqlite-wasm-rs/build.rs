@@ -118,7 +118,7 @@ fn static_linking(lib_path: &str) {
     }
 }
 
-#[cfg(all(feature = "buildtime-bindgen"))]
+#[cfg(feature = "buildtime-bindgen")]
 fn bindgen(output: &str) {
     #[cfg(not(feature = "sqlite3mc"))]
     const SQLITE3_HEADER: &str = "sqlite3/sqlite3.h";
