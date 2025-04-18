@@ -10,14 +10,20 @@ Provide sqlite solution for `wasm32-unknown-unknown` target.
 ```toml
 [dependencies]
 # Using `bundled` default feature causes us to automatically compile
-# and link in an up to date, requires the emscripten toolchain
+# and link in an up to date, requires the emscripten toolchain.
 sqlite-wasm-rs = "0.3"
 ```
 
 ```toml
 [dependencies]
-# If you don't have the emscripten toolchain, you can use the `precompiled` feature
+# If you don't have the emscripten toolchain, you can use the `precompiled` feature.
 sqlite-wasm-rs = { version = "0.3", default-features = false, features = ["precompiled"] }
+```
+
+```toml
+[dependencies]
+# Encryption is supported by SQLite3MultipleCiphers, need to enable the bundled feature.
+sqlite-wasm-rs = { version = "0.3", features = ["sqlite3mc"] }
 ```
 
 ```rust
@@ -96,3 +102,4 @@ About security:
 * [`sqlite-wasm`](https://github.com/sqlite/sqlite-wasm): SQLite Wasm conveniently wrapped as an ES Module.
 * [`sqlite-web-rs`](https://github.com/xmtp/sqlite-web-rs): A SQLite WebAssembly backend for Diesel.
 * [`wa-sqlite`](https://github.com/rhashimoto/wa-sqlite): WebAssembly SQLite with support for browser storage extensions.
+* [`SQLite3MultipleCiphers`](https://github.com/utelle/SQLite3MultipleCiphers): SQLite3 encryption extension with support for multiple ciphers
