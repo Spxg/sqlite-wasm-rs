@@ -3,7 +3,7 @@
 use crate::vfs::utils::{
     copy_to_slice, copy_to_uint8_array, copy_to_uint8_array_subarray, page_read, register_vfs,
     FragileComfirmed, MemLinearFile, RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile,
-    VfsAppData, VfsError, VfsFile, VfsResult, VfsStore, SQLITE3_HEADER,
+    VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
 };
 use crate::{bail, check_option, check_result, libsqlite3::*};
 
@@ -280,7 +280,8 @@ impl RelaxedIdb {
             ));
         }
 
-        if SQLITE3_HEADER
+        #[cfg(not(feature = "sqlite3mc"))]
+        if crate::utils::SQLITE3_HEADER
             .as_bytes()
             .iter()
             .zip(bytes)

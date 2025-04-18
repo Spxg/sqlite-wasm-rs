@@ -8,7 +8,7 @@ use crate::libsqlite3::*;
 use crate::vfs::utils::{
     copy_to_uint8_array_subarray, copy_to_vec, get_random_name, register_vfs, FragileComfirmed,
     RegisterVfsError, SQLiteIoMethods, SQLiteVfs, VfsAppData, VfsError, VfsFile, VfsResult,
-    VfsStore, SQLITE3_HEADER,
+    VfsStore,
 };
 
 use js_sys::{Array, DataView, IteratorNext, Map, Reflect, Set, Uint8Array};
@@ -436,7 +436,8 @@ impl OpfsSAHPool {
                 "Byte array size is invalid for an SQLite db.".into(),
             ));
         }
-        if SQLITE3_HEADER
+        #[cfg(not(feature = "sqlite3mc"))]
+        if crate::utils::SQLITE3_HEADER
             .as_bytes()
             .iter()
             .zip(bytes)

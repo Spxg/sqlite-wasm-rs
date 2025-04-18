@@ -59,12 +59,12 @@ custom-libc = ["sqlite-wasm-libc"]
 sqlite3mc = ["bundled"]
 
 [dev-dependencies]
+paste = "1.0.15"
 wasm-bindgen-test = "0.3.49"
 web-time = "1.1.0"
 
 [build-dependencies]
 bindgen = { version = "0.71", optional = true }
-xshell = { version = "0.2.7", optional = true }
 
 [package.metadata.docs.rs]
 no-default-features = true

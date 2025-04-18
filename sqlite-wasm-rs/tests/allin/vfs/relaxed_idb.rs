@@ -1,4 +1,3 @@
-use crate::vfs::{check_persistent, prepare_simple_db};
 use indexed_db_futures::database::Database;
 use indexed_db_futures::prelude::*;
 use indexed_db_futures::transaction::TransactionMode;
@@ -7,6 +6,8 @@ use sqlite_wasm_rs::export::*;
 use sqlite_wasm_rs::relaxed_idb_vfs::{install as install_idb_vfs, Preload, RelaxedIdbCfgBuilder};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::{console_log, wasm_bindgen_test};
+
+use crate::allin::{check_persistent, prepare_simple_db};
 
 #[wasm_bindgen_test]
 async fn test_idb_vfs_default() {

@@ -1,4 +1,4 @@
-use crate::vfs::check_persistent;
+use crate::allin::check_persistent;
 use sqlite_wasm_rs::export::*;
 use wasm_bindgen_test::wasm_bindgen_test;
 

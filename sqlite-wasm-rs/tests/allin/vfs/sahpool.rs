@@ -1,7 +1,8 @@
-use crate::vfs::{check_persistent, prepare_simple_db};
 use sqlite_wasm_rs::sahpool_vfs::{install as install_opfs_sahpool, *};
 use sqlite_wasm_rs::*;
 use wasm_bindgen_test::wasm_bindgen_test;
+
+use crate::allin::{check_persistent, prepare_simple_db};
 
 #[wasm_bindgen_test]
 async fn test_opfs_sah_vfs_default() {
