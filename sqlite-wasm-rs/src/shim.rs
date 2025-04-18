@@ -2,7 +2,7 @@
 
 use js_sys::{Date, Number};
 use wasm_bindgen::JsCast;
-use web_sys::{ServiceWorkerGlobalScope, SharedWorkerGlobalScope, WorkerGlobalScope};
+use web_sys::{ServiceWorkerGlobalScope, SharedWorkerGlobalScope, Window, WorkerGlobalScope};
 
 pub type time_t = std::os::raw::c_longlong;
 
@@ -118,7 +118,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_tzset_js(
 /// https://github.com/sqlite/sqlite-wasm/blob/7c1b309c3bd07d8e6d92f82344108cebbd14f161/sqlite-wasm/jswasm/sqlite3-bundler-friendly.mjs#L3496
 #[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_shim_emscripten_get_now() -> std::os::raw::c_double {
-    let performance = if let Some(window) = web_sys::window() {
+    let performance = if let Ok(window) = js_sys::global().dyn_into::<Window>() {
         window.performance()
     } else if let Ok(worker) = js_sys::global().dyn_into::<WorkerGlobalScope>() {
         worker.performance()
@@ -127,7 +127,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_emscripten_get_now() -> std::os::
     } else if let Ok(worker) = js_sys::global().dyn_into::<ServiceWorkerGlobalScope>() {
         worker.performance()
     } else {
-        panic!("unsupported operating environment");
+        panic!("unsupported environment");
     }
     .expect("performance should be available");
     performance.now()
@@ -139,7 +139,27 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_wasi_random_get(
     buf: *mut u8,
     buf_len: usize,
 ) -> std::os::raw::c_ushort {
-    let crypto = if let Some(window) = web_sys::window() {
+    fn is_secure_context() -> bool {
+        if let Ok(window) = js_sys::global().dyn_into::<Window>() {
+            window.is_secure_context()
+        } else if let Ok(worker) = js_sys::global().dyn_into::<WorkerGlobalScope>() {
+            worker.is_secure_context()
+        } else if let Ok(worker) = js_sys::global().dyn_into::<SharedWorkerGlobalScope>() {
+            worker.is_secure_context()
+        } else if let Ok(worker) = js_sys::global().dyn_into::<ServiceWorkerGlobalScope>() {
+            worker.is_secure_context()
+        } else {
+            panic!("unsupported environment");
+        }
+    }
+
+    if !is_secure_context() {
+        // Function not supported.
+        // https://github.com/WebAssembly/wasi-libc/blob/e9524a0980b9bb6bb92e87a41ed1055bdda5bb86/libc-bottom-half/headers/public/wasi/api.h#L373
+        return 52;
+    }
+
+    let crypto = if let Ok(window) = js_sys::global().dyn_into::<Window>() {
         window.crypto()
     } else if let Ok(worker) = js_sys::global().dyn_into::<WorkerGlobalScope>() {
         worker.crypto()
@@ -148,7 +168,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_wasi_random_get(
     } else if let Ok(worker) = js_sys::global().dyn_into::<ServiceWorkerGlobalScope>() {
         worker.crypto()
     } else {
-        panic!("unsupported operating environment");
+        panic!("unsupported environment");
     }
     .expect("crypto should be available");
 
