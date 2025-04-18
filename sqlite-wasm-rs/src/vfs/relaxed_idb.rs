@@ -160,7 +160,8 @@ async fn clear_impl(indexed_db: &Database) -> Result<()> {
         .with_mode(TransactionMode::Readwrite)
         .build()?;
     let blocks = transaction.object_store("blocks")?;
-    blocks.clear()?.await?;
+    blocks.clear()?;
+    transaction.commit().await?;
     Ok(())
 }
 
