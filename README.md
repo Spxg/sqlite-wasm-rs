@@ -23,6 +23,7 @@ sqlite-wasm-rs = { version = "0.3", default-features = false, features = ["preco
 ```toml
 [dependencies]
 # Encryption is supported by SQLite3MultipleCiphers, need to enable the bundled feature.
+# See <https://utelle.github.io/SQLite3MultipleCiphers>
 sqlite-wasm-rs = { version = "0.3", features = ["sqlite3mc"] }
 ```
 
