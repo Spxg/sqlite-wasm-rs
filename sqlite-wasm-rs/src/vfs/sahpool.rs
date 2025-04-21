@@ -837,6 +837,12 @@ impl OpfsSAHPoolUtil {
         self.pool.acquire_access_handles(true).await?;
         Ok(())
     }
+
+    /// Does the DB exist
+    pub fn exist(&self, file: &str) -> Result<bool> {
+        let file = self.pool.get_path(file)?;
+        Ok(self.pool.has_filename(&file))
+    }
 }
 
 /// Register `opfs-sahpool` vfs and return a utility object which can be used
