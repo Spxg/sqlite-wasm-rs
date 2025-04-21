@@ -268,7 +268,7 @@ impl RelaxedIdb {
         return Ok(());
     }
 
-    fn send_task_with_notify(&self, op: IdbCommitOp) -> Result<WaitNotify> {
+    fn send_task_with_notify(&self, op: IdbCommitOp) -> Result<WaitCommit> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let commit = IdbCommit {
             op,
@@ -279,7 +279,7 @@ impl RelaxedIdb {
                 "failed to send commit task".into(),
             ));
         }
-        return Ok(WaitNotify(rx));
+        return Ok(WaitCommit(rx));
     }
 
     async fn preload_db(&self, files: Vec<String>) -> Result<()> {
@@ -295,7 +295,7 @@ impl RelaxedIdb {
         Ok(())
     }
 
-    fn import_db(&self, path: &str, bytes: &[u8]) -> Result<WaitNotify> {
+    fn import_db(&self, path: &str, bytes: &[u8]) -> Result<WaitCommit> {
         if bytes.len() < 512 && bytes.len() % 512 != 0 {
             return Err(RelaxedIdbError::Generic(
                 "Byte array size is invalid for an SQLite db.".into(),
@@ -331,7 +331,7 @@ impl RelaxedIdb {
         bytes: &[u8],
         page_size: usize,
         clear_wal: bool,
-    ) -> Result<WaitNotify> {
+    ) -> Result<WaitCommit> {
         if !(page_size.is_power_of_two() && (512..=65536).contains(&page_size))
             || bytes.len() % page_size != 0
         {
@@ -391,7 +391,7 @@ impl RelaxedIdb {
         self.send_task_with_notify(IdbCommitOp::Sync(path.into()))
     }
 
-    fn export_file(&self, name: &str) -> Result<Vec<u8>> {
+    fn export_db(&self, name: &str) -> Result<Vec<u8>> {
         let name2file = self.name2file.read();
 
         if let Some(file) = name2file.get(name) {
@@ -417,12 +417,12 @@ impl RelaxedIdb {
         }
     }
 
-    fn delete_file(&self, name: &str) -> Result<WaitNotify> {
+    fn delete_db(&self, name: &str) -> Result<WaitCommit> {
         self.name2file.write().remove(name);
         self.send_task_with_notify(IdbCommitOp::Delete(name.into()))
     }
 
-    fn clear_all(&self) -> Result<WaitNotify> {
+    fn clear_all(&self) -> Result<WaitCommit> {
         std::mem::take(&mut *self.name2file.write());
         self.send_task_with_notify(IdbCommitOp::Clear)
     }
@@ -431,7 +431,7 @@ impl RelaxedIdb {
         self.name2file.read().contains_key(file)
     }
 
-    async fn delete_file_impl(&self, file: &str) -> Result<()> {
+    async fn delete_db_impl(&self, file: &str) -> Result<()> {
         let transaction = self
             .idb
             .transaction("blocks")
@@ -448,7 +448,7 @@ impl RelaxedIdb {
 
     // already drop
     #[allow(clippy::await_holding_lock)]
-    async fn sync_file_impl(&self, file: &str) -> Result<()> {
+    async fn sync_db_impl(&self, file: &str) -> Result<()> {
         let mut name2file = self.name2file.write();
         let Some(idb_file) = name2file.get_mut(file) else {
             return Ok(());
@@ -500,8 +500,8 @@ impl RelaxedIdb {
         while let Some(commit) = rx.recv().await {
             let IdbCommit { op, notify } = commit;
             let ret = match op {
-                IdbCommitOp::Sync(file) => self.sync_file_impl(&file).await,
-                IdbCommitOp::Delete(file) => self.delete_file_impl(&file).await,
+                IdbCommitOp::Sync(file) => self.sync_db_impl(&file).await,
+                IdbCommitOp::Delete(file) => self.delete_db_impl(&file).await,
                 IdbCommitOp::Clear => clear_impl(&self.idb).await,
             };
             if let Some(notify) = notify {
@@ -679,10 +679,10 @@ impl SQLiteVfs<RelaxedIdbIoMethods> for RelaxedIdbVfs {
     const VERSION: ::std::os::raw::c_int = 1;
 }
 
-/// Waiting for task execution result
-pub struct WaitNotify(tokio::sync::oneshot::Receiver<Result<()>>);
+/// Waiting for commit result
+pub struct WaitCommit(tokio::sync::oneshot::Receiver<Result<()>>);
 
-impl Future for WaitNotify {
+impl Future for WaitCommit {
     type Output = Result<()>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -797,7 +797,7 @@ impl RelaxedIdbUtil {
     /// <https://sqlite.org/forum/forumpost/67882c5b04>
     ///
     /// If the imported DB is encrypted, use `import_db_unchecked` instead.
-    pub fn import_db(&self, path: &str, bytes: &[u8]) -> Result<WaitNotify> {
+    pub fn import_db(&self, path: &str, bytes: &[u8]) -> Result<WaitCommit> {
         self.pool.import_db(path, bytes)
     }
 
@@ -807,30 +807,30 @@ impl RelaxedIdbUtil {
         path: &str,
         bytes: &[u8],
         page_size: usize,
-    ) -> Result<WaitNotify> {
+    ) -> Result<WaitCommit> {
         self.pool.import_db_unchecked(path, bytes, page_size, false)
     }
 
     /// Export database
-    pub fn export_file(&self, name: &str) -> Result<Vec<u8>> {
-        self.pool.export_file(name)
+    pub fn export_db(&self, name: &str) -> Result<Vec<u8>> {
+        self.pool.export_db(name)
     }
 
-    /// Delete the specified file in the indexed db.
+    /// Delete the specified db in the indexed db.
     ///
     /// # Attention
     ///
     /// Please make sure that the deleted db is closed.
-    pub fn delete_file(&self, name: &str) -> Result<WaitNotify> {
-        self.pool.delete_file(name)
+    pub fn delete_db(&self, name: &str) -> Result<WaitCommit> {
+        self.pool.delete_db(name)
     }
 
-    /// Delete all files in the indexed db.
+    /// Delete all dbs in the indexed db.
     ///
     /// # Attention
     ///
     /// Please make sure that all dbs is closed.
-    pub fn clear_all(&self) -> Result<WaitNotify> {
+    pub fn clear_all(&self) -> Result<WaitCommit> {
         self.pool.clear_all()
     }
 

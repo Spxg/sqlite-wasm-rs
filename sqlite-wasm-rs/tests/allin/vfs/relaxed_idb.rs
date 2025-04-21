@@ -108,7 +108,7 @@ async fn test_idb_vfs_utils() {
     };
 
     // export and import to new.db
-    let db = util.export_file("test_idb_vfs_utils.db").unwrap();
+    let db = util.export_db("test_idb_vfs_utils.db").unwrap();
     util.import_db("new.db", &db).unwrap().await.unwrap();
     assert!(util.exist("new.db"));
 
@@ -129,11 +129,11 @@ async fn test_idb_vfs_utils() {
         sqlite3_close(db);
     };
 
-    util.delete_file("test_idb_vfs_utils.db")
+    util.delete_db("test_idb_vfs_utils.db")
         .unwrap()
         .await
         .unwrap();
-    util.delete_file("new.db").unwrap().await.unwrap();
+    util.delete_db("new.db").unwrap().await.unwrap();
 }
 
 #[wasm_bindgen_test]
