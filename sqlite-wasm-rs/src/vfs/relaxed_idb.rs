@@ -14,6 +14,9 @@ use js_sys::{Number, Object, Reflect, Uint8Array};
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use std::collections::{hash_map, HashSet};
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::{
     collections::HashMap,
     ffi::{c_char, CStr},
@@ -24,13 +27,14 @@ use wasm_bindgen::JsValue;
 type Result<T> = std::result::Result<T, RelaxedIdbError>;
 
 struct IdbCommit {
-    file: String,
     op: IdbCommitOp,
+    notify: Option<tokio::sync::oneshot::Sender<Result<()>>>,
 }
 
 enum IdbCommitOp {
-    Sync,
-    Delete,
+    Sync(String),
+    Delete(String),
+    Clear,
 }
 
 enum IdbFile {
@@ -255,6 +259,29 @@ impl RelaxedIdb {
         })
     }
 
+    fn send_task(&self, op: IdbCommitOp) -> Result<()> {
+        if self.tx.send(IdbCommit { op, notify: None }).is_err() {
+            return Err(RelaxedIdbError::Generic(
+                "failed to send commit task".into(),
+            ));
+        }
+        return Ok(());
+    }
+
+    fn send_task_with_notify(&self, op: IdbCommitOp) -> Result<WaitNotify> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let commit = IdbCommit {
+            op,
+            notify: Some(tx),
+        };
+        if self.tx.send(commit).is_err() {
+            return Err(RelaxedIdbError::Generic(
+                "failed to send commit task".into(),
+            ));
+        }
+        return Ok(WaitNotify(rx));
+    }
+
     async fn preload_db(&self, files: Vec<String>) -> Result<()> {
         let preload = {
             let name2file = self.name2file.read();
@@ -268,7 +295,7 @@ impl RelaxedIdb {
         Ok(())
     }
 
-    async fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
+    fn import_db(&self, path: &str, bytes: &[u8]) -> Result<WaitNotify> {
         if bytes.len() < 512 && bytes.len() % 512 != 0 {
             return Err(RelaxedIdbError::Generic(
                 "Byte array size is invalid for an SQLite db.".into(),
@@ -295,16 +322,16 @@ impl RelaxedIdb {
             usize::from(page_size)
         };
 
-        self.import_db_unchecked(path, bytes, page_size, true).await
+        self.import_db_unchecked(path, bytes, page_size, true)
     }
 
-    async fn import_db_unchecked(
+    fn import_db_unchecked(
         &self,
         path: &str,
         bytes: &[u8],
         page_size: usize,
         clear_wal: bool,
-    ) -> Result<()> {
+    ) -> Result<WaitNotify> {
         if !(page_size.is_power_of_two() && (512..=65536).contains(&page_size))
             || bytes.len() % page_size != 0
         {
@@ -361,9 +388,7 @@ impl RelaxedIdb {
             }),
         );
 
-        self.sync_file_impl(path).await?;
-
-        Ok(())
+        self.send_task_with_notify(IdbCommitOp::Sync(path.into()))
     }
 
     fn export_file(&self, name: &str) -> Result<Vec<u8>> {
@@ -392,15 +417,14 @@ impl RelaxedIdb {
         }
     }
 
-    async fn delete_file(&self, name: &str) -> Result<()> {
+    fn delete_file(&self, name: &str) -> Result<WaitNotify> {
         self.name2file.write().remove(name);
-        self.delete_file_impl(name).await?;
-        Ok(())
+        self.send_task_with_notify(IdbCommitOp::Delete(name.into()))
     }
 
-    async fn clear_all(&self) -> Result<()> {
+    fn clear_all(&self) -> Result<WaitNotify> {
         std::mem::take(&mut *self.name2file.write());
-        clear_impl(&self.idb).await
+        self.send_task_with_notify(IdbCommitOp::Clear)
     }
 
     async fn delete_file_impl(&self, file: &str) -> Result<()> {
@@ -470,11 +494,15 @@ impl RelaxedIdb {
 
     async fn commit_loop(&self, mut rx: UnboundedReceiver<IdbCommit>) {
         while let Some(commit) = rx.recv().await {
-            let IdbCommit { file, op } = commit;
-            if let Err(_e) = match op {
-                IdbCommitOp::Sync => self.sync_file_impl(&file).await,
-                IdbCommitOp::Delete => self.delete_file_impl(&file).await,
-            } {}
+            let IdbCommit { op, notify } = commit;
+            let ret = match op {
+                IdbCommitOp::Sync(file) => self.sync_file_impl(&file).await,
+                IdbCommitOp::Delete(file) => self.delete_file_impl(&file).await,
+                IdbCommitOp::Clear => clear_impl(&self.idb).await,
+            };
+            if let Some(notify) = notify {
+                let _ = notify.send(ret);
+            }
         }
     }
 }
@@ -538,14 +566,12 @@ impl VfsStore<IdbFile, RelaxedIdb> for RelaxedIdbStore {
         };
         // temp db never put into indexed db, no need to delete
         if let IdbFile::Main(_) = &idb_file {
-            if pool
-                .tx
-                .send(IdbCommit {
-                    file: file.into(),
-                    op: IdbCommitOp::Delete,
-                })
-                .is_err()
-            {}
+            if pool.send_task(IdbCommitOp::Delete(file.into())).is_err() {
+                return Err(VfsError::new(
+                    SQLITE_IOERR_DELETE,
+                    format!("failed to send delete task, file: {file}"),
+                ));
+            }
         }
         Ok(())
     }
@@ -627,14 +653,7 @@ impl SQLiteIoMethods for RelaxedIdbIoMethods {
             }
             SQLITE_FCNTL_SYNC | SQLITE_FCNTL_COMMIT_PHASETWO => {
                 if !file.sync_notified {
-                    if pool
-                        .tx
-                        .send(IdbCommit {
-                            file: name.into(),
-                            op: IdbCommitOp::Sync,
-                        })
-                        .is_err()
-                    {
+                    if pool.send_task(IdbCommitOp::Sync(name.into())).is_err() {
                         return pool.store_err(VfsError::new(
                             SQLITE_ERROR,
                             format!("failed to send sync task, file: {name}"),
@@ -654,6 +673,24 @@ struct RelaxedIdbVfs;
 
 impl SQLiteVfs<RelaxedIdbIoMethods> for RelaxedIdbVfs {
     const VERSION: ::std::os::raw::c_int = 1;
+}
+
+/// Waiting for task execution result
+pub struct WaitNotify(tokio::sync::oneshot::Receiver<Result<()>>);
+
+impl Future for WaitNotify {
+    type Output = Result<()>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match Pin::new(&mut self.0).poll(cx) {
+            Poll::Ready(ret) => Poll::Ready(ret.unwrap_or_else(|_| {
+                Err(RelaxedIdbError::Generic(
+                    "Waiting for notify failure".into(),
+                ))
+            })),
+            Poll::Pending => Poll::Pending,
+        }
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -756,20 +793,18 @@ impl RelaxedIdbUtil {
     /// <https://sqlite.org/forum/forumpost/67882c5b04>
     ///
     /// If the imported DB is encrypted, use `import_db_unchecked` instead.
-    pub async fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
-        self.pool.import_db(path, bytes).await
+    pub fn import_db(&self, path: &str, bytes: &[u8]) -> Result<WaitNotify> {
+        self.pool.import_db(path, bytes)
     }
 
     /// Can be used to import encrypted DB
-    pub async fn import_db_unchecked(
+    pub fn import_db_unchecked(
         &self,
         path: &str,
         bytes: &[u8],
         page_size: usize,
-    ) -> Result<()> {
-        self.pool
-            .import_db_unchecked(path, bytes, page_size, false)
-            .await
+    ) -> Result<WaitNotify> {
+        self.pool.import_db_unchecked(path, bytes, page_size, false)
     }
 
     /// Export database
@@ -782,8 +817,8 @@ impl RelaxedIdbUtil {
     /// # Attention
     ///
     /// Please make sure that the deleted db is closed.
-    pub async fn delete_file(&self, name: &str) -> Result<()> {
-        self.pool.delete_file(name).await
+    pub fn delete_file(&self, name: &str) -> Result<WaitNotify> {
+        self.pool.delete_file(name)
     }
 
     /// Delete all files in the indexed db.
@@ -791,8 +826,8 @@ impl RelaxedIdbUtil {
     /// # Attention
     ///
     /// Please make sure that all dbs is closed.
-    pub async fn clear_all(&self) -> Result<()> {
-        self.pool.clear_all().await
+    pub fn clear_all(&self) -> Result<WaitNotify> {
+        self.pool.clear_all()
     }
 }
 
