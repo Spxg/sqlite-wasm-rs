@@ -442,10 +442,10 @@ impl OpfsSAHPool {
                 "Input does not contain an SQLite database header.".into(),
             ));
         }
-        self.import_db_unchecked(path, bytes)
+        self.import_db_unchecked(path, bytes, true)
     }
 
-    fn import_db_unchecked(&self, path: &str, bytes: &[u8]) -> Result<()> {
+    fn import_db_unchecked(&self, path: &str, bytes: &[u8], clear_wal: bool) -> Result<()> {
         let length = bytes.len();
         let path = self.get_path(path)?;
 
@@ -468,13 +468,14 @@ impl OpfsSAHPool {
             )));
         }
 
-        // <https://sqlite.org/forum/forumpost/67882c5b04>
-        #[cfg(not(feature = "sqlite3mc"))]
-        sah.write_with_u8_array_and_options(
-            &[1, 1],
-            &read_write_options((HEADER_OFFSET_DATA + 18) as f64),
-        )
-        .map_err(OpfsSAHError::Write)?;
+        if clear_wal {
+            // forced to write back to legacy mode
+            sah.write_with_u8_array_and_options(
+                &[1, 1],
+                &read_write_options((HEADER_OFFSET_DATA + 18) as f64),
+            )
+            .map_err(OpfsSAHError::Write)?;
+        }
         self.set_associated_path(&sah, Some(&path), SQLITE_OPEN_MAIN_DB)?;
 
         Ok(())
@@ -815,14 +816,18 @@ impl OpfsSAHPoolUtil {
     /// Imports the contents of an SQLite database, provided as a byte array
     /// under the given name, overwriting any existing content.
     ///
-    /// If the imported DB is encrypted, use `import_db_unchecked`
+    /// If the database is imported with WAL mode enabled,
+    /// it will be forced to write back to legacy mode, see
+    /// <https://sqlite.org/forum/forumpost/67882c5b04>.
+    ///
+    /// If the imported DB is encrypted, use `import_db_unchecked` instead.
     pub fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
         self.pool.import_db(path, bytes)
     }
 
     /// Can be used to import encrypted DB
     pub fn import_db_unchecked(&self, path: &str, bytes: &[u8]) -> Result<()> {
-        self.pool.import_db_unchecked(path, bytes)
+        self.pool.import_db_unchecked(path, bytes, false)
     }
 
     /// Clears all client-defined state of all SAHs and makes all of them available
