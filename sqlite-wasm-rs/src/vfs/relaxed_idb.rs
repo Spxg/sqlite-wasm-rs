@@ -295,10 +295,16 @@ impl RelaxedIdb {
             usize::from(page_size)
         };
 
-        self.import_db_unchecked(path, bytes, page_size).await
+        self.import_db_unchecked(path, bytes, page_size, true).await
     }
 
-    async fn import_db_unchecked(&self, path: &str, bytes: &[u8], page_size: usize) -> Result<()> {
+    async fn import_db_unchecked(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        page_size: usize,
+        clear_wal: bool,
+    ) -> Result<()> {
         if !(page_size.is_power_of_two() && (512..=65536).contains(&page_size))
             || bytes.len() % page_size != 0
         {
@@ -318,13 +324,30 @@ impl RelaxedIdb {
         let mut blocks = HashMap::new();
 
         let mut buffer = vec![0; page_size];
-        for (idx, chunk) in bytes.chunks(page_size).enumerate() {
+        let mut chunks = bytes.chunks(page_size).enumerate();
+
+        if let Some((idx, chunk)) = chunks.next() {
+            buffer.copy_from_slice(chunk);
+
+            // forced to write back to legacy mode
+            if clear_wal {
+                buffer[18] = 1;
+                buffer[19] = 1;
+            }
+            blocks.insert(
+                idx * page_size,
+                FragileComfirmed::new(copy_to_uint8_array(&buffer)),
+            );
+        }
+
+        for (idx, chunk) in chunks {
             buffer.copy_from_slice(chunk);
             blocks.insert(
                 idx * page_size,
                 FragileComfirmed::new(copy_to_uint8_array(&buffer)),
             );
         }
+
         let tx_blocks = blocks.keys().copied().collect();
 
         self.name2file.write().insert(
@@ -728,7 +751,11 @@ impl RelaxedIdbUtil {
 
     /// Import the db file into the pool and indexed db.
     ///
-    /// If the imported DB is encrypted, use `import_db_unchecked`
+    /// If the database is imported with WAL mode enabled,
+    /// it will be forced to write back to legacy mode, see
+    /// <https://sqlite.org/forum/forumpost/67882c5b04>
+    ///
+    /// If the imported DB is encrypted, use `import_db_unchecked` instead.
     pub async fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
         self.pool.import_db(path, bytes).await
     }
@@ -740,7 +767,9 @@ impl RelaxedIdbUtil {
         bytes: &[u8],
         page_size: usize,
     ) -> Result<()> {
-        self.pool.import_db_unchecked(path, bytes, page_size).await
+        self.pool
+            .import_db_unchecked(path, bytes, page_size, false)
+            .await
     }
 
     /// Export database
