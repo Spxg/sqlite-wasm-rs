@@ -102,8 +102,9 @@ async fn test_opfs_sah_vfs_util() {
     );
 
     // export and import to new.db
-    let db = util.export_file("/test_opfs_sah_util.db").unwrap();
-    util.import_db("/new.db", &db).unwrap();
+    let db = util.export_file("test_opfs_sah_util.db").unwrap();
+    util.import_db("new.db", &db).unwrap();
+    assert!(util.exist("new.db").unwrap_or_default());
     assert_eq!(before + 1, util.get_file_count());
 
     let mut db = std::ptr::null_mut();

@@ -427,6 +427,10 @@ impl RelaxedIdb {
         self.send_task_with_notify(IdbCommitOp::Clear)
     }
 
+    fn exist(&self, file: &str) -> bool {
+        self.name2file.read().contains_key(file)
+    }
+
     async fn delete_file_impl(&self, file: &str) -> Result<()> {
         let transaction = self
             .idb
@@ -828,6 +832,11 @@ impl RelaxedIdbUtil {
     /// Please make sure that all dbs is closed.
     pub fn clear_all(&self) -> Result<WaitNotify> {
         self.pool.clear_all()
+    }
+
+    /// Does the DB exist
+    pub fn exist(&self, file: &str) -> bool {
+        self.pool.exist(file)
     }
 }
 

@@ -110,6 +110,7 @@ async fn test_idb_vfs_utils() {
     // export and import to new.db
     let db = util.export_file("test_idb_vfs_utils.db").unwrap();
     util.import_db("new.db", &db).unwrap().await.unwrap();
+    assert!(util.exist("new.db"));
 
     let mut db = std::ptr::null_mut();
 
