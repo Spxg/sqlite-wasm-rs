@@ -88,13 +88,13 @@ async unsafe fn test_relaxed_db_vfs_cipher(cipher: &str) {
     check_result(db);
     sqlite3_close(db);
 
-    let db1 = util.export_file(&db_name).unwrap();
+    let db1 = util.export_db(&db_name).unwrap();
     let new_db_name = format!("test_relaxed_db_vfs_{cipher}2.db");
     util.import_db_unchecked(&new_db_name, &db1, 4096)
         .unwrap()
         .await
         .unwrap();
-    let db2 = util.export_file(&new_db_name).unwrap();
+    let db2 = util.export_db(&new_db_name).unwrap();
     assert_eq!(db1, db2);
 
     let mut db = std::ptr::null_mut();
