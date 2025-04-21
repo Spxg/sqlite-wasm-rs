@@ -1,20 +1,21 @@
 #![allow(deprecated)]
 
 #[cfg(any(feature = "bundled", feature = "buildtime-bindgen"))]
-const COMMON: [&str; 7] = [
+const FULL_FEATURED: [&str; 23] = [
+    "-DSQLITE_OS_OTHER",
+    "-DSQLITE_USE_URI",
     // wasm is single-threaded
     "-DSQLITE_THREADSAFE=0",
     "-DSQLITE_TEMP_STORE=2",
-    "-DSQLITE_OS_OTHER",
-    "-DSQLITE_ENABLE_MATH_FUNCTIONS",
-    "-DSQLITE_USE_URI=1",
+    "-DSQLITE_DEFAULT_CACHE_SIZE=-16384",
+    "-DSQLITE_DEFAULT_PAGE_SIZE=8192",
     "-DSQLITE_OMIT_DEPRECATED",
     // there is no dlopen on this platform.
     "-DSQLITE_OMIT_LOAD_EXTENSION",
-];
-
-#[cfg(any(feature = "bundled", feature = "buildtime-bindgen"))]
-const FULL_FEATURED: [&str; 12] = [
+    // single-threaded, single connection is enough
+    "-DSQLITE_OMIT_SHARED_CACHE",
+    "-DSQLITE_ENABLE_API_ARMOR",
+    "-DSQLITE_ENABLE_MATH_FUNCTIONS",
     "-DSQLITE_ENABLE_BYTECODE_VTAB",
     "-DSQLITE_ENABLE_DBPAGE_VTAB",
     "-DSQLITE_ENABLE_DBSTAT_VTAB",
@@ -198,7 +199,7 @@ fn bindgen(output: &str) {
         .blocklist_function("sqlite3_create_module")
         .blocklist_function("sqlite3_prepare");
 
-    bindings = bindings.clang_args(COMMON).clang_args(FULL_FEATURED);
+    bindings = bindings.clang_args(FULL_FEATURED);
 
     #[cfg(feature = "sqlite3mc")]
     {
@@ -257,7 +258,7 @@ or use the precompiled binaries via the `default-features = false` and `precompi
 
     if !cfg!(feature = "custom-libc") || build_all {
         let mut cmd = Command::new(CC);
-        cmd.args(COMMON).args(FULL_FEATURED);
+        cmd.args(FULL_FEATURED);
         #[cfg(feature = "sqlite3mc")]
         cmd.args(SQLITE3_MC_FEATURED);
         cmd.arg(SQLITE3_SOURCE)
@@ -281,7 +282,7 @@ or use the precompiled binaries via the `default-features = false` and `precompi
 
     if cfg!(feature = "custom-libc") || build_all {
         let mut cmd = Command::new(CC);
-        cmd.args(COMMON).args(FULL_FEATURED);
+        cmd.args(FULL_FEATURED);
         #[cfg(feature = "sqlite3mc")]
         cmd.args(SQLITE3_MC_FEATURED);
         cmd.arg(SQLITE3_SOURCE)
