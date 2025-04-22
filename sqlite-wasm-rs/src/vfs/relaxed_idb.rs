@@ -1,9 +1,9 @@
 //! relaxed-idb vfs implementation
 
 use crate::vfs::utils::{
-    copy_to_slice, copy_to_uint8_array, copy_to_uint8_array_subarray, page_read, register_vfs,
-    FragileComfirmed, MemLinearFile, RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile,
-    VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
+    copy_to_slice, copy_to_uint8_array, copy_to_uint8_array_subarray, import_db_check, page_read,
+    register_vfs, FragileComfirmed, MemLinearFile, RegisterVfsError, SQLiteIoMethods, SQLiteVfs,
+    SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
 };
 use crate::{bail, check_option, check_result, libsqlite3::*};
 
@@ -296,22 +296,7 @@ impl RelaxedIdb {
     }
 
     fn import_db(&self, path: &str, bytes: &[u8]) -> Result<WaitCommit> {
-        if bytes.len() < 512 && bytes.len() % 512 != 0 {
-            return Err(RelaxedIdbError::Generic(
-                "Byte array size is invalid for an SQLite db.".into(),
-            ));
-        }
-
-        if crate::utils::SQLITE3_HEADER
-            .as_bytes()
-            .iter()
-            .zip(bytes)
-            .any(|(x, y)| x != y)
-        {
-            return Err(RelaxedIdbError::Generic(
-                "Input does not contain an SQLite database header.".into(),
-            ));
-        }
+        import_db_check(bytes).map_err(|errmsg| RelaxedIdbError::Generic(errmsg))?;
 
         // The database page size in bytes.
         // Must be a power of two between 512 and 32768 inclusive, or the value 1 representing a page size of 65536.
@@ -427,7 +412,7 @@ impl RelaxedIdb {
         self.send_task_with_notify(IdbCommitOp::Clear)
     }
 
-    fn exist(&self, file: &str) -> bool {
+    fn exists(&self, file: &str) -> bool {
         self.name2file.read().contains_key(file)
     }
 
@@ -505,6 +490,8 @@ impl RelaxedIdb {
                 IdbCommitOp::Clear => clear_impl(&self.idb).await,
             };
             if let Some(notify) = notify {
+                // An unsuccessful send would be one where the corresponding receiver
+                // has already been deallocated.
                 let _ = notify.send(ret);
             }
         }
@@ -835,8 +822,8 @@ impl RelaxedIdbUtil {
     }
 
     /// Does the DB exist
-    pub fn exist(&self, file: &str) -> bool {
-        self.pool.exist(file)
+    pub fn exists(&self, file: &str) -> bool {
+        self.pool.exists(file)
     }
 }
 

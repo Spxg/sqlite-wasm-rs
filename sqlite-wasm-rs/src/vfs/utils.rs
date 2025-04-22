@@ -882,6 +882,26 @@ pub mod x_methods_shim {
     }
 }
 
+/// Simple verification when importing db
+pub fn import_db_check(bytes: &[u8]) -> Result<(), String> {
+    let length = bytes.len();
+
+    if length < 512 && length % 512 != 0 {
+        return Err("Byte array size is invalid for an SQLite db.".into());
+    }
+
+    if SQLITE3_HEADER
+        .as_bytes()
+        .iter()
+        .zip(bytes)
+        .any(|(x, y)| x != y)
+    {
+        return Err("Input does not contain an SQLite database header.".into());
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::vfs::utils::{copy_to_slice, copy_to_uint8_array_subarray};

@@ -6,9 +6,9 @@
 
 use crate::libsqlite3::*;
 use crate::vfs::utils::{
-    copy_to_uint8_array_subarray, copy_to_vec, get_random_name, register_vfs, FragileComfirmed,
-    RegisterVfsError, SQLiteIoMethods, SQLiteVfs, VfsAppData, VfsError, VfsFile, VfsResult,
-    VfsStore,
+    copy_to_uint8_array_subarray, copy_to_vec, get_random_name, import_db_check, register_vfs,
+    FragileComfirmed, RegisterVfsError, SQLiteIoMethods, SQLiteVfs, VfsAppData, VfsError, VfsFile,
+    VfsResult, VfsStore,
 };
 
 use js_sys::{Array, DataView, IteratorNext, Map, Reflect, Set, Uint8Array};
@@ -425,23 +425,8 @@ impl OpfsSAHPool {
     }
 
     fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
-        let length = bytes.len();
-        if length < 512 && length % 512 != 0 {
-            return Err(OpfsSAHError::Generic(
-                "Byte array size is invalid for an SQLite db.".into(),
-            ));
-        }
+        import_db_check(bytes).map_err(|errmsg| OpfsSAHError::Generic(errmsg))?;
 
-        if crate::utils::SQLITE3_HEADER
-            .as_bytes()
-            .iter()
-            .zip(bytes)
-            .any(|(x, y)| x != y)
-        {
-            return Err(OpfsSAHError::Generic(
-                "Input does not contain an SQLite database header.".into(),
-            ));
-        }
         self.import_db_unchecked(path, bytes, true)
     }
 
@@ -839,7 +824,7 @@ impl OpfsSAHPoolUtil {
     }
 
     /// Does the DB exist
-    pub fn exist(&self, file: &str) -> Result<bool> {
+    pub fn exists(&self, file: &str) -> Result<bool> {
         let file = self.pool.get_path(file)?;
         Ok(self.pool.has_filename(&file))
     }
