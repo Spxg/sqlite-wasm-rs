@@ -265,7 +265,7 @@ impl RelaxedIdb {
                 "failed to send commit task".into(),
             ));
         }
-        return Ok(());
+        Ok(())
     }
 
     fn send_task_with_notify(&self, op: IdbCommitOp) -> Result<WaitCommit> {
@@ -279,7 +279,7 @@ impl RelaxedIdb {
                 "failed to send commit task".into(),
             ));
         }
-        return Ok(WaitCommit(rx));
+        Ok(WaitCommit(rx))
     }
 
     async fn preload_db(&self, files: Vec<String>) -> Result<()> {
@@ -296,7 +296,7 @@ impl RelaxedIdb {
     }
 
     fn import_db(&self, path: &str, bytes: &[u8]) -> Result<WaitCommit> {
-        import_db_check(bytes).map_err(|errmsg| RelaxedIdbError::Generic(errmsg))?;
+        import_db_check(bytes).map_err(RelaxedIdbError::Generic)?;
 
         // The database page size in bytes.
         // Must be a power of two between 512 and 32768 inclusive, or the value 1 representing a page size of 65536.
