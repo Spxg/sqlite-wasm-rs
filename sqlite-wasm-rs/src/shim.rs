@@ -302,12 +302,29 @@ mod tests {
     };
 
     use super::{
-        rust_sqlite_wasm_shim_calloc, rust_sqlite_wasm_shim_emscripten_get_now,
+        rust_sqlite_wasm_shim_abort_js, rust_sqlite_wasm_shim_calloc,
+        rust_sqlite_wasm_shim_emscripten_get_now, rust_sqlite_wasm_shim_exit,
         rust_sqlite_wasm_shim_free, rust_sqlite_wasm_shim_localtime_js,
         rust_sqlite_wasm_shim_malloc, rust_sqlite_wasm_shim_realloc,
         rust_sqlite_wasm_shim_tzset_js, rust_sqlite_wasm_shim_wasi_random_get, tm,
     };
     use wasm_bindgen_test::{console_log, wasm_bindgen_test};
+
+    #[should_panic]
+    #[wasm_bindgen_test]
+    fn test_abort() {
+        unsafe {
+            rust_sqlite_wasm_shim_abort_js();
+        }
+    }
+
+    #[should_panic]
+    #[wasm_bindgen_test]
+    fn test_exit() {
+        unsafe {
+            rust_sqlite_wasm_shim_exit(114514);
+        }
+    }
 
     #[wasm_bindgen_test]
     fn test_random_get() {
