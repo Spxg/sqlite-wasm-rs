@@ -425,8 +425,7 @@ impl OpfsSAHPool {
     }
 
     fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
-        import_db_check(bytes).map_err(|errmsg| OpfsSAHError::Generic(errmsg))?;
-
+        import_db_check(bytes).map_err(OpfsSAHError::Generic)?;
         self.import_db_unchecked(path, bytes, true)
     }
 
