@@ -2,7 +2,74 @@
 
 use js_sys::{Date, Number};
 use wasm_bindgen::JsCast;
-use web_sys::{ServiceWorkerGlobalScope, SharedWorkerGlobalScope, Window, WorkerGlobalScope};
+use web_sys::{
+    Crypto, Performance, ServiceWorkerGlobalScope, SharedWorkerGlobalScope, Window,
+    WorkerGlobalScope,
+};
+
+enum GlobalEnv {
+    Window(Window),
+    Worker(WorkerGlobalScope),
+    ShardWorker(SharedWorkerGlobalScope),
+    ServiceWorker(ServiceWorkerGlobalScope),
+}
+
+impl GlobalEnv {
+    fn new() -> Self {
+        if let Ok(window) = js_sys::global().dyn_into::<Window>() {
+            Self::Window(window)
+        } else if let Ok(worker) = js_sys::global().dyn_into::<WorkerGlobalScope>() {
+            Self::Worker(worker)
+        } else if let Ok(worker) = js_sys::global().dyn_into::<SharedWorkerGlobalScope>() {
+            Self::ShardWorker(worker)
+        } else if let Ok(worker) = js_sys::global().dyn_into::<ServiceWorkerGlobalScope>() {
+            Self::ServiceWorker(worker)
+        } else {
+            panic!("unsupported environment");
+        }
+    }
+
+    fn performance(&self) -> Performance {
+        match self {
+            GlobalEnv::Window(window) => window.performance(),
+            GlobalEnv::Worker(worker_global_scope) => worker_global_scope.performance(),
+            GlobalEnv::ShardWorker(shared_worker_global_scope) => {
+                shared_worker_global_scope.performance()
+            }
+            GlobalEnv::ServiceWorker(service_worker_global_scope) => {
+                service_worker_global_scope.performance()
+            }
+        }
+        .expect("performance should be available")
+    }
+
+    fn is_secure_context(&self) -> bool {
+        match self {
+            GlobalEnv::Window(window) => window.is_secure_context(),
+            GlobalEnv::Worker(worker_global_scope) => worker_global_scope.is_secure_context(),
+            GlobalEnv::ShardWorker(shared_worker_global_scope) => {
+                shared_worker_global_scope.is_secure_context()
+            }
+            GlobalEnv::ServiceWorker(service_worker_global_scope) => {
+                service_worker_global_scope.is_secure_context()
+            }
+        }
+    }
+
+    fn crypto(&self) -> Crypto {
+        match self {
+            GlobalEnv::Window(window) => window.crypto(),
+            GlobalEnv::Worker(worker_global_scope) => worker_global_scope.crypto(),
+            GlobalEnv::ShardWorker(shared_worker_global_scope) => {
+                shared_worker_global_scope.crypto()
+            }
+            GlobalEnv::ServiceWorker(service_worker_global_scope) => {
+                service_worker_global_scope.crypto()
+            }
+        }
+        .expect("crypto should be available")
+    }
+}
 
 pub type time_t = std::os::raw::c_longlong;
 
@@ -118,19 +185,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_tzset_js(
 /// https://github.com/sqlite/sqlite-wasm/blob/7c1b309c3bd07d8e6d92f82344108cebbd14f161/sqlite-wasm/jswasm/sqlite3-bundler-friendly.mjs#L3496
 #[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_shim_emscripten_get_now() -> std::os::raw::c_double {
-    let performance = if let Ok(window) = js_sys::global().dyn_into::<Window>() {
-        window.performance()
-    } else if let Ok(worker) = js_sys::global().dyn_into::<WorkerGlobalScope>() {
-        worker.performance()
-    } else if let Ok(worker) = js_sys::global().dyn_into::<SharedWorkerGlobalScope>() {
-        worker.performance()
-    } else if let Ok(worker) = js_sys::global().dyn_into::<ServiceWorkerGlobalScope>() {
-        worker.performance()
-    } else {
-        panic!("unsupported environment");
-    }
-    .expect("performance should be available");
-    performance.now()
+    GlobalEnv::new().performance().now()
 }
 
 /// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/include/wasi/api.h#L2652
@@ -139,38 +194,15 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_wasi_random_get(
     buf: *mut u8,
     buf_len: usize,
 ) -> std::os::raw::c_ushort {
-    fn is_secure_context() -> bool {
-        if let Ok(window) = js_sys::global().dyn_into::<Window>() {
-            window.is_secure_context()
-        } else if let Ok(worker) = js_sys::global().dyn_into::<WorkerGlobalScope>() {
-            worker.is_secure_context()
-        } else if let Ok(worker) = js_sys::global().dyn_into::<SharedWorkerGlobalScope>() {
-            worker.is_secure_context()
-        } else if let Ok(worker) = js_sys::global().dyn_into::<ServiceWorkerGlobalScope>() {
-            worker.is_secure_context()
-        } else {
-            panic!("unsupported environment");
-        }
-    }
+    let global_env = GlobalEnv::new();
 
-    if !is_secure_context() {
+    if !global_env.is_secure_context() {
         // Function not supported.
         // https://github.com/WebAssembly/wasi-libc/blob/e9524a0980b9bb6bb92e87a41ed1055bdda5bb86/libc-bottom-half/headers/public/wasi/api.h#L373
         return 52;
     }
 
-    let crypto = if let Ok(window) = js_sys::global().dyn_into::<Window>() {
-        window.crypto()
-    } else if let Ok(worker) = js_sys::global().dyn_into::<WorkerGlobalScope>() {
-        worker.crypto()
-    } else if let Ok(worker) = js_sys::global().dyn_into::<SharedWorkerGlobalScope>() {
-        worker.crypto()
-    } else if let Ok(worker) = js_sys::global().dyn_into::<ServiceWorkerGlobalScope>() {
-        worker.crypto()
-    } else {
-        panic!("unsupported environment");
-    }
-    .expect("crypto should be available");
+    let crypto = global_env.crypto();
 
     #[cfg(target_feature = "atomics")]
     {
@@ -257,7 +289,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_calloc(num: usize, size: usize) -
 
 #[no_mangle]
 pub unsafe extern "C" fn sqlite3_os_init() -> std::os::raw::c_int {
-    super::vfs::memory::install()
+    crate::vfs::memory::install()
 }
 
 #[cfg(test)]
