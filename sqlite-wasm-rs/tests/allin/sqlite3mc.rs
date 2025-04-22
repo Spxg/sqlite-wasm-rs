@@ -90,7 +90,7 @@ async unsafe fn test_relaxed_db_vfs_cipher(cipher: &str) {
 
     let db1 = util.export_db(&db_name).unwrap();
     let new_db_name = format!("test_relaxed_db_vfs_{cipher}2.db");
-    util.import_db_unchecked(&new_db_name, &db1, 4096)
+    util.import_db_unchecked(&new_db_name, &db1, 8192)
         .unwrap()
         .await
         .unwrap();
