@@ -6,9 +6,9 @@
 
 use crate::libsqlite3::*;
 use crate::vfs::utils::{
-    copy_to_uint8_array_subarray, copy_to_vec, get_random_name, import_db_check, register_vfs,
-    FragileComfirmed, RegisterVfsError, SQLiteIoMethods, SQLiteVfs, VfsAppData, VfsError, VfsFile,
-    VfsResult, VfsStore,
+    check_import_db, copy_to_uint8_array_subarray, copy_to_vec, get_random_name, register_vfs,
+    FragileComfirmed, ImportDbError, RegisterVfsError, SQLiteIoMethods, SQLiteVfs, VfsAppData,
+    VfsError, VfsFile, VfsResult, VfsStore,
 };
 
 use js_sys::{Array, DataView, IteratorNext, Map, Reflect, Set, Uint8Array};
@@ -425,7 +425,7 @@ impl OpfsSAHPool {
     }
 
     fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
-        import_db_check(bytes).map_err(OpfsSAHError::Generic)?;
+        check_import_db(bytes)?;
         self.import_db_unchecked(path, bytes, true)
     }
 
@@ -702,6 +702,8 @@ impl Default for OpfsSAHPoolCfg {
 pub enum OpfsSAHError {
     #[error(transparent)]
     Vfs(#[from] RegisterVfsError),
+    #[error(transparent)]
+    ImportDb(#[from] ImportDbError),
     #[error("This vfs is only available in dedicated worker")]
     NotSuported,
     #[error("An error occurred while getting the directory handle")]
