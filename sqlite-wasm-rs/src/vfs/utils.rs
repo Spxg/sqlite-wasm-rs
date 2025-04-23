@@ -101,7 +101,7 @@ pub fn copy_to_uint8_array(src: &[u8]) -> Uint8Array {
 /// Copy `slice` to `Unit8Array`
 pub fn copy_to_uint8_array_subarray(src: &[u8], dst: &Uint8Array) {
     assert!(
-        src.len() == dst.length() as _,
+        src.len() == dst.length() as usize,
         "Unit8Array and slice have different sizes"
     );
     let buf = wasm_bindgen::memory();
