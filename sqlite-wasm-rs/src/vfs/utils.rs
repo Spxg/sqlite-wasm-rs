@@ -882,12 +882,22 @@ pub mod x_methods_shim {
     }
 }
 
-/// Simple verification when importing db
-pub fn import_db_check(bytes: &[u8]) -> Result<(), String> {
+#[derive(thiserror::Error, Debug)]
+pub enum ImportDbError {
+    #[error("Byte array size is invalid for an SQLite db.")]
+    InvalidDbSize,
+    #[error("Input does not contain an SQLite database header.")]
+    InvalidHeader,
+    #[error("Page size must be a power of two between 512 and 65536 inclusive")]
+    InvalidPageSize,
+}
+
+/// Simple verification when importing db, and return page size;
+pub fn check_import_db(bytes: &[u8]) -> Result<usize, ImportDbError> {
     let length = bytes.len();
 
     if length < 512 && length % 512 != 0 {
-        return Err("Byte array size is invalid for an SQLite db.".into());
+        return Err(ImportDbError::InvalidDbSize);
     }
 
     if SQLITE3_HEADER
@@ -896,9 +906,29 @@ pub fn import_db_check(bytes: &[u8]) -> Result<(), String> {
         .zip(bytes)
         .any(|(x, y)| x != y)
     {
-        return Err("Input does not contain an SQLite database header.".into());
+        return Err(ImportDbError::InvalidHeader);
     }
 
+    // The database page size in bytes.
+    // Must be a power of two between 512 and 32768 inclusive, or the value 1 representing a page size of 65536.
+    let page_size = u16::from_be_bytes([bytes[16], bytes[17]]);
+    let page_size = if page_size == 1 {
+        65536
+    } else {
+        usize::from(page_size)
+    };
+
+    Ok(page_size)
+}
+
+/// Check db and page size, page size must be a power of two between 512 and 65536 inclusive, db size must be a multiple of page size.
+pub fn check_db_and_page_size(db_size: usize, page_size: usize) -> Result<(), ImportDbError> {
+    if !(page_size.is_power_of_two() && (512..=65536).contains(&page_size)) {
+        return Err(ImportDbError::InvalidPageSize);
+    }
+    if db_size % page_size != 0 {
+        return Err(ImportDbError::InvalidDbSize);
+    }
     Ok(())
 }
 

@@ -1,9 +1,10 @@
 //! relaxed-idb vfs implementation
 
 use crate::vfs::utils::{
-    copy_to_slice, copy_to_uint8_array, copy_to_uint8_array_subarray, import_db_check, page_read,
-    register_vfs, FragileComfirmed, MemLinearFile, RegisterVfsError, SQLiteIoMethods, SQLiteVfs,
-    SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
+    check_db_and_page_size, check_import_db, copy_to_slice, copy_to_uint8_array,
+    copy_to_uint8_array_subarray, page_read, register_vfs, FragileComfirmed, ImportDbError,
+    MemLinearFile, RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData,
+    VfsError, VfsFile, VfsResult, VfsStore,
 };
 use crate::{bail, check_option, check_result, libsqlite3::*};
 
@@ -296,17 +297,7 @@ impl RelaxedIdb {
     }
 
     fn import_db(&self, path: &str, bytes: &[u8]) -> Result<WaitCommit> {
-        import_db_check(bytes).map_err(RelaxedIdbError::Generic)?;
-
-        // The database page size in bytes.
-        // Must be a power of two between 512 and 32768 inclusive, or the value 1 representing a page size of 65536.
-        let page_size = u16::from_be_bytes([bytes[16], bytes[17]]);
-        let page_size = if page_size == 1 {
-            65536
-        } else {
-            usize::from(page_size)
-        };
-
+        let page_size = check_import_db(bytes)?;
         self.import_db_unchecked(path, bytes, page_size, true)
     }
 
@@ -317,15 +308,7 @@ impl RelaxedIdb {
         page_size: usize,
         clear_wal: bool,
     ) -> Result<WaitCommit> {
-        if !(page_size.is_power_of_two() && (512..=65536).contains(&page_size))
-            || bytes.len() % page_size != 0
-        {
-            return Err(RelaxedIdbError::Generic(
-                "Wrong page_size or wrong file length. \
-                The file length needs to be an integer multiple of page_size."
-                    .into(),
-            ));
-        }
+        check_db_and_page_size(bytes.len(), page_size)?;
 
         if self.name2file.read().contains_key(path) {
             return Err(RelaxedIdbError::Generic(format!(
@@ -678,6 +661,8 @@ impl Future for WaitCommit {
 pub enum RelaxedIdbError {
     #[error(transparent)]
     Vfs(#[from] RegisterVfsError),
+    #[error(transparent)]
+    ImportDb(#[from] ImportDbError),
     #[error(transparent)]
     OpenDb(#[from] indexed_db_futures::error::OpenDbError),
     #[error(transparent)]

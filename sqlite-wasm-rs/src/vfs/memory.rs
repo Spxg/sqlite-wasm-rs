@@ -2,8 +2,8 @@
 
 use crate::libsqlite3::*;
 use crate::vfs::utils::{
-    import_db_check, page_read, MemLinearFile, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile,
-    VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
+    check_db_and_page_size, check_import_db, page_read, ImportDbError, MemLinearFile,
+    SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
 };
 
 use once_cell::sync::OnceCell;
@@ -190,6 +190,8 @@ fn app_data() -> &'static VfsAppData<MemAppData> {
 
 #[derive(thiserror::Error, Debug)]
 pub enum MemVfsError {
+    #[error(transparent)]
+    ImportDb(#[from] ImportDbError),
     #[error("Generic error: {0}")]
     Generic(String),
 }
@@ -205,15 +207,7 @@ impl MemVfsUtil {
         page_size: usize,
         clear_wal: bool,
     ) -> Result<()> {
-        if !(page_size.is_power_of_two() && (512..=65536).contains(&page_size))
-            || bytes.len() % page_size != 0
-        {
-            return Err(MemVfsError::Generic(
-                "Wrong page_size or wrong file length. \
-                The file length needs to be an integer multiple of page_size."
-                    .into(),
-            ));
-        }
+        check_db_and_page_size(bytes.len(), page_size)?;
 
         if self.exists(path) {
             return Err(MemVfsError::Generic(format!("{path} file already exists")));
@@ -257,17 +251,7 @@ impl MemVfsUtil {
     ///
     /// If the imported DB is encrypted, use `import_db_unchecked` instead.
     pub fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
-        import_db_check(bytes).map_err(MemVfsError::Generic)?;
-
-        // The database page size in bytes.
-        // Must be a power of two between 512 and 32768 inclusive, or the value 1 representing a page size of 65536.
-        let page_size = u16::from_be_bytes([bytes[16], bytes[17]]);
-        let page_size = if page_size == 1 {
-            65536
-        } else {
-            usize::from(page_size)
-        };
-
+        let page_size = check_import_db(bytes)?;
         self.import_db_unchecked_impl(path, bytes, page_size, true)
     }
 
