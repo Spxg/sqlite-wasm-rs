@@ -1,4 +1,6 @@
-use sqlite_wasm_rs::{export::OpfsSAHPoolCfgBuilder, relaxed_idb_vfs::RelaxedIdbCfgBuilder, *};
+use sqlite_wasm_rs::{
+    export::OpfsSAHPoolCfgBuilder, mem_vfs::MemVfsUtil, relaxed_idb_vfs::RelaxedIdbCfgBuilder, *,
+};
 use std::ffi::{CStr, CString};
 use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -44,15 +46,12 @@ unsafe fn test_memvfs_cipher(cipher: &str) {
     check_result(db);
     sqlite3_close(db);
 
-    let mut db = std::ptr::null_mut();
-    let ret = sqlite3_open_v2(
-        CString::new(db_name).unwrap().as_ptr().cast(),
-        &mut db as *mut _,
-        SQLITE_OPEN_READWRITE,
-        // https://utelle.github.io/SQLite3MultipleCiphers/docs/faq/faq_overview/#how-can-i-enable-encryption-for-a-non-default-sqlite-vfs
-        c"multipleciphers-memvfs".as_ptr().cast(),
-    );
-    assert_eq!(SQLITE_OK, ret);
+    let util = MemVfsUtil::new();
+    let db1 = util.export_db(&db_name).unwrap();
+    let new_db_name = format!("test_memvfs_vfs_{cipher}2.db");
+    util.import_db_unchecked(&new_db_name, &db1, 8192).unwrap();
+    let db2 = util.export_db(&new_db_name).unwrap();
+    assert_eq!(db1, db2);
 
     set_cipher(cipher, db);
     check_result(db);

@@ -2,12 +2,15 @@
 
 use crate::libsqlite3::*;
 use crate::vfs::utils::{
-    page_read, MemLinearFile, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError,
-    VfsFile, VfsResult, VfsStore,
+    import_db_check, page_read, MemLinearFile, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile,
+    VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
 };
 
+use once_cell::sync::OnceCell;
 use parking_lot::RwLock;
 use std::collections::HashMap;
+
+type Result<T> = std::result::Result<T, MemVfsError>;
 
 type MemAppData = RwLock<HashMap<String, MemFile>>;
 
@@ -179,14 +182,148 @@ impl SQLiteVfs<MemIoMethods> for MemVfs {
     const VERSION: ::std::os::raw::c_int = 1;
 }
 
-pub fn install() -> ::std::os::raw::c_int {
-    unsafe {
-        sqlite3_vfs_register(
-            Box::leak(Box::new(MemVfs::vfs(
-                c"memvfs".as_ptr().cast(),
-                VfsAppData::new(MemAppData::default()).leak().cast(),
-            ))),
-            1,
-        )
+static APP_DATA: OnceCell<&'static VfsAppData<MemAppData>> = OnceCell::new();
+
+fn app_data() -> &'static VfsAppData<MemAppData> {
+    *APP_DATA.get_or_init(|| unsafe { &*VfsAppData::new(MemAppData::default()).leak() })
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum MemVfsError {
+    #[error("Generic error: {0}")]
+    Generic(String),
+}
+
+/// MemVfs management tools exposed to clients.
+pub struct MemVfsUtil(&'static VfsAppData<MemAppData>);
+
+impl MemVfsUtil {
+    fn import_db_unchecked_impl(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        page_size: usize,
+        clear_wal: bool,
+    ) -> Result<()> {
+        if !(page_size.is_power_of_two() && (512..=65536).contains(&page_size))
+            || bytes.len() % page_size != 0
+        {
+            return Err(MemVfsError::Generic(
+                "Wrong page_size or wrong file length. \
+                The file length needs to be an integer multiple of page_size."
+                    .into(),
+            ));
+        }
+
+        if self.exists(path) {
+            return Err(MemVfsError::Generic(format!("{path} file already exists")));
+        }
+
+        let mut pages: HashMap<usize, Vec<u8>> = bytes
+            .chunks(page_size)
+            .enumerate()
+            .map(|(idx, buffer)| (idx * page_size, buffer.to_vec()))
+            .collect();
+
+        if clear_wal {
+            // header
+            let header = pages.get_mut(&0).unwrap();
+            header[18] = 1;
+            header[19] = 1;
+        }
+
+        self.0.write().insert(
+            path.into(),
+            MemFile::Main(MemPageFile {
+                file_size: pages.len() * page_size,
+                page_size,
+                pages,
+            }),
+        );
+
+        Ok(())
     }
+
+    /// Get management tool
+    pub fn new() -> Self {
+        MemVfsUtil(app_data())
+    }
+
+    /// Import the db file
+    ///
+    /// If the database is imported with WAL mode enabled,
+    /// it will be forced to write back to legacy mode, see
+    /// <https://sqlite.org/forum/forumpost/67882c5b04>
+    ///
+    /// If the imported DB is encrypted, use `import_db_unchecked` instead.
+    pub fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
+        import_db_check(bytes).map_err(MemVfsError::Generic)?;
+
+        // The database page size in bytes.
+        // Must be a power of two between 512 and 32768 inclusive, or the value 1 representing a page size of 65536.
+        let page_size = u16::from_be_bytes([bytes[16], bytes[17]]);
+        let page_size = if page_size == 1 {
+            65536
+        } else {
+            usize::from(page_size)
+        };
+
+        self.import_db_unchecked_impl(path, bytes, page_size, true)
+    }
+
+    /// Can be used to import encrypted DB
+    pub fn import_db_unchecked(&self, path: &str, bytes: &[u8], page_size: usize) -> Result<()> {
+        self.import_db_unchecked_impl(path, bytes, page_size, false)
+    }
+
+    /// Export database
+    pub fn export_db(&self, name: &str) -> Result<Vec<u8>> {
+        let name2file = self.0.read();
+
+        if let Some(file) = name2file.get(name) {
+            if let MemFile::Main(file) = file {
+                let file_size = file.file_size;
+                let mut ret = vec![0; file.file_size];
+                for (&offset, buffer) in &file.pages {
+                    if offset >= file_size {
+                        continue;
+                    }
+                    ret[offset..offset + file.page_size].copy_from_slice(buffer);
+                }
+                Ok(ret)
+            } else {
+                Err(MemVfsError::Generic(
+                    "Does not support dumping temporary files".into(),
+                ))
+            }
+        } else {
+            Err(MemVfsError::Generic(
+                "The file to be exported does not exist".into(),
+            ))
+        }
+    }
+
+    /// Delete the specified db, please make sure that the db is closed.
+    pub fn delete_db(&self, name: &str) {
+        self.0.write().remove(name);
+    }
+
+    /// Delete all dbs, please make sure that all dbs is closed.
+    pub fn clear_all(&self) {
+        std::mem::take(&mut *self.0.write());
+    }
+
+    /// Does the DB exist.
+    pub fn exists(&self, file: &str) -> bool {
+        self.0.read().contains_key(file)
+    }
+}
+
+pub(crate) fn install() -> ::std::os::raw::c_int {
+    let app_data = app_data();
+    let vfs = Box::leak(Box::new(MemVfs::vfs(
+        c"memvfs".as_ptr().cast(),
+        app_data as *const _ as *mut _,
+    )));
+    unsafe { sqlite3_vfs_register(vfs, 1) }
 }

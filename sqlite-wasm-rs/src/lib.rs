@@ -21,6 +21,9 @@ mod vfs;
 // sqlite3 bindings
 pub use libsqlite3::*;
 
+// mem vfs implementation
+pub use vfs::memory as mem_vfs;
+
 // relaxed idb vfs implementation
 pub use vfs::relaxed_idb as relaxed_idb_vfs;
 
