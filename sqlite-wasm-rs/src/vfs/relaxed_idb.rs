@@ -333,31 +333,21 @@ impl RelaxedIdb {
             )));
         }
 
-        let mut blocks = HashMap::new();
+        let mut blocks: HashMap<usize, FragileComfirmed<Uint8Array>> = bytes
+            .chunks(page_size)
+            .enumerate()
+            .map(|(idx, buffer)| {
+                (
+                    idx * page_size,
+                    FragileComfirmed::new(copy_to_uint8_array(&buffer)),
+                )
+            })
+            .collect();
 
-        let mut buffer = vec![0; page_size];
-        let mut chunks = bytes.chunks(page_size).enumerate();
-
-        if let Some((idx, chunk)) = chunks.next() {
-            buffer.copy_from_slice(chunk);
-
-            // forced to write back to legacy mode
-            if clear_wal {
-                buffer[18] = 1;
-                buffer[19] = 1;
-            }
-            blocks.insert(
-                idx * page_size,
-                FragileComfirmed::new(copy_to_uint8_array(&buffer)),
-            );
-        }
-
-        for (idx, chunk) in chunks {
-            buffer.copy_from_slice(chunk);
-            blocks.insert(
-                idx * page_size,
-                FragileComfirmed::new(copy_to_uint8_array(&buffer)),
-            );
+        // forced to write back to legacy mode
+        if clear_wal {
+            let header = blocks.get_mut(&0).unwrap();
+            copy_to_uint8_array_subarray(&[1, 1], &header.subarray(18, 20));
         }
 
         let tx_blocks = blocks.keys().copied().collect();
