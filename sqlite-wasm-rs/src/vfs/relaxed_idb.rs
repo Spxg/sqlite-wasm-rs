@@ -322,7 +322,7 @@ impl RelaxedIdb {
             .map(|(idx, buffer)| {
                 (
                     idx * page_size,
-                    FragileComfirmed::new(copy_to_uint8_array(&buffer)),
+                    FragileComfirmed::new(copy_to_uint8_array(buffer)),
                 )
             })
             .collect();

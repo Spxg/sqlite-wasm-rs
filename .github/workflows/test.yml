@@ -108,7 +108,7 @@ jobs:
     - name: Check clippy
       run: |
         cd sqlite-wasm-rs
-        cargo clippy --no-default-features --features precompiled
+        cargo clippy --no-default-features --features precompiled  -- -D warnings
 
   test_implement_a_vfs:
     runs-on: ubuntu-latest

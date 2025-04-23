@@ -185,7 +185,7 @@ impl SQLiteVfs<MemIoMethods> for MemVfs {
 static APP_DATA: OnceCell<&'static VfsAppData<MemAppData>> = OnceCell::new();
 
 fn app_data() -> &'static VfsAppData<MemAppData> {
-    *APP_DATA.get_or_init(|| unsafe { &*VfsAppData::new(MemAppData::default()).leak() })
+    APP_DATA.get_or_init(|| unsafe { &*VfsAppData::new(MemAppData::default()).leak() })
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -198,6 +198,12 @@ pub enum MemVfsError {
 
 /// MemVfs management tools exposed to clients.
 pub struct MemVfsUtil(&'static VfsAppData<MemAppData>);
+
+impl Default for MemVfsUtil {
+    fn default() -> Self {
+        MemVfsUtil::new()
+    }
+}
 
 impl MemVfsUtil {
     fn import_db_unchecked_impl(
