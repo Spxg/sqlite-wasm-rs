@@ -822,7 +822,7 @@ impl OpfsSAHPoolUtil {
         Ok(())
     }
 
-    /// Does the DB exist
+    /// Does the DB exist.
     pub fn exists(&self, file: &str) -> Result<bool> {
         let file = self.pool.get_path(file)?;
         Ok(self.pool.has_filename(&file))

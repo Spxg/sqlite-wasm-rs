@@ -771,13 +771,14 @@ pub struct RelaxedIdbUtil {
 
 impl RelaxedIdbUtil {
     /// Preload the db.
+    ///
     /// Because indexed db reading data is an asynchronous operation,
     /// the db must be preloaded into memory before opening the sqlite db.
     pub async fn preload_db(&self, prelod: Vec<String>) -> Result<()> {
         self.pool.preload_db(prelod).await
     }
 
-    /// Import the db file into the pool and indexed db.
+    /// Import the db file.
     ///
     /// If the database is imported with WAL mode enabled,
     /// it will be forced to write back to legacy mode, see
@@ -803,25 +804,17 @@ impl RelaxedIdbUtil {
         self.pool.export_db(name)
     }
 
-    /// Delete the specified db in the indexed db.
-    ///
-    /// # Attention
-    ///
-    /// Please make sure that the deleted db is closed.
+    /// Delete the specified db, please make sure that the db is closed.
     pub fn delete_db(&self, name: &str) -> Result<WaitCommit> {
         self.pool.delete_db(name)
     }
 
-    /// Delete all dbs in the indexed db.
-    ///
-    /// # Attention
-    ///
-    /// Please make sure that all dbs is closed.
+    /// Delete all dbs, please make sure that all dbs is closed.
     pub fn clear_all(&self) -> Result<WaitCommit> {
         self.pool.clear_all()
     }
 
-    /// Does the DB exist
+    /// Does the DB exist.
     pub fn exists(&self, file: &str) -> bool {
         self.pool.exists(file)
     }
