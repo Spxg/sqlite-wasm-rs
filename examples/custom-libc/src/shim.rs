@@ -1,10 +1,16 @@
-use js_sys::Date;
-use wasm_bindgen::JsCast;
-use wasm_bindgen_test::console_log;
-use web_sys::{SharedWorkerGlobalScope, WorkerGlobalScope};
+use js_sys::{Date, Number};
+use wasm_bindgen::prelude::wasm_bindgen;
+
+#[wasm_bindgen]
+extern "C" {
+    // performance.now()
+    #[wasm_bindgen(js_namespace = ["globalThis", "performance"], js_name = now)]
+    fn performance_now() -> Option<f64>;
+}
 
 pub type time_t = std::os::raw::c_longlong;
 
+/// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/musl/include/time.h#L40
 #[repr(C)]
 pub struct tm {
     pub tm_sec: std::os::raw::c_int,
@@ -19,9 +25,6 @@ pub struct tm {
     pub tm_gmtoff: std::os::raw::c_long,
     pub tm_zone: *mut std::os::raw::c_char,
 }
-
-const INT53_MAX: time_t = 9007199254740992;
-const INT53_MIN: time_t = -9007199254740992;
 
 fn yday_from_date(date: &Date) -> u32 {
     const MONTH_DAYS_LEAP_CUMULATIVE: [u32; 12] =
@@ -41,12 +44,13 @@ fn yday_from_date(date: &Date) -> u32 {
     month_days_cumulative[date.get_month() as usize] + date.get_date() - 1
 }
 
+/// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/emscripten_internal.h#L42
+///
 /// https://github.com/sqlite/sqlite-wasm/blob/7c1b309c3bd07d8e6d92f82344108cebbd14f161/sqlite-wasm/jswasm/sqlite3-bundler-friendly.mjs#L3404
 #[no_mangle]
 pub unsafe extern "C" fn _localtime_js(t: time_t, tm: *mut tm) {
-    assert!(!(INT53_MIN..=INT53_MAX).contains(&t), "wrong time range");
+    let date = Date::new(&Number::from((t * 1000) as f64).into());
 
-    let date = Date::new(&(t * 1000).into());
     (*tm).tm_sec = date.get_seconds() as _;
     (*tm).tm_min = date.get_minutes() as _;
     (*tm).tm_hour = date.get_hours() as _;
@@ -65,13 +69,15 @@ pub unsafe extern "C" fn _localtime_js(t: time_t, tm: *mut tm) {
             && date.get_timezone_offset() == winter_offset.min(summer_offset),
     );
 
-    (*tm).tm_gmtoff = (date.get_timezone_offset() * 60.0) as _;
+    (*tm).tm_gmtoff = -(date.get_timezone_offset() * 60.0) as _;
 }
 
+/// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/emscripten_internal.h#L45
+///
 /// https://github.com/sqlite/sqlite-wasm/blob/7c1b309c3bd07d8e6d92f82344108cebbd14f161/sqlite-wasm/jswasm/sqlite3-bundler-friendly.mjs#L3460
 #[no_mangle]
 pub unsafe extern "C" fn _tzset_js(
-    timezone: *mut std::os::raw::c_longlong,
+    timezone: *mut std::os::raw::c_long,
     daylight: *mut std::os::raw::c_int,
     std_name: *mut std::os::raw::c_char,
     dst_name: *mut std::os::raw::c_char,
@@ -116,17 +122,7 @@ pub unsafe extern "C" fn _tzset_js(
 /// https://github.com/sqlite/sqlite-wasm/blob/7c1b309c3bd07d8e6d92f82344108cebbd14f161/sqlite-wasm/jswasm/sqlite3-bundler-friendly.mjs#L3496
 #[no_mangle]
 pub unsafe extern "C" fn emscripten_get_now() -> std::os::raw::c_double {
-    let performance = if let Some(window) = web_sys::window() {
-        window.performance()
-    } else if let Ok(worker) = js_sys::global().dyn_into::<WorkerGlobalScope>() {
-        worker.performance()
-    } else if let Ok(worker) = js_sys::global().dyn_into::<SharedWorkerGlobalScope>() {
-        worker.performance()
-    } else {
-        panic!("sqlite not run in main_thread, dedicated worker or shared worker");
-    }
-    .expect("performance should be available");
-    performance.now()
+    performance_now().expect("performance should be available")
 }
 
 // https://github.com/alexcrichton/dlmalloc-rs/blob/fb116603713825b43b113cc734bb7d663cb64be9/src/dlmalloc.rs#L141
@@ -134,8 +130,6 @@ const ALIGN: usize = std::mem::size_of::<usize>() * 2;
 
 #[no_mangle]
 pub unsafe extern "C" fn malloc(size: usize) -> *mut u8 {
-    console_log!("malloc");
-
     let layout = std::alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
     let ptr = std::alloc::alloc(layout);
 
@@ -149,8 +143,6 @@ pub unsafe extern "C" fn malloc(size: usize) -> *mut u8 {
 
 #[no_mangle]
 pub unsafe extern "C" fn free(ptr: *mut u8) {
-    console_log!("free");
-
     let ptr = ptr.sub(ALIGN);
     let size = *(ptr.cast::<usize>());
 
@@ -160,8 +152,6 @@ pub unsafe extern "C" fn free(ptr: *mut u8) {
 
 #[no_mangle]
 pub unsafe extern "C" fn realloc(ptr: *mut u8, new_size: usize) -> *mut u8 {
-    console_log!("realloc");
-
     let ptr = ptr.sub(ALIGN);
     let size = *(ptr.cast::<usize>());
 
