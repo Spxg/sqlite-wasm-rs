@@ -96,6 +96,10 @@ About security:
 
 [Precompile Workflow](https://github.com/Spxg/sqlite-wasm-rs/blob/master/.github/workflows/precompile.yml) | [Change History](https://github.com/Spxg/sqlite-wasm-rs/commits/master/sqlite-wasm-rs/sqlite3) | [Actions](https://github.com/Spxg/sqlite-wasm-rs/actions?query=event%3Aworkflow_dispatch)
 
+## Minimum supported Rust version (MSRV)
+
+The minimal officially supported rustc version is 1.78.0
+
 ## Related Project
 
 * [`diesel`](https://github.com/diesel-rs/diesel): A safe, extensible ORM and Query Builder for Rust.

@@ -590,7 +590,7 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
     ) -> ::std::os::raw::c_int {
         unused!(pVfs);
         bail!(zName.is_null() || zOut.is_null(), SQLITE_CANTOPEN);
-        let len = CStr::from_ptr(zName).count_bytes() + 1;
+        let len = CStr::from_ptr(zName).to_bytes_with_nul().len();
         bail!(len > nOut as usize, SQLITE_CANTOPEN);
         zName.copy_to(zOut, len);
         SQLITE_OK
