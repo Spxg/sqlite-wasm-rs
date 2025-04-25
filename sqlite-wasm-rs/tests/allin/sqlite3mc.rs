@@ -8,9 +8,10 @@ use crate::allin::{check_result, prepare_simple_db};
 
 unsafe fn set_cipher(cipher: &str, db: *mut sqlite3) {
     let set_cipher = format!("PRAGMA cipher = {cipher};");
+    let c_name = CString::new(set_cipher.clone()).unwrap();
     let ret = sqlite3_exec(
         db,
-        CString::new(set_cipher.clone()).unwrap().as_ptr().cast(),
+        c_name.as_ptr().cast(),
         None,
         std::ptr::null_mut(),
         std::ptr::null_mut(),
@@ -32,8 +33,9 @@ unsafe fn test_memvfs_cipher(cipher: &str) {
     let mut db = std::ptr::null_mut();
     let db_name = format!("test_memvfs_vfs_{cipher}.db");
 
+    let c_name = CString::new(db_name.clone()).unwrap();
     let ret = sqlite3_open_v2(
-        CString::new(db_name.clone()).unwrap().as_ptr().cast(),
+        c_name.as_ptr().cast(),
         &mut db as *mut _,
         SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
         // https://utelle.github.io/SQLite3MultipleCiphers/docs/faq/faq_overview/#how-can-i-enable-encryption-for-a-non-default-sqlite-vfs
@@ -52,6 +54,16 @@ unsafe fn test_memvfs_cipher(cipher: &str) {
     util.import_db_unchecked(&new_db_name, &db1, 8192).unwrap();
     let db2 = util.export_db(&new_db_name).unwrap();
     assert_eq!(db1, db2);
+
+    let c_name = CString::new(db_name.clone()).unwrap();
+    let ret = sqlite3_open_v2(
+        c_name.as_ptr().cast(),
+        &mut db as *mut _,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+        // https://utelle.github.io/SQLite3MultipleCiphers/docs/faq/faq_overview/#how-can-i-enable-encryption-for-a-non-default-sqlite-vfs
+        c"multipleciphers-memvfs".as_ptr().cast(),
+    );
+    assert_eq!(SQLITE_OK, ret);
 
     set_cipher(cipher, db);
     check_result(db);
@@ -74,8 +86,9 @@ async unsafe fn test_relaxed_db_vfs_cipher(cipher: &str) {
     let mut db = std::ptr::null_mut();
     let db_name = format!("test_relaxed_db_vfs_{cipher}.db");
 
+    let c_name = CString::new(db_name.clone()).unwrap();
     let ret = sqlite3_open_v2(
-        CString::new(db_name.clone()).unwrap().as_ptr().cast(),
+        c_name.as_ptr().cast(),
         &mut db as *mut _,
         SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
         c"multipleciphers-relaxed-db-cipher".as_ptr().cast(),
@@ -97,8 +110,9 @@ async unsafe fn test_relaxed_db_vfs_cipher(cipher: &str) {
     assert_eq!(db1, db2);
 
     let mut db = std::ptr::null_mut();
+    let c_name = CString::new(new_db_name).unwrap();
     let ret = sqlite3_open_v2(
-        CString::new(new_db_name).unwrap().as_ptr().cast(),
+        c_name.as_ptr().cast(),
         &mut db as *mut _,
         SQLITE_OPEN_READWRITE,
         c"multipleciphers-relaxed-db-cipher".as_ptr().cast(),
@@ -128,8 +142,9 @@ async unsafe fn test_opfs_sah_vfs_cipher(cipher: &str) {
     let mut db = std::ptr::null_mut();
     let db_name = format!("test_opfs_sah_vfs_{cipher}.db");
 
+    let c_name = CString::new(db_name.clone()).unwrap();
     let ret = sqlite3_open_v2(
-        CString::new(db_name.clone()).unwrap().as_ptr().cast(),
+        c_name.as_ptr().cast(),
         &mut db as *mut _,
         SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
         c"multipleciphers-sah-cipher".as_ptr().cast(),
@@ -148,8 +163,9 @@ async unsafe fn test_opfs_sah_vfs_cipher(cipher: &str) {
     assert_eq!(db1, db2);
 
     let mut db = std::ptr::null_mut();
+    let c_name = CString::new(new_db_name).unwrap();
     let ret = sqlite3_open_v2(
-        CString::new(new_db_name).unwrap().as_ptr().cast(),
+        c_name.as_ptr().cast(),
         &mut db as *mut _,
         SQLITE_OPEN_READWRITE,
         c"multipleciphers-sah-cipher".as_ptr().cast(),
