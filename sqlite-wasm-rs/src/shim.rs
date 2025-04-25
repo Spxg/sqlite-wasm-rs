@@ -1,74 +1,25 @@
 //! This module fills in the external functions needed to link to `sqlite.o`
 
 use js_sys::{Date, Number};
-use wasm_bindgen::JsCast;
-use web_sys::{
-    Crypto, Performance, ServiceWorkerGlobalScope, SharedWorkerGlobalScope, Window,
-    WorkerGlobalScope,
-};
+use wasm_bindgen::prelude::wasm_bindgen;
+use wasm_bindgen::JsValue;
 
-enum GlobalEnv {
-    Window(Window),
-    Worker(WorkerGlobalScope),
-    ShardWorker(SharedWorkerGlobalScope),
-    ServiceWorker(ServiceWorkerGlobalScope),
+#[wasm_bindgen]
+extern "C" {
+    // crypto.getRandomValues()
+    #[cfg(not(target_feature = "atomics"))]
+    #[wasm_bindgen(js_namespace = ["globalThis", "crypto"], js_name = getRandomValues, catch)]
+    fn get_random_values(buf: &mut [u8]) -> Result<(), JsValue>;
+    #[cfg(target_feature = "atomics")]
+    #[wasm_bindgen(js_namespace = ["globalThis", "crypto"], js_name = getRandomValues, catch)]
+    fn get_random_values(buf: &js_sys::Uint8Array) -> Result<(), JsValue>;
 }
 
-impl GlobalEnv {
-    fn new() -> Self {
-        if let Ok(window) = js_sys::global().dyn_into::<Window>() {
-            Self::Window(window)
-        } else if let Ok(worker) = js_sys::global().dyn_into::<WorkerGlobalScope>() {
-            Self::Worker(worker)
-        } else if let Ok(worker) = js_sys::global().dyn_into::<SharedWorkerGlobalScope>() {
-            Self::ShardWorker(worker)
-        } else if let Ok(worker) = js_sys::global().dyn_into::<ServiceWorkerGlobalScope>() {
-            Self::ServiceWorker(worker)
-        } else {
-            panic!("unsupported environment");
-        }
-    }
-
-    fn performance(&self) -> Performance {
-        match self {
-            GlobalEnv::Window(window) => window.performance(),
-            GlobalEnv::Worker(worker_global_scope) => worker_global_scope.performance(),
-            GlobalEnv::ShardWorker(shared_worker_global_scope) => {
-                shared_worker_global_scope.performance()
-            }
-            GlobalEnv::ServiceWorker(service_worker_global_scope) => {
-                service_worker_global_scope.performance()
-            }
-        }
-        .expect("performance should be available")
-    }
-
-    fn is_secure_context(&self) -> bool {
-        match self {
-            GlobalEnv::Window(window) => window.is_secure_context(),
-            GlobalEnv::Worker(worker_global_scope) => worker_global_scope.is_secure_context(),
-            GlobalEnv::ShardWorker(shared_worker_global_scope) => {
-                shared_worker_global_scope.is_secure_context()
-            }
-            GlobalEnv::ServiceWorker(service_worker_global_scope) => {
-                service_worker_global_scope.is_secure_context()
-            }
-        }
-    }
-
-    fn crypto(&self) -> Crypto {
-        match self {
-            GlobalEnv::Window(window) => window.crypto(),
-            GlobalEnv::Worker(worker_global_scope) => worker_global_scope.crypto(),
-            GlobalEnv::ShardWorker(shared_worker_global_scope) => {
-                shared_worker_global_scope.crypto()
-            }
-            GlobalEnv::ServiceWorker(service_worker_global_scope) => {
-                service_worker_global_scope.crypto()
-            }
-        }
-        .expect("crypto should be available")
-    }
+#[wasm_bindgen]
+extern "C" {
+    // performance.now()
+    #[wasm_bindgen(js_namespace = ["globalThis", "performance"], js_name = now)]
+    fn performance_now() -> Option<f64>;
 }
 
 pub type time_t = std::os::raw::c_longlong;
@@ -185,7 +136,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_tzset_js(
 /// https://github.com/sqlite/sqlite-wasm/blob/7c1b309c3bd07d8e6d92f82344108cebbd14f161/sqlite-wasm/jswasm/sqlite3-bundler-friendly.mjs#L3496
 #[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_shim_emscripten_get_now() -> std::os::raw::c_double {
-    GlobalEnv::new().performance().now()
+    performance_now().expect("performance should be available")
 }
 
 /// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/include/wasi/api.h#L2652
@@ -194,32 +145,22 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_wasi_random_get(
     buf: *mut u8,
     buf_len: usize,
 ) -> std::os::raw::c_ushort {
-    let global_env = GlobalEnv::new();
-
-    if !global_env.is_secure_context() {
-        // Function not supported.
-        // https://github.com/WebAssembly/wasi-libc/blob/e9524a0980b9bb6bb92e87a41ed1055bdda5bb86/libc-bottom-half/headers/public/wasi/api.h#L373
-        return 52;
-    }
-
-    let crypto = global_env.crypto();
+    // https://github.com/WebAssembly/wasi-libc/blob/e9524a0980b9bb6bb92e87a41ed1055bdda5bb86/libc-bottom-half/headers/public/wasi/api.h#L373
+    const FUNCTION_NOT_SUPPORT: std::os::raw::c_ushort = 52;
 
     #[cfg(target_feature = "atomics")]
     {
         let array = js_sys::Uint8Array::new_with_length(buf_len as u32);
-        crypto
-            // The provided ArrayBufferView value must not be shared.
-            .get_random_values_with_js_u8_array(&array)
-            // https://developer.mozilla.org/en-US/docs/Web/API/Crypto/getRandomValues#exceptions
-            .expect("buffer size exceeds 65,536.");
+        if get_random_values(&array).is_err() {
+            return FUNCTION_NOT_SUPPORT;
+        }
         crate::utils::copy_to_slice(&array, std::slice::from_raw_parts_mut(buf, buf_len));
     }
 
     #[cfg(not(target_feature = "atomics"))]
-    crypto
-        .get_random_values_with_u8_array(std::slice::from_raw_parts_mut(buf, buf_len))
-        // https://developer.mozilla.org/en-US/docs/Web/API/Crypto/getRandomValues#exceptions
-        .expect("buffer size exceeds 65,536.");
+    if get_random_values(std::slice::from_raw_parts_mut(buf, buf_len)).is_err() {
+        return FUNCTION_NOT_SUPPORT;
+    }
 
     0
 }
