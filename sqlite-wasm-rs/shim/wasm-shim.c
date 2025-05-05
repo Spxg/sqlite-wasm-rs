@@ -1,4 +1,4 @@
-#include <wasm-shim.h>
+#include "wasm-shim.h"
 
 void *malloc(size_t size) { return rust_sqlite_wasm_shim_malloc(size); }
 

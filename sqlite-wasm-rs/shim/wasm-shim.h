@@ -14,6 +14,6 @@ void rust_sqlite_wasm_shim_tzset_js(long *timezone, int *daylight,
 
 uint16_t rust_sqlite_wasm_shim_wasi_random_get(uint8_t *buf, size_t buf_len);
 
-void rust_sqlite_wasm_shim_exit(int code);
+[[noreturn]] void rust_sqlite_wasm_shim_exit(int code);
 
-void rust_sqlite_wasm_shim_abort_js();
+[[noreturn]] void rust_sqlite_wasm_shim_abort_js();
