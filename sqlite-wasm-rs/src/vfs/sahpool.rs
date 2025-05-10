@@ -354,6 +354,9 @@ impl OpfsSAHPool {
     /// name (JS string) from the pool. Returns true if a mapping
     /// is found, else false.
     fn delete_path(&self, path: &str) -> Result<bool> {
+        let path = self.get_path(path)?;
+        let path = path.as_str();
+
         let sah = self.map_filename_to_sah.get(&JsValue::from(path));
         let found = !sah.is_undefined();
         if found {
