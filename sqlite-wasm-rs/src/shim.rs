@@ -174,7 +174,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_exit(code: std::os::raw::c_int) {
 /// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/emscripten_internal.h#L29
 #[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_shim_abort_js() {
-    panic!("{}", format!("wasm abort"));
+    panic!("wasm abort");
 }
 
 // https://github.com/alexcrichton/dlmalloc-rs/blob/fb116603713825b43b113cc734bb7d663cb64be9/src/dlmalloc.rs#L141

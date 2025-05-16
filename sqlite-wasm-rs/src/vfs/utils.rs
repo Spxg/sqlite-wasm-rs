@@ -832,7 +832,7 @@ pub trait SQLiteIoMethods {
 pub mod x_methods_shim {
     use super::*;
 
-    /// thread::sleep is available when atomics are enabled
+    /// thread::sleep is available when atomics is enabled
     #[cfg(target_feature = "atomics")]
     pub unsafe extern "C" fn xSleep(
         _pVfs: *mut sqlite3_vfs,
