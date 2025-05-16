@@ -15,7 +15,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
-      run: cargo install wasm-pack
+      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - name: Test (unix)
       if: matrix.os != 'windows-latest'
       run: |
@@ -45,7 +45,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
-      run: cargo install wasm-pack
+      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - name: Test (unix)
       if: matrix.os != 'windows-latest'
       run: |
@@ -72,7 +72,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
-      run: cargo install wasm-pack
+      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - name: Run diesel tests
       run: |
         git clone https://github.com/emscripten-core/emsdk.git
@@ -92,7 +92,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
-      run: cargo install wasm-pack
+      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - name: Run rusqlite tests
       run: |
         git clone https://github.com/Spxg/rusqlite.git
@@ -115,7 +115,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
-      run: cargo install wasm-pack
+      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - name: Test implement-a-vfs example
       run: |
         cd examples/implement-a-vfs
@@ -136,7 +136,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
-      run: cargo install wasm-pack
+      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - name: Test
       run: |
         cd sqlite-wasm-rs
@@ -155,7 +155,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
-      run: cargo install wasm-pack
+      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - name: Test
       run: |
         cd sqlite-wasm-rs
@@ -171,7 +171,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
-      run: cargo install wasm-pack
+      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - name: Test MSRV
       run: |
         cd sqlite-wasm-rs
