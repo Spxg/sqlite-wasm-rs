@@ -742,7 +742,7 @@ pub enum OpfsSAHError {
 
 impl OpfsSAHError {
     fn vfs_err(&self, code: i32) -> VfsError {
-        VfsError::new(code, format!("{self:?}"))
+        VfsError::new(code, format!("{self}"))
     }
 }
 
