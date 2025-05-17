@@ -1,4 +1,3 @@
-
 # SQLite Wasm Rust
 
 [![Crates.io](https://img.shields.io/crates/v/sqlite-wasm-rs.svg)](https://crates.io/crates/sqlite-wasm-rs)
@@ -99,6 +98,11 @@ About security:
 ## Minimum supported Rust version (MSRV)
 
 The minimal officially supported rustc version is 1.78.0
+
+## Nice Try
+
+* [`diesel`](https://github.com/diesel-rs/diesel): A safe, extensible ORM and Query Builder for Rust.
+* [`sqlight`](https://github.com/Spxg/sqlight): A SQLite Playground that runs entirely locally.
 
 ## Related Project
 
