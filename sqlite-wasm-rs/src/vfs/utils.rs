@@ -896,7 +896,7 @@ pub enum ImportDbError {
 pub fn check_import_db(bytes: &[u8]) -> Result<usize, ImportDbError> {
     let length = bytes.len();
 
-    if length < 512 && length % 512 != 0 {
+    if length < 512 || length % 512 != 0 {
         return Err(ImportDbError::InvalidDbSize);
     }
 
