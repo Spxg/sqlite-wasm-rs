@@ -102,7 +102,7 @@ The minimal officially supported rustc version is 1.78.0
 ## Nice Try
 
 * [`diesel`](https://github.com/diesel-rs/diesel): A safe, extensible ORM and Query Builder for Rust.
-* [`sqlight`](https://github.com/Spxg/sqlight): A SQLite Playground that runs entirely locally.
+* [`sqlight`](https://github.com/Spxg/sqlight): A SQLite Playground that runs completely locally.
 
 ## Related Project
 
