@@ -3,13 +3,13 @@
 use crate::libsqlite3::*;
 
 use fragile::Fragile;
-use js_sys::{Date, Math, Number, Uint8Array, WebAssembly};
+use js_sys::{Date, Math, Number, Uint8Array};
 use parking_lot::Mutex;
 use std::{
     ffi::{CStr, CString},
     ops::{Deref, DerefMut},
 };
-use wasm_bindgen::{prelude::wasm_bindgen, JsCast};
+use wasm_array_cp::ArrayBufferCopy;
 
 /// The header of the SQLite file is used to determine whether the imported file is legal.
 pub const SQLITE3_HEADER: &str = "SQLite format 3";
@@ -52,61 +52,24 @@ pub fn get_random_name() -> String {
     random.slice(2, random.length()).as_string().unwrap()
 }
 
-/// Directly using copy_from and copy_to to convert Uint8Array and Vec<u8> is risky.
-/// There is a possibility that the memory will grow and the buffer will be detached during copy.
-/// So here we convert on the js side.
-///
-/// Related issues:
-///
-/// <https://github.com/rustwasm/wasm-bindgen/issues/4395>
-///
-/// <https://github.com/rustwasm/wasm-bindgen/issues/4392>
-#[wasm_bindgen(module = "/src/vfs/utils.js")]
-extern "C" {
-    type JSUtils;
-
-    #[wasm_bindgen(static_method_of = JSUtils, js_name = toSlice)]
-    fn to_slice(memory: &WebAssembly::Memory, buffer: &Uint8Array, dst: *mut u8, len: usize);
-
-    #[wasm_bindgen(static_method_of = JSUtils, js_name = toUint8Array)]
-    fn to_uint8_array(memory: &WebAssembly::Memory, src: *const u8, len: usize, dst: &Uint8Array);
-}
-
 /// Copy `Uint8Array` and return new `Vec<u8>`
 pub fn copy_to_vec(src: &Uint8Array) -> Vec<u8> {
-    let mut vec = vec![0u8; src.length() as usize];
-    copy_to_slice(src, vec.as_mut_slice());
-    vec
+    ArrayBufferCopy::to_vec(src)
 }
 
 /// Copy `Uint8Array` to `slice`
 pub fn copy_to_slice(src: &Uint8Array, dst: &mut [u8]) {
-    assert!(
-        src.length() as usize == dst.len(),
-        "Unit8Array and slice have different sizes"
-    );
-
-    let buf = wasm_bindgen::memory();
-    let mem = buf.unchecked_ref::<WebAssembly::Memory>();
-    JSUtils::to_slice(mem, src, dst.as_mut_ptr(), dst.len());
+    ArrayBufferCopy::copy_to(src, dst);
 }
 
 /// Copy `slice` and return new `Uint8Array`
 pub fn copy_to_uint8_array(src: &[u8]) -> Uint8Array {
-    let uint8 = Uint8Array::new_with_length(src.len() as u32);
-    copy_to_uint8_array_subarray(src, &uint8);
-    uint8
+    ArrayBufferCopy::from_slice(src)
 }
 
 /// Copy `slice` to `Unit8Array`
 pub fn copy_to_uint8_array_subarray(src: &[u8], dst: &Uint8Array) {
-    assert!(
-        src.len() == dst.length() as usize,
-        "Unit8Array and slice have different sizes"
-    );
-    let buf = wasm_bindgen::memory();
-    let mem = buf.unchecked_ref::<WebAssembly::Memory>();
-    JSUtils::to_uint8_array(mem, src.as_ptr(), src.len(), dst)
+    ArrayBufferCopy::copy_from(dst, src)
 }
 
 /// Return error code if expr is true.

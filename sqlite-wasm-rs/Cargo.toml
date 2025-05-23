@@ -32,6 +32,7 @@ web-sys = { version = "0.3.77", features = [
   "Url",
 ]}
 indexed_db_futures = "0.6.4"
+wasm-array-cp = "0.1.0"
 
 sqlite-wasm-libc = { path = "../sqlite-wasm-libc", version = "0.1.0", optional = true }
 
