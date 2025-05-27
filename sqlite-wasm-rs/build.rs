@@ -232,48 +232,39 @@ fn bindgen(output: &str) {
 
 #[cfg(feature = "bundled")]
 fn compile(output: &str, build_all: bool) {
-    use std::process::Command;
-
-    #[cfg(target_os = "windows")]
-    const CC: &str = "emcc.bat";
-    #[cfg(target_os = "windows")]
-    const AR: &str = "emar.bat";
-
-    #[cfg(not(target_os = "windows"))]
-    const CC: &str = "emcc";
-    #[cfg(not(target_os = "windows"))]
-    const AR: &str = "emar";
-
     #[cfg(not(feature = "sqlite3mc"))]
     const SQLITE3_SOURCE: &str = "sqlite3/sqlite3.c";
     #[cfg(feature = "sqlite3mc")]
     const SQLITE3_SOURCE: &str = "sqlite3mc/sqlite3mc_amalgamation.c";
 
-    if Command::new(CC).arg("-v").status().is_err() {
+    let mut cc = cc::Build::new();
+    cc.target("wasm32-unknown-emscripten");
+
+    if cc.get_compiler().to_command().status().is_err() {
         panic!("
 It looks like you don't have the emscripten toolchain: https://emscripten.org/docs/getting_started/downloads.html,
 or use the precompiled binaries via the `default-features = false` and `precompiled` feature flag.
 ");
     }
 
+    cc.flag(SQLITE3_SOURCE).flags(FULL_FEATURED);
+
+    #[cfg(feature = "sqlite3mc")]
+    cc.flags(SQLITE3_MC_FEATURED);
+
+    cc.flag("-o").flag(format!("{output}/sqlite3.o")).flag("-r");
+
     if !cfg!(feature = "custom-libc") || build_all {
-        let mut cmd = Command::new(CC);
-        cmd.args(FULL_FEATURED);
-        #[cfg(feature = "sqlite3mc")]
-        cmd.args(SQLITE3_MC_FEATURED);
-        cmd.arg(SQLITE3_SOURCE)
+        cc.get_compiler()
+            .to_command()
             .arg("shim/wasm-shim.c")
-            .arg("-o")
-            .arg(format!("{output}/sqlite3.o"))
             .arg("-Ishim")
-            .arg("-r")
-            .arg("-Oz")
             .arg("-lc")
             .status()
-            .expect("Failed to build sqlite3");
+            .expect("Failed to compile sqlite3");
 
-        let mut cmd = Command::new(AR);
-        cmd.arg("rcs")
+        cc.get_archiver()
+            .arg("rcs")
             .arg(format!("{output}/libsqlite3linked.a"))
             .arg(format!("{output}/sqlite3.o"))
             .status()
@@ -281,20 +272,13 @@ or use the precompiled binaries via the `default-features = false` and `precompi
     }
 
     if cfg!(feature = "custom-libc") || build_all {
-        let mut cmd = Command::new(CC);
-        cmd.args(FULL_FEATURED);
-        #[cfg(feature = "sqlite3mc")]
-        cmd.args(SQLITE3_MC_FEATURED);
-        cmd.arg(SQLITE3_SOURCE)
-            .arg("-o")
-            .arg(format!("{output}/sqlite3.o"))
-            .arg("-r")
-            .arg("-Oz")
+        cc.get_compiler()
+            .to_command()
             .status()
-            .expect("Failed to build sqlite3");
+            .expect("Failed to compile sqlite3");
 
-        let mut cmd = Command::new(AR);
-        cmd.arg("rcs")
+        cc.get_archiver()
+            .arg("rcs")
             .arg(format!("{output}/libsqlite3.a"))
             .arg(format!("{output}/sqlite3.o"))
             .status()
