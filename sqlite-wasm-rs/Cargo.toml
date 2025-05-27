@@ -44,7 +44,7 @@ parking_lot = { version = "0.12", features = ["nightly"] }
 
 [features]
 default = ["bundled"]
-bundled = []
+bundled = ["cc"]
 buildtime-bindgen = ["bindgen"]
 precompiled = []
 custom-libc = ["sqlite-wasm-libc"]
@@ -60,6 +60,7 @@ web-time = "1.1.0"
 
 [build-dependencies]
 bindgen = { version = "0.71", optional = true }
+cc = { version = "1.2.24", optional = true }
 
 [package.metadata.docs.rs]
 no-default-features = true

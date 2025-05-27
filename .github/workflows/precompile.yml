@@ -20,8 +20,9 @@ jobs:
         source ./emsdk_env.sh
         cd ../sqlite-wasm-rs
         rustup target add wasm32-unknown-unknown
-        SQLITE_WASM_RS_UPDATE_PREBUILD=1 cargo build --target wasm32-unknown-unknown --features bundled,buildtime-bindgen
-        SQLITE_WASM_RS_UPDATE_PREBUILD=1 cargo build --target wasm32-unknown-unknown --features sqlite3mc,buildtime-bindgen
+        export CARGO_PROFILE_RELEASE_OPT_LEVEL="z"
+        SQLITE_WASM_RS_UPDATE_PREBUILD=1 cargo build --target wasm32-unknown-unknown --features bundled,buildtime-bindgen --release
+        SQLITE_WASM_RS_UPDATE_PREBUILD=1 cargo build --target wasm32-unknown-unknown --features sqlite3mc,buildtime-bindgen --release
         rm -rf ../emsdk
 
     - name: Set commit message
