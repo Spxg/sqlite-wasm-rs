@@ -85,7 +85,7 @@ jobs:
         cd diesel
         printf "[patch.crates-io]\n" >> Cargo.toml
         printf "sqlite-wasm-rs = { path = \"../sqlite-wasm-rs\" }\n" >> Cargo.toml
-        cargo xtask run-tests --wasm sqlite
+        WASM_BINDGEN_TEST_TIMEOUT=60 cargo xtask run-tests --wasm sqlite
 
   test_rusqlite:
     runs-on: ubuntu-latest
