@@ -3,7 +3,7 @@
 use crate::vfs::utils::{
     check_db_and_page_size, check_import_db, copy_to_slice, copy_to_uint8_array,
     copy_to_uint8_array_subarray, page_read, register_vfs, FragileComfirmed, ImportDbError,
-    MemLinearFile, RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData,
+    MemChunksFile, RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData,
     VfsError, VfsFile, VfsResult, VfsStore,
 };
 use crate::{bail, check_option, check_result, libsqlite3::*};
@@ -27,6 +27,9 @@ use wasm_bindgen::JsValue;
 
 type Result<T> = std::result::Result<T, RelaxedIdbError>;
 
+// only temp file
+type MemFile = MemChunksFile<4096>;
+
 struct IdbCommit {
     op: IdbCommitOp,
     notify: Option<tokio::sync::oneshot::Sender<Result<()>>>,
@@ -40,13 +43,13 @@ enum IdbCommitOp {
 
 enum IdbFile {
     Main(IdbPageFile),
-    Temp(MemLinearFile),
+    Temp(MemFile),
 }
 
 impl IdbFile {
     fn new(flags: i32) -> Self {
         if flags & SQLITE_OPEN_MAIN_DB == 0 {
-            Self::Temp(MemLinearFile::default())
+            Self::Temp(MemFile::default())
         } else {
             Self::Main(IdbPageFile::default())
         }
