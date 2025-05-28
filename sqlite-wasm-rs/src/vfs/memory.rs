@@ -2,8 +2,8 @@
 
 use crate::libsqlite3::*;
 use crate::vfs::utils::{
-    check_db_and_page_size, check_import_db, page_read, ImportDbError, MemLinearFile,
-    SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
+    check_import_db, ImportDbError, MemChunksFile, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile,
+    VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
 };
 
 use once_cell::sync::OnceCell;
@@ -12,122 +12,16 @@ use std::collections::HashMap;
 
 type Result<T> = std::result::Result<T, MemVfsError>;
 
+type MemFile = MemChunksFile<65536>;
+
 type MemAppData = RwLock<HashMap<String, MemFile>>;
-
-#[derive(Default)]
-struct MemPageFile {
-    pages: HashMap<usize, Vec<u8>>,
-    file_size: usize,
-    page_size: usize,
-}
-
-impl VfsFile for MemPageFile {
-    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<i32> {
-        Ok(page_read(
-            buf,
-            self.page_size,
-            self.file_size,
-            offset,
-            |addr| self.pages.get(&addr),
-            |page, buf, (start, end)| {
-                buf.copy_from_slice(&page[start..end]);
-            },
-        ))
-    }
-
-    fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()> {
-        let page_size = buf.len();
-
-        for fill in (self.file_size..offset).step_by(page_size) {
-            self.pages.insert(fill, vec![0; page_size]);
-        }
-        if let Some(buffer) = self.pages.get_mut(&offset) {
-            buffer.copy_from_slice(buf);
-        } else {
-            self.pages.insert(offset, buf.to_vec());
-        }
-
-        self.page_size = page_size;
-        self.file_size = self.file_size.max(offset + page_size);
-
-        Ok(())
-    }
-
-    fn truncate(&mut self, size: usize) -> VfsResult<()> {
-        for offset in size..self.file_size {
-            self.pages.remove(&offset);
-        }
-        self.file_size = size;
-        Ok(())
-    }
-
-    fn flush(&mut self) -> VfsResult<()> {
-        Ok(())
-    }
-
-    fn size(&self) -> VfsResult<usize> {
-        Ok(self.file_size)
-    }
-}
-
-enum MemFile {
-    Main(MemPageFile),
-    Temp(MemLinearFile),
-}
-
-impl MemFile {
-    fn new(flags: i32) -> Self {
-        if flags & SQLITE_OPEN_MAIN_DB == 0 {
-            Self::Temp(MemLinearFile::default())
-        } else {
-            Self::Main(MemPageFile::default())
-        }
-    }
-}
-
-impl VfsFile for MemFile {
-    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<i32> {
-        match self {
-            MemFile::Main(mem_page_file) => mem_page_file.read(buf, offset),
-            MemFile::Temp(mem_linear_file) => mem_linear_file.read(buf, offset),
-        }
-    }
-
-    fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()> {
-        match self {
-            MemFile::Main(mem_page_file) => mem_page_file.write(buf, offset),
-            MemFile::Temp(mem_linear_file) => mem_linear_file.write(buf, offset),
-        }
-    }
-
-    fn truncate(&mut self, size: usize) -> VfsResult<()> {
-        match self {
-            MemFile::Main(mem_page_file) => mem_page_file.truncate(size),
-            MemFile::Temp(mem_linear_file) => mem_linear_file.truncate(size),
-        }
-    }
-
-    fn flush(&mut self) -> VfsResult<()> {
-        match self {
-            MemFile::Main(mem_page_file) => mem_page_file.flush(),
-            MemFile::Temp(mem_linear_file) => mem_linear_file.flush(),
-        }
-    }
-
-    fn size(&self) -> VfsResult<usize> {
-        match self {
-            MemFile::Main(mem_page_file) => mem_page_file.size(),
-            MemFile::Temp(mem_linear_file) => mem_linear_file.size(),
-        }
-    }
-}
 
 struct MemStore;
 
 impl VfsStore<MemFile, MemAppData> for MemStore {
-    fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32) -> VfsResult<()> {
+    fn add_file(vfs: *mut sqlite3_vfs, file: &str, _flags: i32) -> VfsResult<()> {
         let app_data = unsafe { Self::app_data(vfs) };
-        app_data.write().insert(file.into(), MemFile::new(flags));
+        app_data.write().insert(file.into(), MemFile::default());
         Ok(())
     }
 
@@ -210,36 +104,21 @@ impl MemVfsUtil {
         &self,
         path: &str,
         bytes: &[u8],
-        page_size: usize,
+        #[allow(unused)] page_size: usize,
         clear_wal: bool,
     ) -> Result<()> {
-        check_db_and_page_size(bytes.len(), page_size)?;
-
         if self.exists(path) {
             return Err(MemVfsError::Generic(format!("{path} file already exists")));
         }
 
-        let mut pages: HashMap<usize, Vec<u8>> = bytes
-            .chunks(page_size)
-            .enumerate()
-            .map(|(idx, buffer)| (idx * page_size, buffer.to_vec()))
-            .collect();
-
-        if clear_wal {
-            // header
-            let header = pages.get_mut(&0).unwrap();
-            header[18] = 1;
-            header[19] = 1;
-        }
-
-        self.0.write().insert(
-            path.into(),
-            MemFile::Main(MemPageFile {
-                file_size: pages.len() * page_size,
-                page_size,
-                pages,
-            }),
-        );
+        self.0.write().insert(path.into(), {
+            let mut file = MemFile::default();
+            file.write(bytes, 0).unwrap();
+            if clear_wal {
+                file.write(&[1, 1], 18).unwrap();
+            }
+            file
+        });
 
         Ok(())
     }
@@ -271,21 +150,10 @@ impl MemVfsUtil {
         let name2file = self.0.read();
 
         if let Some(file) = name2file.get(name) {
-            if let MemFile::Main(file) = file {
-                let file_size = file.file_size;
-                let mut ret = vec![0; file.file_size];
-                for (&offset, buffer) in &file.pages {
-                    if offset >= file_size {
-                        continue;
-                    }
-                    ret[offset..offset + file.page_size].copy_from_slice(buffer);
-                }
-                Ok(ret)
-            } else {
-                Err(MemVfsError::Generic(
-                    "Does not support dumping temporary files".into(),
-                ))
-            }
+            let file_size = file.size().unwrap();
+            let mut ret = vec![0; file_size];
+            file.read(&mut ret, 0).unwrap();
+            Ok(ret)
         } else {
             Err(MemVfsError::Generic(
                 "The file to be exported does not exist".into(),

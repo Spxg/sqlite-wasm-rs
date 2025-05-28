@@ -265,6 +265,100 @@ pub fn page_read<T, G: Fn(usize) -> Option<T>, R: Fn(T, &mut [u8], (usize, usize
     SQLITE_OK
 }
 
+/// Chunks storage in memory, used for temporary file
+#[derive(Default)]
+pub struct MemChunksFile<const N: usize> {
+    chunks: Vec<[u8; N]>,
+    size: usize,
+}
+
+impl<const N: usize> VfsFile for MemChunksFile<N> {
+    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<i32> {
+        if self.size <= offset {
+            buf.fill(0);
+            return Ok(SQLITE_IOERR_SHORT_READ);
+        }
+
+        let mut size = buf.len();
+        let chunk_idx = offset / N;
+        let mut remaining_idx = offset % N;
+        let mut offset = 0;
+
+        for chunk in &self.chunks[chunk_idx..] {
+            let n = std::cmp::min(N.min(self.size) - remaining_idx, size);
+            buf[offset..offset + n].copy_from_slice(&chunk[remaining_idx..remaining_idx + n]);
+            offset += n;
+            size -= n;
+            remaining_idx = 0;
+            if size == 0 {
+                break;
+            }
+        }
+
+        if offset < buf.len() {
+            buf[offset..].fill(0);
+            return Ok(SQLITE_IOERR_SHORT_READ);
+        }
+
+        Ok(SQLITE_OK)
+    }
+
+    fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()> {
+        if buf.is_empty() {
+            return Ok(());
+        }
+
+        let mut size = buf.len();
+
+        let new_length = self.size.max(offset + size);
+        let chunk_start_idx = offset / N;
+        let chunk_end_idx = (offset + size - 1) / N;
+        let chunks_length = self.chunks.len();
+
+        let mut remaining_idx = offset % N;
+        let mut offset = 0;
+
+        for _ in chunks_length..=chunk_end_idx {
+            self.chunks.push([0; N]);
+        }
+
+        for idx in chunk_start_idx..=chunk_end_idx {
+            let n = std::cmp::min(N - remaining_idx, size);
+            self.chunks[idx][remaining_idx..remaining_idx + n]
+                .copy_from_slice(&buf[offset..offset + n]);
+            offset += n;
+            size -= n;
+            remaining_idx = 0;
+            if size == 0 {
+                break;
+            }
+        }
+
+        self.size = new_length;
+
+        Ok(())
+    }
+
+    fn truncate(&mut self, size: usize) -> VfsResult<()> {
+        if size == 0 {
+            std::mem::take(&mut self.chunks);
+        } else {
+            let idx = ((size - 1) / N) + 1;
+            self.chunks.drain(idx..);
+        }
+        self.size = size;
+        Ok(())
+    }
+
+    fn flush(&mut self) -> VfsResult<()> {
+        Ok(())
+    }
+
+    fn size(&self) -> VfsResult<usize> {
+        Ok(self.size)
+    }
+}
+
 /// Linear storage in memory, used for temporary DB
 #[derive(Default)]
 pub struct MemLinearFile(Vec<u8>);
@@ -313,6 +407,7 @@ impl VfsFile for MemLinearFile {
 }
 
 /// Used to log and retrieve Vfs errors
+#[derive(Debug)]
 pub struct VfsError {
     code: i32,
     message: String,
@@ -897,9 +992,12 @@ pub fn check_db_and_page_size(db_size: usize, page_size: usize) -> Result<(), Im
 
 #[cfg(test)]
 mod tests {
-    use crate::vfs::utils::{copy_to_slice, copy_to_uint8_array_subarray};
+    use crate::{
+        vfs::utils::{copy_to_slice, copy_to_uint8_array_subarray},
+        SQLITE_IOERR_SHORT_READ,
+    };
 
-    use super::{copy_to_uint8_array, copy_to_vec};
+    use super::{copy_to_uint8_array, copy_to_vec, MemChunksFile, VfsFile};
     use js_sys::Uint8Array;
     use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -919,5 +1017,54 @@ mod tests {
         assert!(buf4.get_index(0) == 0);
         assert!(buf4.get_index(1) == 1);
         assert!(buf4.get_index(2) == 2);
+    }
+
+    #[wasm_bindgen_test]
+    fn test_chunks_file() {
+        let mut file = MemChunksFile::<512>::default();
+        file.write(&[], 0).unwrap();
+        assert!(file.size().unwrap() == 0);
+
+        let mut buffer = [1; 2];
+        let ret = file.read(&mut buffer, 0).unwrap();
+        assert_eq!(ret, SQLITE_IOERR_SHORT_READ);
+        assert_eq!([0; 2], buffer);
+
+        file.write(&[1], 0).unwrap();
+        assert!(file.size().unwrap() == 1);
+        let mut buffer = [2; 2];
+        let ret = file.read(&mut buffer, 0).unwrap();
+        assert_eq!(ret, SQLITE_IOERR_SHORT_READ);
+        assert_eq!([1, 0], buffer);
+
+        let mut file = MemChunksFile::<512>::default();
+        file.write(&[1; 512], 0).unwrap();
+        assert!(file.size().unwrap() == 512);
+        assert!(file.chunks.len() == 1);
+
+        file.truncate(512).unwrap();
+        assert!(file.size().unwrap() == 512);
+        assert!(file.chunks.len() == 1);
+
+        file.write(&[41, 42, 43], 511).unwrap();
+        assert!(file.size().unwrap() == 514);
+        assert!(file.chunks.len() == 2);
+
+        let mut buffer = [0; 3];
+        let ret = file.read(&mut buffer, 511).unwrap();
+        assert_eq!(ret, 0);
+        assert_eq!(buffer, [41, 42, 43]);
+
+        file.truncate(513).unwrap();
+        assert!(file.size().unwrap() == 513);
+        assert!(file.chunks.len() == 2);
+
+        file.write(&[1], 2048).unwrap();
+        assert!(file.size().unwrap() == 2049);
+        assert!(file.chunks.len() == 5);
+
+        file.truncate(0).unwrap();
+        assert!(file.size().unwrap() == 0);
+        assert!(file.chunks.len() == 0);
     }
 }
