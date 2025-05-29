@@ -12,16 +12,66 @@ use std::collections::HashMap;
 
 type Result<T> = std::result::Result<T, MemVfsError>;
 
-type MemFile = MemChunksFile<65536>;
+enum MemFile {
+    Main(MemChunksFile),
+    Temp(MemChunksFile),
+}
+
+impl MemFile {
+    fn new(flags: i32) -> Self {
+        if flags & SQLITE_OPEN_MAIN_DB == 0 {
+            Self::Temp(MemChunksFile::new(512))
+        } else {
+            Self::Main(MemChunksFile::waiting_for_write())
+        }
+    }
+}
+
+impl VfsFile for MemFile {
+    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<i32> {
+        match self {
+            MemFile::Main(file) => file.read(buf, offset),
+            MemFile::Temp(file) => file.read(buf, offset),
+        }
+    }
+
+    fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()> {
+        match self {
+            MemFile::Main(file) => file.write(buf, offset),
+            MemFile::Temp(file) => file.write(buf, offset),
+        }
+    }
+
+    fn truncate(&mut self, size: usize) -> VfsResult<()> {
+        match self {
+            MemFile::Main(file) => file.truncate(size),
+            MemFile::Temp(file) => file.truncate(size),
+        }
+    }
+
+    fn flush(&mut self) -> VfsResult<()> {
+        match self {
+            MemFile::Main(file) => file.flush(),
+            MemFile::Temp(file) => file.flush(),
+        }
+    }
+
+    fn size(&self) -> VfsResult<usize> {
+        match self {
+            MemFile::Main(file) => file.size(),
+            MemFile::Temp(file) => file.size(),
+        }
+    }
+}
 
 type MemAppData = RwLock<HashMap<String, MemFile>>;
 
 struct MemStore;
 
 impl VfsStore<MemFile, MemAppData> for MemStore {
-    fn add_file(vfs: *mut sqlite3_vfs, file: &str, _flags: i32) -> VfsResult<()> {
+    fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32) -> VfsResult<()> {
         let app_data = unsafe { Self::app_data(vfs) };
-        app_data.write().insert(file.into(), MemFile::default());
+        app_data.write().insert(file.into(), MemFile::new(flags));
         Ok(())
     }
 
@@ -104,7 +154,7 @@ impl MemVfsUtil {
         &self,
         path: &str,
         bytes: &[u8],
-        #[allow(unused)] page_size: usize,
+        page_size: usize,
         clear_wal: bool,
     ) -> Result<()> {
         if self.exists(path) {
@@ -112,7 +162,7 @@ impl MemVfsUtil {
         }
 
         self.0.write().insert(path.into(), {
-            let mut file = MemFile::default();
+            let mut file = MemFile::Main(MemChunksFile::new(page_size));
             file.write(bytes, 0).unwrap();
             if clear_wal {
                 file.write(&[1, 1], 18).unwrap();
