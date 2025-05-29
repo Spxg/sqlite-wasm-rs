@@ -28,7 +28,7 @@ use wasm_bindgen::JsValue;
 type Result<T> = std::result::Result<T, RelaxedIdbError>;
 
 // only temp file
-type MemFile = MemChunksFile<4096>;
+type MemFile = MemChunksFile;
 
 struct IdbCommit {
     op: IdbCommitOp,
@@ -49,7 +49,7 @@ enum IdbFile {
 impl IdbFile {
     fn new(flags: i32) -> Self {
         if flags & SQLITE_OPEN_MAIN_DB == 0 {
-            Self::Temp(MemFile::default())
+            Self::Temp(MemFile::new(512))
         } else {
             Self::Main(IdbPageFile::default())
         }
@@ -121,35 +121,35 @@ impl VfsFile for IdbFile {
     fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<i32> {
         match self {
             IdbFile::Main(idb_page_file) => idb_page_file.read(buf, offset),
-            IdbFile::Temp(mem_linear_file) => mem_linear_file.read(buf, offset),
+            IdbFile::Temp(mem_chunks_file) => mem_chunks_file.read(buf, offset),
         }
     }
 
     fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()> {
         match self {
             IdbFile::Main(idb_page_file) => idb_page_file.write(buf, offset),
-            IdbFile::Temp(mem_linear_file) => mem_linear_file.write(buf, offset),
+            IdbFile::Temp(mem_chunks_file) => mem_chunks_file.write(buf, offset),
         }
     }
 
     fn truncate(&mut self, size: usize) -> VfsResult<()> {
         match self {
             IdbFile::Main(idb_page_file) => idb_page_file.truncate(size),
-            IdbFile::Temp(mem_linear_file) => mem_linear_file.truncate(size),
+            IdbFile::Temp(mem_chunks_file) => mem_chunks_file.truncate(size),
         }
     }
 
     fn flush(&mut self) -> VfsResult<()> {
         match self {
             IdbFile::Main(idb_page_file) => idb_page_file.flush(),
-            IdbFile::Temp(mem_linear_file) => mem_linear_file.flush(),
+            IdbFile::Temp(mem_chunks_file) => mem_chunks_file.flush(),
         }
     }
 
     fn size(&self) -> VfsResult<usize> {
         match self {
             IdbFile::Main(idb_page_file) => idb_page_file.size(),
-            IdbFile::Temp(mem_linear_file) => mem_linear_file.size(),
+            IdbFile::Temp(mem_chunks_file) => mem_chunks_file.size(),
         }
     }
 }

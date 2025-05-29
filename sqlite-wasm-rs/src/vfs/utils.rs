@@ -6,6 +6,7 @@ use fragile::Fragile;
 use js_sys::{Date, Math, Number, Uint8Array};
 use parking_lot::Mutex;
 use std::{
+    collections::HashMap,
     ffi::{CStr, CString},
     ops::{Deref, DerefMut},
 };
@@ -266,41 +267,84 @@ pub fn page_read<T, G: Fn(usize) -> Option<T>, R: Fn(T, &mut [u8], (usize, usize
 }
 
 /// Chunks storage in memory, used for temporary file
-#[derive(Default)]
-pub struct MemChunksFile<const N: usize> {
-    chunks: Vec<[u8; N]>,
-    size: usize,
+pub struct MemChunksFile {
+    chunks: HashMap<usize, Vec<u8>>,
+    chunk_size: Option<usize>,
+    file_size: usize,
 }
 
-impl<const N: usize> VfsFile for MemChunksFile<N> {
+impl MemChunksFile {
+    pub fn new(chunk_size: usize) -> Self {
+        assert!(chunk_size != 0, "chunk size can't be zero");
+        MemChunksFile {
+            chunks: HashMap::new(),
+            chunk_size: Some(chunk_size),
+            file_size: 0,
+        }
+    }
+
+    pub fn waiting_for_write() -> Self {
+        MemChunksFile {
+            chunks: HashMap::new(),
+            chunk_size: None,
+            file_size: 0,
+        }
+    }
+}
+
+impl Default for MemChunksFile {
+    fn default() -> Self {
+        MemChunksFile::new(512)
+    }
+}
+
+impl VfsFile for MemChunksFile {
     fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<i32> {
-        if self.size <= offset {
+        let Some(chunk_size) = self.chunk_size else {
+            buf.fill(0);
+            return Ok(SQLITE_IOERR_SHORT_READ);
+        };
+
+        if self.file_size <= offset {
             buf.fill(0);
             return Ok(SQLITE_IOERR_SHORT_READ);
         }
 
-        let mut size = buf.len();
-        let chunk_idx = offset / N;
-        let mut remaining_idx = offset % N;
-        let mut offset = 0;
+        if chunk_size == buf.len() && offset % chunk_size == 0 {
+            if let Some(chunk) = self.chunks.get(&offset) {
+                buf.copy_from_slice(chunk);
+            }
+            Ok(SQLITE_OK)
+        } else {
+            let mut size = buf.len();
+            let chunk_idx = offset / chunk_size;
+            let mut remaining_idx = offset % chunk_size;
+            let mut offset = 0;
 
-        for chunk in &self.chunks[chunk_idx..] {
-            let n = std::cmp::min(N.min(self.size) - remaining_idx, size);
-            buf[offset..offset + n].copy_from_slice(&chunk[remaining_idx..remaining_idx + n]);
-            offset += n;
-            size -= n;
-            remaining_idx = 0;
-            if size == 0 {
-                break;
+            for key in (chunk_idx..).map(|idx| idx * chunk_size) {
+                if let Some(chunk) = self.chunks.get(&key) {
+                    let n = std::cmp::min(chunk_size.min(self.file_size) - remaining_idx, size);
+                    buf[offset..offset + n]
+                        .copy_from_slice(&chunk[remaining_idx..remaining_idx + n]);
+                    offset += n;
+                    size -= n;
+                    remaining_idx = 0;
+                } else {
+                    break;
+                }
+
+                if size == 0 {
+                    break;
+                }
+            }
+
+            if offset < buf.len() {
+                buf[offset..].fill(0);
+                Ok(SQLITE_IOERR_SHORT_READ)
+            } else {
+                Ok(SQLITE_OK)
             }
         }
-
-        if offset < buf.len() {
-            buf[offset..].fill(0);
-            return Ok(SQLITE_IOERR_SHORT_READ);
-        }
-
-        Ok(SQLITE_OK)
     }
 
     fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()> {
@@ -308,45 +352,75 @@ impl<const N: usize> VfsFile for MemChunksFile<N> {
             return Ok(());
         }
 
-        let mut size = buf.len();
+        let chunk_size = if let Some(chunk_size) = self.chunk_size {
+            chunk_size
+        } else {
+            let size = buf.len();
+            self.chunk_size = Some(size);
+            size
+        };
 
-        let new_length = self.size.max(offset + size);
-        let chunk_start_idx = offset / N;
-        let chunk_end_idx = (offset + size - 1) / N;
-        let chunks_length = self.chunks.len();
+        let new_length = self.file_size.max(offset + buf.len());
 
-        let mut remaining_idx = offset % N;
-        let mut offset = 0;
+        if chunk_size == buf.len() && offset % chunk_size == 0 {
+            for fill in (self.chunks.len() * chunk_size..offset).step_by(chunk_size) {
+                self.chunks.insert(fill, vec![0; chunk_size]);
+            }
+            if let Some(buffer) = self.chunks.get_mut(&offset) {
+                buffer.copy_from_slice(buf);
+            } else {
+                self.chunks.insert(offset, buf.to_vec());
+            }
+        } else {
+            let mut size = buf.len();
+            let chunk_start_idx = offset / chunk_size;
+            let chunk_end_idx = (offset + size - 1) / chunk_size;
+            let chunks_length = self.chunks.len();
 
-        for _ in chunks_length..=chunk_end_idx {
-            self.chunks.push([0; N]);
-        }
+            for key in (chunks_length..=chunk_end_idx).map(|idx| idx * chunk_size) {
+                self.chunks.insert(key, vec![0; chunk_size]);
+            }
 
-        for idx in chunk_start_idx..=chunk_end_idx {
-            let n = std::cmp::min(N - remaining_idx, size);
-            self.chunks[idx][remaining_idx..remaining_idx + n]
-                .copy_from_slice(&buf[offset..offset + n]);
-            offset += n;
-            size -= n;
-            remaining_idx = 0;
-            if size == 0 {
-                break;
+            let mut remaining_idx = offset % chunk_size;
+            let mut offset = 0;
+
+            for key in (chunk_start_idx..=chunk_end_idx).map(|idx| idx * chunk_size) {
+                let n = std::cmp::min(chunk_size - remaining_idx, size);
+                self.chunks.get_mut(&key).unwrap()[remaining_idx..remaining_idx + n]
+                    .copy_from_slice(&buf[offset..offset + n]);
+                offset += n;
+                size -= n;
+                remaining_idx = 0;
+                if size == 0 {
+                    break;
+                }
             }
         }
 
-        self.size = new_length;
+        self.file_size = new_length;
 
         Ok(())
     }
 
     fn truncate(&mut self, size: usize) -> VfsResult<()> {
-        if size == 0 {
-            std::mem::take(&mut self.chunks);
-        } else {
-            let idx = ((size - 1) / N) + 1;
-            self.chunks.drain(idx..);
+        if let Some(chunk_size) = self.chunk_size {
+            if size == 0 {
+                std::mem::take(&mut self.chunks);
+            } else if size % chunk_size == 0 {
+                for offset in (size..self.file_size).step_by(chunk_size) {
+                    self.chunks.remove(&offset);
+                }
+            } else {
+                let idx = ((size - 1) / chunk_size) + 1;
+                for idx in idx..self.chunks.len() {
+                    self.chunks.remove(&(idx * chunk_size));
+                }
+            }
+        } else if size != 0 {
+            assert_eq!(self.file_size, 0);
+            return Err(VfsError::new(SQLITE_IOERR, "failed to truncate".into()));
         }
-        self.size = size;
+        self.file_size = size;
         Ok(())
     }
 
@@ -355,7 +429,7 @@ impl<const N: usize> VfsFile for MemChunksFile<N> {
     }
 
     fn size(&self) -> VfsResult<usize> {
-        Ok(self.size)
+        Ok(self.file_size)
     }
 }
 
@@ -1021,7 +1095,7 @@ mod tests {
 
     #[wasm_bindgen_test]
     fn test_chunks_file() {
-        let mut file = MemChunksFile::<512>::default();
+        let mut file = MemChunksFile::new(512);
         file.write(&[], 0).unwrap();
         assert!(file.size().unwrap() == 0);
 
@@ -1037,7 +1111,7 @@ mod tests {
         assert_eq!(ret, SQLITE_IOERR_SHORT_READ);
         assert_eq!([1, 0], buffer);
 
-        let mut file = MemChunksFile::<512>::default();
+        let mut file = MemChunksFile::new(512);
         file.write(&[1; 512], 0).unwrap();
         assert!(file.size().unwrap() == 512);
         assert!(file.chunks.len() == 1);
