@@ -67,6 +67,7 @@ pub fn check_result(db: *mut sqlite3) {
             }
             idx += 1;
         }
+        sqlite3_finalize(stmt);
     }
 }
 
