@@ -7,7 +7,7 @@ fn test_memory_vfs() {
     let mut db1 = std::ptr::null_mut();
     let ret = unsafe {
         sqlite3_open_v2(
-            c"file:mem.db?vfs=memvfs".as_ptr().cast(),
+            c"file:test_memory_vfs.db?vfs=memvfs".as_ptr().cast(),
             &mut db1 as *mut _,
             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
             std::ptr::null(),
@@ -24,7 +24,7 @@ fn test_memory_vfs() {
     // is equivalent to the above
     let ret = unsafe {
         sqlite3_open_v2(
-            c"mem.db".as_ptr().cast(),
+            c"test_memory_vfs.db".as_ptr().cast(),
             &mut db2 as *mut _,
             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
             c"memvfs".as_ptr().cast(),

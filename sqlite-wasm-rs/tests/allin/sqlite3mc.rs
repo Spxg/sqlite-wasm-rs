@@ -46,7 +46,8 @@ unsafe fn test_memvfs_cipher(cipher: &str) {
     set_cipher(cipher, db);
     prepare_simple_db(db);
     check_result(db);
-    sqlite3_close(db);
+    let ret = sqlite3_close(db);
+    assert_eq!(ret, SQLITE_OK);
 
     let util = MemVfsUtil::new();
     let db1 = util.export_db(&db_name).unwrap();
@@ -67,7 +68,8 @@ unsafe fn test_memvfs_cipher(cipher: &str) {
 
     set_cipher(cipher, db);
     check_result(db);
-    sqlite3_close(db);
+    let ret = sqlite3_close(db);
+    assert_eq!(ret, SQLITE_OK);
 }
 
 async unsafe fn test_relaxed_db_vfs_cipher(cipher: &str) {
@@ -98,7 +100,8 @@ async unsafe fn test_relaxed_db_vfs_cipher(cipher: &str) {
     set_cipher(cipher, db);
     prepare_simple_db(db);
     check_result(db);
-    sqlite3_close(db);
+    let ret = sqlite3_close(db);
+    assert_eq!(ret, SQLITE_OK);
 
     let db1 = util.export_db(&db_name).unwrap();
     let new_db_name = format!("test_relaxed_db_vfs_{cipher}2.db");
@@ -121,7 +124,8 @@ async unsafe fn test_relaxed_db_vfs_cipher(cipher: &str) {
 
     set_cipher(cipher, db);
     check_result(db);
-    sqlite3_close(db);
+    let ret = sqlite3_close(db);
+    assert_eq!(ret, SQLITE_OK);
 }
 
 async unsafe fn test_opfs_sah_vfs_cipher(cipher: &str) {
@@ -154,7 +158,8 @@ async unsafe fn test_opfs_sah_vfs_cipher(cipher: &str) {
     set_cipher(cipher, db);
     prepare_simple_db(db);
     check_result(db);
-    sqlite3_close(db);
+    let ret = sqlite3_close(db);
+    assert_eq!(ret, SQLITE_OK);
 
     let db1 = util.export_file(&db_name).unwrap();
     let new_db_name = format!("test_opfs_sah_vfs_{cipher}2.db");
@@ -174,7 +179,8 @@ async unsafe fn test_opfs_sah_vfs_cipher(cipher: &str) {
 
     set_cipher(cipher, db);
     check_result(db);
-    sqlite3_close(db);
+    let ret = sqlite3_close(db);
+    assert_eq!(ret, SQLITE_OK);
 }
 
 macro_rules! test_sah_cipher {
