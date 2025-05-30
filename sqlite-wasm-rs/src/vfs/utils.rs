@@ -6,7 +6,6 @@ use fragile::Fragile;
 use js_sys::{Date, Math, Number, Uint8Array};
 use parking_lot::Mutex;
 use std::{
-    collections::HashMap,
     ffi::{CStr, CString},
     ops::{Deref, DerefMut},
 };
@@ -268,7 +267,7 @@ pub fn page_read<T, G: Fn(usize) -> Option<T>, R: Fn(T, &mut [u8], (usize, usize
 
 /// Chunks storage in memory, used for temporary file
 pub struct MemChunksFile {
-    chunks: HashMap<usize, Vec<u8>>,
+    chunks: Vec<Vec<u8>>,
     chunk_size: Option<usize>,
     file_size: usize,
 }
@@ -277,7 +276,7 @@ impl MemChunksFile {
     pub fn new(chunk_size: usize) -> Self {
         assert!(chunk_size != 0, "chunk size can't be zero");
         MemChunksFile {
-            chunks: HashMap::new(),
+            chunks: Vec::new(),
             chunk_size: Some(chunk_size),
             file_size: 0,
         }
@@ -285,7 +284,7 @@ impl MemChunksFile {
 
     pub fn waiting_for_write() -> Self {
         MemChunksFile {
-            chunks: HashMap::new(),
+            chunks: Vec::new(),
             chunk_size: None,
             file_size: 0,
         }
@@ -311,9 +310,7 @@ impl VfsFile for MemChunksFile {
         }
 
         if chunk_size == buf.len() && offset % chunk_size == 0 {
-            if let Some(chunk) = self.chunks.get(&offset) {
-                buf.copy_from_slice(chunk);
-            }
+            buf.copy_from_slice(&self.chunks[offset / chunk_size]);
             Ok(SQLITE_OK)
         } else {
             let mut size = buf.len();
@@ -321,18 +318,12 @@ impl VfsFile for MemChunksFile {
             let mut remaining_idx = offset % chunk_size;
             let mut offset = 0;
 
-            for key in (chunk_idx..).map(|idx| idx * chunk_size) {
-                if let Some(chunk) = self.chunks.get(&key) {
-                    let n = std::cmp::min(chunk_size.min(self.file_size) - remaining_idx, size);
-                    buf[offset..offset + n]
-                        .copy_from_slice(&chunk[remaining_idx..remaining_idx + n]);
-                    offset += n;
-                    size -= n;
-                    remaining_idx = 0;
-                } else {
-                    break;
-                }
-
+            for chunk in &self.chunks[chunk_idx..] {
+                let n = std::cmp::min(chunk_size.min(self.file_size) - remaining_idx, size);
+                buf[offset..offset + n].copy_from_slice(&chunk[remaining_idx..remaining_idx + n]);
+                offset += n;
+                size -= n;
+                remaining_idx = 0;
                 if size == 0 {
                     break;
                 }
@@ -363,13 +354,13 @@ impl VfsFile for MemChunksFile {
         let new_length = self.file_size.max(offset + buf.len());
 
         if chunk_size == buf.len() && offset % chunk_size == 0 {
-            for fill in (self.chunks.len() * chunk_size..offset).step_by(chunk_size) {
-                self.chunks.insert(fill, vec![0; chunk_size]);
+            for _ in self.chunks.len()..offset / chunk_size {
+                self.chunks.push(vec![0; chunk_size]);
             }
-            if let Some(buffer) = self.chunks.get_mut(&offset) {
+            if let Some(buffer) = self.chunks.get_mut(offset / chunk_size) {
                 buffer.copy_from_slice(buf);
             } else {
-                self.chunks.insert(offset, buf.to_vec());
+                self.chunks.push(buf.to_vec());
             }
         } else {
             let mut size = buf.len();
@@ -377,16 +368,16 @@ impl VfsFile for MemChunksFile {
             let chunk_end_idx = (offset + size - 1) / chunk_size;
             let chunks_length = self.chunks.len();
 
-            for key in (chunks_length..=chunk_end_idx).map(|idx| idx * chunk_size) {
-                self.chunks.insert(key, vec![0; chunk_size]);
+            for _ in chunks_length..=chunk_end_idx {
+                self.chunks.push(vec![0; chunk_size]);
             }
 
             let mut remaining_idx = offset % chunk_size;
             let mut offset = 0;
 
-            for key in (chunk_start_idx..=chunk_end_idx).map(|idx| idx * chunk_size) {
+            for idx in chunk_start_idx..=chunk_end_idx {
                 let n = std::cmp::min(chunk_size - remaining_idx, size);
-                self.chunks.get_mut(&key).unwrap()[remaining_idx..remaining_idx + n]
+                self.chunks[idx][remaining_idx..remaining_idx + n]
                     .copy_from_slice(&buf[offset..offset + n]);
                 offset += n;
                 size -= n;
@@ -406,14 +397,10 @@ impl VfsFile for MemChunksFile {
         if let Some(chunk_size) = self.chunk_size {
             if size == 0 {
                 std::mem::take(&mut self.chunks);
-            } else if size % chunk_size == 0 {
-                for offset in (size..self.file_size).step_by(chunk_size) {
-                    self.chunks.remove(&offset);
-                }
             } else {
                 let idx = ((size - 1) / chunk_size) + 1;
                 for idx in idx..self.chunks.len() {
-                    self.chunks.remove(&(idx * chunk_size));
+                    self.chunks.drain(idx..);
                 }
             }
         } else if size != 0 {
