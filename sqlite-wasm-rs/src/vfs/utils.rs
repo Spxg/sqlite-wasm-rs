@@ -403,13 +403,11 @@ impl VfsFile for MemChunksFile {
                 std::mem::take(&mut self.chunks);
             } else {
                 let idx = ((size - 1) / chunk_size) + 1;
-                for idx in idx..self.chunks.len() {
-                    self.chunks.drain(idx..);
-                }
+                self.chunks.drain(idx..);
             }
         } else if size != 0 {
             assert_eq!(self.file_size, 0);
-            return Err(VfsError::new(SQLITE_IOERR, "failed to truncate".into()));
+            return Err(VfsError::new(SQLITE_IOERR, "Failed to truncate".into()));
         }
         self.file_size = size;
         Ok(())
