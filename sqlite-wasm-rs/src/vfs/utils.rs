@@ -273,6 +273,7 @@ pub struct MemChunksFile {
 }
 
 impl MemChunksFile {
+    /// New with chunk size
     pub fn new(chunk_size: usize) -> Self {
         assert!(chunk_size != 0, "chunk size can't be zero");
         MemChunksFile {
@@ -282,6 +283,9 @@ impl MemChunksFile {
         }
     }
 
+    /// The chunk size is determined when writing for the first time.
+    ///
+    /// This is often used for the main DB file implementation.
     pub fn waiting_for_write() -> Self {
         MemChunksFile {
             chunks: Vec::new(),
