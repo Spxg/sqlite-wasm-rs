@@ -27,9 +27,6 @@ use wasm_bindgen::JsValue;
 
 type Result<T> = std::result::Result<T, RelaxedIdbError>;
 
-// only temp file
-type MemFile = MemChunksFile;
-
 struct IdbCommit {
     op: IdbCommitOp,
     notify: Option<tokio::sync::oneshot::Sender<Result<()>>>,
@@ -43,13 +40,13 @@ enum IdbCommitOp {
 
 enum IdbFile {
     Main(IdbPageFile),
-    Temp(MemFile),
+    Temp(MemChunksFile),
 }
 
 impl IdbFile {
     fn new(flags: i32) -> Self {
         if flags & SQLITE_OPEN_MAIN_DB == 0 {
-            Self::Temp(MemFile::new(512))
+            Self::Temp(MemChunksFile::default())
         } else {
             Self::Main(IdbPageFile::default())
         }

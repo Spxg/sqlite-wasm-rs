@@ -20,47 +20,42 @@ enum MemFile {
 impl MemFile {
     fn new(flags: i32) -> Self {
         if flags & SQLITE_OPEN_MAIN_DB == 0 {
-            Self::Temp(MemChunksFile::new(512))
+            Self::Temp(MemChunksFile::default())
         } else {
             Self::Main(MemChunksFile::waiting_for_write())
         }
+    }
+
+    fn file(&self) -> &MemChunksFile {
+        let (MemFile::Main(file) | MemFile::Temp(file)) = self;
+        file
+    }
+
+    fn file_mut(&mut self) -> &mut MemChunksFile {
+        let (MemFile::Main(file) | MemFile::Temp(file)) = self;
+        file
     }
 }
 
 impl VfsFile for MemFile {
     fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<i32> {
-        match self {
-            MemFile::Main(file) => file.read(buf, offset),
-            MemFile::Temp(file) => file.read(buf, offset),
-        }
+        self.file().read(buf, offset)
     }
 
     fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()> {
-        match self {
-            MemFile::Main(file) => file.write(buf, offset),
-            MemFile::Temp(file) => file.write(buf, offset),
-        }
+        self.file_mut().write(buf, offset)
     }
 
     fn truncate(&mut self, size: usize) -> VfsResult<()> {
-        match self {
-            MemFile::Main(file) => file.truncate(size),
-            MemFile::Temp(file) => file.truncate(size),
-        }
+        self.file_mut().truncate(size)
     }
 
     fn flush(&mut self) -> VfsResult<()> {
-        match self {
-            MemFile::Main(file) => file.flush(),
-            MemFile::Temp(file) => file.flush(),
-        }
+        self.file_mut().flush()
     }
 
     fn size(&self) -> VfsResult<usize> {
-        match self {
-            MemFile::Main(file) => file.size(),
-            MemFile::Temp(file) => file.size(),
-        }
+        self.file().size()
     }
 }
 
