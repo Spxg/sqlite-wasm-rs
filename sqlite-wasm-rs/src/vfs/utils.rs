@@ -272,6 +272,12 @@ pub struct MemChunksFile {
     file_size: usize,
 }
 
+impl Default for MemChunksFile {
+    fn default() -> Self {
+        Self::new(512)
+    }
+}
+
 impl MemChunksFile {
     /// New with chunk size
     pub fn new(chunk_size: usize) -> Self {
@@ -292,12 +298,6 @@ impl MemChunksFile {
             chunk_size: None,
             file_size: 0,
         }
-    }
-}
-
-impl Default for MemChunksFile {
-    fn default() -> Self {
-        MemChunksFile::new(512)
     }
 }
 
