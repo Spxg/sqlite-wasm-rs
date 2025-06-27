@@ -31,9 +31,9 @@ web-sys = { version = "0.3.77", features = [
   "FileSystemFileHandle",
   "Url",
 ]}
-indexed_db_futures = "0.6.4"
 wasm-array-cp = "0.1.1"
 
+indexed_db_futures = { version = "0.6.4", optional = true }
 sqlite-wasm-libc = { path = "../sqlite-wasm-libc", version = "0.1.0", optional = true }
 
 [target.'cfg(not(target_feature = "atomics"))'.dependencies]
@@ -52,6 +52,7 @@ custom-libc = ["sqlite-wasm-libc"]
 # <https://github.com/utelle/SQLite3MultipleCiphers>
 # <https://utelle.github.io/SQLite3MultipleCiphers>
 sqlite3mc = ["bundled"]
+relaxed-idb = ["indexed_db_futures"]
 
 [dev-dependencies]
 paste = "1.0.15"

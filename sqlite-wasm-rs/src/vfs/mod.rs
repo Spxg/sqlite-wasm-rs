@@ -1,6 +1,8 @@
 #![doc = include_str!("README.md")]
 
-pub mod memory;
+#[cfg(feature = "relaxed-idb")]
 pub mod relaxed_idb;
+
+pub mod memory;
 pub mod sahpool;
 pub mod utils;
