@@ -4,7 +4,7 @@ use sqlite_wasm_rs::{
 use std::ffi::{CStr, CString};
 use wasm_bindgen_test::wasm_bindgen_test;
 
-use crate::allin::{check_result, prepare_simple_db};
+use crate::full::{check_result, prepare_simple_db};
 
 unsafe fn set_cipher(cipher: &str, db: *mut sqlite3) {
     let set_cipher = format!("PRAGMA cipher = {cipher};");

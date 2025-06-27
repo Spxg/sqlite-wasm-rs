@@ -1,4 +1,4 @@
-use crate::allin::{check_persistent, check_result, prepare_simple_db};
+use crate::full::{check_persistent, check_result, prepare_simple_db};
 use sqlite_wasm_rs::{export::*, mem_vfs::MemVfsUtil};
 use wasm_bindgen_test::wasm_bindgen_test;
 

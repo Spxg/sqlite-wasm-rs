@@ -7,7 +7,7 @@ use sqlite_wasm_rs::relaxed_idb_vfs::{install as install_idb_vfs, Preload, Relax
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::{console_log, wasm_bindgen_test};
 
-use crate::allin::{check_persistent, prepare_simple_db};
+use crate::full::{check_persistent, prepare_simple_db};
 
 #[wasm_bindgen_test]
 async fn test_idb_vfs_default() {
