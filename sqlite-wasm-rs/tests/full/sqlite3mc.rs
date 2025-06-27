@@ -1,5 +1,6 @@
 use sqlite_wasm_rs::{
-    export::OpfsSAHPoolCfgBuilder, mem_vfs::MemVfsUtil, relaxed_idb_vfs::RelaxedIdbCfgBuilder, *,
+    mem_vfs::MemVfsUtil, relaxed_idb_vfs::RelaxedIdbCfgBuilder, sahpool_vfs::OpfsSAHPoolCfgBuilder,
+    *,
 };
 use std::ffi::{CStr, CString};
 use wasm_bindgen_test::wasm_bindgen_test;

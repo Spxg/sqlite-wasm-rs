@@ -2,8 +2,8 @@ use indexed_db_futures::database::Database;
 use indexed_db_futures::prelude::*;
 use indexed_db_futures::transaction::TransactionMode;
 use js_sys::{Object, Reflect, Uint8Array};
-use sqlite_wasm_rs::export::*;
 use sqlite_wasm_rs::relaxed_idb_vfs::{install as install_idb_vfs, Preload, RelaxedIdbCfgBuilder};
+use sqlite_wasm_rs::*;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::{console_log, wasm_bindgen_test};
 
