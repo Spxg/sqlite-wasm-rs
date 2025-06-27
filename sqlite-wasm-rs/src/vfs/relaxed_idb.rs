@@ -2,9 +2,9 @@
 
 use crate::vfs::utils::{
     check_db_and_page_size, check_import_db, copy_to_slice, copy_to_uint8_array,
-    copy_to_uint8_array_subarray, page_read, register_vfs, FragileComfirmed, ImportDbError,
-    MemChunksFile, RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData,
-    VfsError, VfsFile, VfsResult, VfsStore,
+    copy_to_uint8_array_subarray, register_vfs, FragileComfirmed, ImportDbError, MemChunksFile,
+    RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile,
+    VfsResult, VfsStore,
 };
 use crate::{bail, check_option, check_result, libsqlite3::*};
 
@@ -26,6 +26,53 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use wasm_bindgen::JsValue;
 
 type Result<T> = std::result::Result<T, RelaxedIdbError>;
+
+fn page_read<T, G: Fn(usize) -> Option<T>, R: Fn(T, &mut [u8], (usize, usize))>(
+    buf: &mut [u8],
+    page_size: usize,
+    file_size: usize,
+    offset: usize,
+    get_page: G,
+    read_fn: R,
+) -> i32 {
+    if page_size == 0 || file_size == 0 {
+        buf.fill(0);
+        return SQLITE_IOERR_SHORT_READ;
+    }
+
+    let mut bytes_read = 0;
+    let mut p_data_offset = 0;
+    let p_data_length = buf.len();
+    let i_offset = offset;
+
+    while p_data_offset < p_data_length {
+        let file_offset = i_offset + p_data_offset;
+        let page_idx = file_offset / page_size;
+        let page_offset = file_offset % page_size;
+        let page_addr = page_idx * page_size;
+
+        let Some(page) = get_page(page_addr) else {
+            break;
+        };
+
+        let page_length = (page_size - page_offset).min(p_data_length - p_data_offset);
+        read_fn(
+            page,
+            &mut buf[p_data_offset..p_data_offset + page_length],
+            (page_offset, page_offset + page_length),
+        );
+
+        p_data_offset += page_length;
+        bytes_read += page_length;
+    }
+
+    if bytes_read < p_data_length {
+        buf[bytes_read..].fill(0);
+        return SQLITE_IOERR_SHORT_READ;
+    }
+
+    SQLITE_OK
+}
 
 struct IdbCommit {
     op: IdbCommitOp,

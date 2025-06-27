@@ -14,64 +14,6 @@ use wasm_array_cp::ArrayBufferCopy;
 /// The header of the SQLite file is used to determine whether the imported file is legal.
 pub const SQLITE3_HEADER: &str = "SQLite format 3";
 
-/// A [`FragileComfirmed<T>`] wraps a non sendable `T` to be safely send to other threads.
-///
-/// Once the value has been wrapped it can be sent to other threads but access
-/// to the value on those threads will fail.
-pub struct FragileComfirmed<T> {
-    fragile: Fragile<T>,
-}
-
-unsafe impl<T> Send for FragileComfirmed<T> {}
-unsafe impl<T> Sync for FragileComfirmed<T> {}
-
-impl<T> FragileComfirmed<T> {
-    pub fn new(t: T) -> Self {
-        FragileComfirmed {
-            fragile: Fragile::new(t),
-        }
-    }
-}
-
-impl<T> Deref for FragileComfirmed<T> {
-    type Target = T;
-    fn deref(&self) -> &Self::Target {
-        self.fragile.get()
-    }
-}
-
-impl<T> DerefMut for FragileComfirmed<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.fragile.get_mut()
-    }
-}
-
-/// get random name if zFileName is null and other cases
-pub fn get_random_name() -> String {
-    let random = Number::from(Math::random()).to_string(36).unwrap();
-    random.slice(2, random.length()).as_string().unwrap()
-}
-
-/// Copy `Uint8Array` and return new `Vec<u8>`
-pub fn copy_to_vec(src: &Uint8Array) -> Vec<u8> {
-    ArrayBufferCopy::to_vec(src)
-}
-
-/// Copy `Uint8Array` to `slice`
-pub fn copy_to_slice(src: &Uint8Array, dst: &mut [u8]) {
-    ArrayBufferCopy::copy_to(src, dst);
-}
-
-/// Copy `slice` and return new `Uint8Array`
-pub fn copy_to_uint8_array(src: &[u8]) -> Uint8Array {
-    ArrayBufferCopy::from_slice(src)
-}
-
-/// Copy `slice` to `Unit8Array`
-pub fn copy_to_uint8_array_subarray(src: &[u8], dst: &Uint8Array) {
-    ArrayBufferCopy::copy_from(dst, src)
-}
-
 /// Return error code if expr is true.
 ///
 /// The default error code is SQLITE_ERROR.
@@ -133,136 +75,62 @@ macro_rules! unused {
     };
 }
 
-/// The actual pFile type in Vfs.
+/// A [`FragileComfirmed<T>`] wraps a non sendable `T` to be safely send to other threads.
 ///
-/// `szOsFile` must be set to the size of `SQLiteVfsFile`.
-#[repr(C)]
-pub struct SQLiteVfsFile {
-    /// The first field must be of type sqlite_file.
-    /// In C layout, the pointer to SQLiteVfsFile is the pointer to io_methods.
-    pub io_methods: sqlite3_file,
-    /// The vfs where the file is located, usually used to manage files.
-    pub vfs: *mut sqlite3_vfs,
-    /// Flags used to open the database.
-    pub flags: i32,
-    /// The pointer to the file name.
-    /// If it is a leaked static pointer, you need to drop it manually when xClose it.
-    pub name_ptr: *const u8,
-    /// Length of the file name, on wasm32 platform, usize is u32.
-    pub name_length: usize,
+/// Once the value has been wrapped it can be sent to other threads but access
+/// to the value on those threads will fail.
+pub struct FragileComfirmed<T> {
+    fragile: Fragile<T>,
 }
 
-impl SQLiteVfsFile {
-    /// Convert a `sqlite3_file` pointer to a `SQLiteVfsFile` pointer.
-    ///
-    /// # Safety
-    ///
-    /// You must ensure that the pointer passed in is `SQLiteVfsFile`
-    pub unsafe fn from_file(file: *mut sqlite3_file) -> &'static SQLiteVfsFile {
-        &*file.cast::<Self>()
-    }
+unsafe impl<T> Send for FragileComfirmed<T> {}
+unsafe impl<T> Sync for FragileComfirmed<T> {}
 
-    /// Get the file name.
-    ///
-    /// # Safety
-    ///
-    /// When xClose, you can free the memory by `drop(Box::from_raw(ptr));`.
-    ///
-    /// Do not use again after free.
-    pub unsafe fn name(&self) -> &'static mut str {
-        // emm, `from_raw_parts_mut` is unstable
-        std::str::from_utf8_unchecked_mut(std::slice::from_raw_parts_mut(
-            self.name_ptr.cast_mut(),
-            self.name_length,
-        ))
-    }
-
-    /// Convert a `&'static SQLiteVfsFile` pointer to `*mut sqlite3_file` pointer.
-    pub fn sqlite3_file(&'static self) -> *mut sqlite3_file {
-        self as *const SQLiteVfsFile as *mut sqlite3_file
-    }
-}
-
-/// Possible errors when registering Vfs
-#[derive(thiserror::Error, Debug)]
-pub enum RegisterVfsError {
-    #[error("An error occurred converting the given vfs name to a CStr")]
-    ToCStr,
-    #[error("An error occurred while registering vfs with sqlite")]
-    RegisterVfs,
-}
-
-/// Register vfs general method
-pub fn register_vfs<IO: SQLiteIoMethods, V: SQLiteVfs<IO>>(
-    vfs_name: &str,
-    app_data: IO::AppData,
-    default_vfs: bool,
-) -> Result<*mut sqlite3_vfs, RegisterVfsError> {
-    let name = CString::new(vfs_name).map_err(|_| RegisterVfsError::ToCStr)?;
-    let name_ptr = name.into_raw();
-    let app_data = VfsAppData::new(app_data).leak();
-
-    let vfs = Box::leak(Box::new(V::vfs(name_ptr, app_data.cast())));
-    let ret = unsafe { sqlite3_vfs_register(vfs, i32::from(default_vfs)) };
-
-    if ret != SQLITE_OK {
-        unsafe {
-            drop(Box::from_raw(vfs));
-            drop(CString::from_raw(name_ptr));
-            drop(VfsAppData::from_raw(app_data));
+impl<T> FragileComfirmed<T> {
+    pub fn new(t: T) -> Self {
+        FragileComfirmed {
+            fragile: Fragile::new(t),
         }
-        return Err(RegisterVfsError::RegisterVfs);
     }
-
-    Ok(vfs as *mut sqlite3_vfs)
 }
 
-/// Generic function for reading by page (block)
-pub fn page_read<T, G: Fn(usize) -> Option<T>, R: Fn(T, &mut [u8], (usize, usize))>(
-    buf: &mut [u8],
-    page_size: usize,
-    file_size: usize,
-    offset: usize,
-    get_page: G,
-    read_fn: R,
-) -> i32 {
-    if page_size == 0 || file_size == 0 {
-        buf.fill(0);
-        return SQLITE_IOERR_SHORT_READ;
+impl<T> Deref for FragileComfirmed<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        self.fragile.get()
     }
+}
 
-    let mut bytes_read = 0;
-    let mut p_data_offset = 0;
-    let p_data_length = buf.len();
-    let i_offset = offset;
-
-    while p_data_offset < p_data_length {
-        let file_offset = i_offset + p_data_offset;
-        let page_idx = file_offset / page_size;
-        let page_offset = file_offset % page_size;
-        let page_addr = page_idx * page_size;
-
-        let Some(page) = get_page(page_addr) else {
-            break;
-        };
-
-        let page_length = (page_size - page_offset).min(p_data_length - p_data_offset);
-        read_fn(
-            page,
-            &mut buf[p_data_offset..p_data_offset + page_length],
-            (page_offset, page_offset + page_length),
-        );
-
-        p_data_offset += page_length;
-        bytes_read += page_length;
+impl<T> DerefMut for FragileComfirmed<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.fragile.get_mut()
     }
+}
 
-    if bytes_read < p_data_length {
-        buf[bytes_read..].fill(0);
-        return SQLITE_IOERR_SHORT_READ;
-    }
+/// get random name if zFileName is null and other cases
+pub fn get_random_name() -> String {
+    let random = Number::from(Math::random()).to_string(36).unwrap();
+    random.slice(2, random.length()).as_string().unwrap()
+}
 
-    SQLITE_OK
+/// Copy `Uint8Array` and return new `Vec<u8>`
+pub fn copy_to_vec(src: &Uint8Array) -> Vec<u8> {
+    ArrayBufferCopy::to_vec(src)
+}
+
+/// Copy `Uint8Array` to `slice`
+pub fn copy_to_slice(src: &Uint8Array, dst: &mut [u8]) {
+    ArrayBufferCopy::copy_to(src, dst);
+}
+
+/// Copy `slice` and return new `Uint8Array`
+pub fn copy_to_uint8_array(src: &[u8]) -> Uint8Array {
+    ArrayBufferCopy::from_slice(src)
+}
+
+/// Copy `slice` to `Unit8Array`
+pub fn copy_to_uint8_array_subarray(src: &[u8], dst: &Uint8Array) {
+    ArrayBufferCopy::copy_from(dst, src)
 }
 
 /// Chunks storage in memory, used for temporary file
@@ -422,51 +290,88 @@ impl VfsFile for MemChunksFile {
     }
 }
 
-/// Linear storage in memory, used for temporary DB
-#[derive(Default)]
-pub struct MemLinearFile(Vec<u8>);
+/// The actual pFile type in Vfs.
+///
+/// `szOsFile` must be set to the size of `SQLiteVfsFile`.
+#[repr(C)]
+pub struct SQLiteVfsFile {
+    /// The first field must be of type sqlite_file.
+    /// In C layout, the pointer to SQLiteVfsFile is the pointer to io_methods.
+    pub io_methods: sqlite3_file,
+    /// The vfs where the file is located, usually used to manage files.
+    pub vfs: *mut sqlite3_vfs,
+    /// Flags used to open the database.
+    pub flags: i32,
+    /// The pointer to the file name.
+    /// If it is a leaked static pointer, you need to drop it manually when xClose it.
+    pub name_ptr: *const u8,
+    /// Length of the file name, on wasm32 platform, usize is u32.
+    pub name_length: usize,
+}
 
-impl VfsFile for MemLinearFile {
-    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<i32> {
-        let size = buf.len();
-        let end = size + offset;
-        if self.0.len() <= offset {
-            buf.fill(0);
-            return Ok(SQLITE_IOERR_SHORT_READ);
+impl SQLiteVfsFile {
+    /// Convert a `sqlite3_file` pointer to a `SQLiteVfsFile` pointer.
+    ///
+    /// # Safety
+    ///
+    /// You must ensure that the pointer passed in is `SQLiteVfsFile`
+    pub unsafe fn from_file(file: *mut sqlite3_file) -> &'static SQLiteVfsFile {
+        &*file.cast::<Self>()
+    }
+
+    /// Get the file name.
+    ///
+    /// # Safety
+    ///
+    /// When xClose, you can free the memory by `drop(Box::from_raw(ptr));`.
+    ///
+    /// Do not use again after free.
+    pub unsafe fn name(&self) -> &'static mut str {
+        // emm, `from_raw_parts_mut` is unstable
+        std::str::from_utf8_unchecked_mut(std::slice::from_raw_parts_mut(
+            self.name_ptr.cast_mut(),
+            self.name_length,
+        ))
+    }
+
+    /// Convert a `&'static SQLiteVfsFile` pointer to `*mut sqlite3_file` pointer.
+    pub fn sqlite3_file(&'static self) -> *mut sqlite3_file {
+        self as *const SQLiteVfsFile as *mut sqlite3_file
+    }
+}
+
+/// Possible errors when registering Vfs
+#[derive(thiserror::Error, Debug)]
+pub enum RegisterVfsError {
+    #[error("An error occurred converting the given vfs name to a CStr")]
+    ToCStr,
+    #[error("An error occurred while registering vfs with sqlite")]
+    RegisterVfs,
+}
+
+/// Register vfs general method
+pub fn register_vfs<IO: SQLiteIoMethods, V: SQLiteVfs<IO>>(
+    vfs_name: &str,
+    app_data: IO::AppData,
+    default_vfs: bool,
+) -> Result<*mut sqlite3_vfs, RegisterVfsError> {
+    let name = CString::new(vfs_name).map_err(|_| RegisterVfsError::ToCStr)?;
+    let name_ptr = name.into_raw();
+    let app_data = VfsAppData::new(app_data).leak();
+
+    let vfs = Box::leak(Box::new(V::vfs(name_ptr, app_data.cast())));
+    let ret = unsafe { sqlite3_vfs_register(vfs, i32::from(default_vfs)) };
+
+    if ret != SQLITE_OK {
+        unsafe {
+            drop(Box::from_raw(vfs));
+            drop(CString::from_raw(name_ptr));
+            drop(VfsAppData::from_raw(app_data));
         }
-
-        let read_end = end.min(self.0.len());
-        let read_size = read_end - offset;
-        buf[..read_size].copy_from_slice(&self.0[offset..read_end]);
-
-        if read_size < size {
-            buf[read_size..].fill(0);
-            return Ok(SQLITE_IOERR_SHORT_READ);
-        }
-        Ok(SQLITE_OK)
+        return Err(RegisterVfsError::RegisterVfs);
     }
 
-    fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()> {
-        let end = buf.len() + offset;
-        if end > self.0.len() {
-            self.0.resize(end, 0);
-        }
-        self.0[offset..end].copy_from_slice(buf);
-        Ok(())
-    }
-
-    fn truncate(&mut self, size: usize) -> VfsResult<()> {
-        self.0.truncate(size);
-        Ok(())
-    }
-
-    fn flush(&mut self) -> VfsResult<()> {
-        Ok(())
-    }
-
-    fn size(&self) -> VfsResult<usize> {
-        Ok(self.0.len())
-    }
+    Ok(vfs as *mut sqlite3_vfs)
 }
 
 /// Used to log and retrieve Vfs errors
