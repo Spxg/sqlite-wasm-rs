@@ -24,12 +24,12 @@ pub use libsqlite3::*;
 // mem vfs implementation
 pub use vfs::memory as mem_vfs;
 
+// opfs sync access handle vfs implementation
+pub use vfs::sahpool as sahpool_vfs;
+
 // relaxed idb vfs implementation
 #[cfg(feature = "relaxed-idb")]
 pub use vfs::relaxed_idb as relaxed_idb_vfs;
-
-// opfs sync access handle vfs implementation
-pub use vfs::sahpool as sahpool_vfs;
 
 // some tools for implementing VFS
 pub use vfs::utils;
@@ -37,15 +37,6 @@ pub use vfs::utils;
 // `pub use` to avoid optimization
 #[cfg(feature = "custom-libc")]
 pub use sqlite_wasm_libc;
-
-/// To be compatible with previous versions.
-pub mod export {
-    pub use crate::libsqlite3::*;
-    pub use crate::vfs::sahpool::{
-        install as install_opfs_sahpool, OpfsSAHError, OpfsSAHPoolCfg, OpfsSAHPoolCfgBuilder,
-        OpfsSAHPoolUtil,
-    };
-}
 
 #[cfg(test)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
