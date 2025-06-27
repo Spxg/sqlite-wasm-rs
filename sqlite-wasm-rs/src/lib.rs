@@ -25,6 +25,7 @@ pub use libsqlite3::*;
 pub use vfs::memory as mem_vfs;
 
 // relaxed idb vfs implementation
+#[cfg(feature = "relaxed-idb")]
 pub use vfs::relaxed_idb as relaxed_idb_vfs;
 
 // opfs sync access handle vfs implementation
