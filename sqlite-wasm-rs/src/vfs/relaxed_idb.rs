@@ -2,9 +2,9 @@
 
 use crate::vfs::utils::{
     check_db_and_page_size, check_import_db, copy_to_slice, copy_to_uint8_array,
-    copy_to_uint8_array_subarray, page_read, register_vfs, FragileComfirmed, ImportDbError,
-    MemChunksFile, RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData,
-    VfsError, VfsFile, VfsResult, VfsStore,
+    copy_to_uint8_array_subarray, register_vfs, FragileComfirmed, ImportDbError, MemChunksFile,
+    RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile,
+    VfsResult, VfsStore,
 };
 use crate::{bail, check_option, check_result, libsqlite3::*};
 
@@ -26,6 +26,53 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use wasm_bindgen::JsValue;
 
 type Result<T> = std::result::Result<T, RelaxedIdbError>;
+
+fn page_read<T, G: Fn(usize) -> Option<T>, R: Fn(T, &mut [u8], (usize, usize))>(
+    buf: &mut [u8],
+    page_size: usize,
+    file_size: usize,
+    offset: usize,
+    get_page: G,
+    read_fn: R,
+) -> i32 {
+    if page_size == 0 || file_size == 0 {
+        buf.fill(0);
+        return SQLITE_IOERR_SHORT_READ;
+    }
+
+    let mut bytes_read = 0;
+    let mut p_data_offset = 0;
+    let p_data_length = buf.len();
+    let i_offset = offset;
+
+    while p_data_offset < p_data_length {
+        let file_offset = i_offset + p_data_offset;
+        let page_idx = file_offset / page_size;
+        let page_offset = file_offset % page_size;
+        let page_addr = page_idx * page_size;
+
+        let Some(page) = get_page(page_addr) else {
+            break;
+        };
+
+        let page_length = (page_size - page_offset).min(p_data_length - p_data_offset);
+        read_fn(
+            page,
+            &mut buf[p_data_offset..p_data_offset + page_length],
+            (page_offset, page_offset + page_length),
+        );
+
+        p_data_offset += page_length;
+        bytes_read += page_length;
+    }
+
+    if bytes_read < p_data_length {
+        buf[bytes_read..].fill(0);
+        return SQLITE_IOERR_SHORT_READ;
+    }
+
+    SQLITE_OK
+}
 
 struct IdbCommit {
     op: IdbCommitOp,
@@ -753,18 +800,18 @@ impl RelaxedIdbUtil {
         self.pool.preload_db(prelod).await
     }
 
-    /// Import the db file.
+    /// Import the database.
     ///
     /// If the database is imported with WAL mode enabled,
     /// it will be forced to write back to legacy mode, see
     /// <https://sqlite.org/forum/forumpost/67882c5b04>
     ///
-    /// If the imported DB is encrypted, use `import_db_unchecked` instead.
+    /// If the imported database is encrypted, use `import_db_unchecked` instead.
     pub fn import_db(&self, path: &str, bytes: &[u8]) -> Result<WaitCommit> {
         self.pool.import_db(path, bytes)
     }
 
-    /// Can be used to import encrypted DB
+    /// `import_db` without checking, can be used to import encrypted database.
     pub fn import_db_unchecked(
         &self,
         path: &str,
@@ -774,24 +821,34 @@ impl RelaxedIdbUtil {
         self.pool.import_db_unchecked(path, bytes, page_size, false)
     }
 
-    /// Export database
-    pub fn export_db(&self, name: &str) -> Result<Vec<u8>> {
-        self.pool.export_db(name)
+    /// Export the database.
+    pub fn export_db(&self, path: &str) -> Result<Vec<u8>> {
+        self.pool.export_db(path)
     }
 
-    /// Delete the specified db, please make sure that the db is closed.
-    pub fn delete_db(&self, name: &str) -> Result<WaitCommit> {
-        self.pool.delete_db(name)
+    /// Delete the specified database, please make sure that the database is closed.
+    pub fn delete_db(&self, path: &str) -> Result<WaitCommit> {
+        self.pool.delete_db(path)
     }
 
-    /// Delete all dbs, please make sure that all dbs is closed.
+    /// Delete all database, please make sure that all database is closed.
     pub fn clear_all(&self) -> Result<WaitCommit> {
         self.pool.clear_all()
     }
 
-    /// Does the DB exist.
-    pub fn exists(&self, file: &str) -> bool {
-        self.pool.exists(file)
+    /// Does the database exists.
+    pub fn exists(&self, path: &str) -> bool {
+        self.pool.exists(path)
+    }
+
+    /// List all file paths.
+    pub fn list(&self) -> Vec<String> {
+        self.pool.name2file.read().keys().cloned().collect()
+    }
+
+    /// Number of files.
+    pub fn count(&self) -> usize {
+        self.pool.name2file.read().len()
     }
 }
 

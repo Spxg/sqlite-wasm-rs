@@ -399,8 +399,8 @@ impl OpfsSAHPool {
             .map(|x| x.value().into())
     }
 
-    fn export_file(&self, name: &str) -> Result<Vec<u8>> {
-        let name = self.get_path(name)?;
+    fn export_db(&self, path: &str) -> Result<Vec<u8>> {
+        let name = self.get_path(path)?;
 
         let sah = self.map_filename_to_sah.get(&JsValue::from(&name));
         if sah.is_undefined() {
@@ -419,8 +419,7 @@ impl OpfsSAHPool {
                 .map_err(OpfsSAHError::Read)?;
             if read != n as f64 {
                 return Err(OpfsSAHError::Generic(format!(
-                    "Expected to read {} bytes but read {}.",
-                    n, read
+                    "Expected to read {n} bytes but read {read}.",
                 )));
             }
         }
@@ -450,8 +449,7 @@ impl OpfsSAHPool {
         if write != length as f64 {
             self.set_associated_path(&sah, None, 0)?;
             return Err(OpfsSAHError::Generic(format!(
-                "Expected to write {} bytes but wrote {}.",
-                length, write
+                "Expected to write {length} bytes but wrote {write}.",
             )));
         }
 
@@ -776,11 +774,6 @@ impl OpfsSAHPoolUtil {
         self.pool.get_file_count()
     }
 
-    /// Returns an array of the names of the files currently allocated to VFS slots.
-    pub fn get_file_names(&self) -> Vec<String> {
-        self.pool.get_file_names()
-    }
-
     /// Removes up to n entries from the pool, with the caveat that it can only
     /// remove currently-unused entries.
     pub async fn reserve_minimum_capacity(&self, min: u32) -> Result<()> {
@@ -790,18 +783,9 @@ impl OpfsSAHPoolUtil {
         }
         Ok(())
     }
+}
 
-    /// If a virtual file exists with the given name, disassociates it
-    /// from the pool and returns true, else returns false without side effects.
-    pub fn unlink(&self, name: &str) -> Result<bool> {
-        self.pool.delete_path(name)
-    }
-
-    /// Synchronously reads the contents of the given file into a Vec<u8> and returns it.
-    pub fn export_file(&self, name: &str) -> Result<Vec<u8>> {
-        self.pool.export_file(name)
-    }
-
+impl OpfsSAHPoolUtil {
     /// Imports the contents of an SQLite database, provided as a byte array
     /// under the given name, overwriting any existing content.
     ///
@@ -814,23 +798,42 @@ impl OpfsSAHPoolUtil {
         self.pool.import_db(path, bytes)
     }
 
-    /// Can be used to import encrypted DB
+    /// `import_db` without checking, can be used to import encrypted database.
     pub fn import_db_unchecked(&self, path: &str, bytes: &[u8]) -> Result<()> {
         self.pool.import_db_unchecked(path, bytes, false)
     }
 
-    /// Clears all client-defined state of all SAHs and makes all of them available
-    /// for re-use by the pool.
-    pub async fn wipe_files(&self) -> Result<()> {
+    /// Export the database.
+    pub fn export_db(&self, path: &str) -> Result<Vec<u8>> {
+        self.pool.export_db(path)
+    }
+
+    /// Delete the specified database, please make sure that the database is closed.
+    pub fn delete_db(&self, path: &str) -> Result<bool> {
+        self.pool.delete_path(path)
+    }
+
+    /// Delete all database, please make sure that all database is closed.
+    pub async fn clear_all(&self) -> Result<()> {
         self.pool.release_access_handles();
         self.pool.acquire_access_handles(true).await?;
         Ok(())
     }
 
-    /// Does the DB exist.
-    pub fn exists(&self, file: &str) -> Result<bool> {
-        let file = self.pool.get_path(file)?;
+    /// Does the database exists.
+    pub fn exists(&self, path: &str) -> Result<bool> {
+        let file = self.pool.get_path(path)?;
         Ok(self.pool.has_filename(&file))
+    }
+
+    /// List all file paths.
+    pub fn list(&self) -> Vec<String> {
+        self.pool.get_file_names()
+    }
+
+    /// Number of files.
+    pub fn count(&self) -> u32 {
+        self.pool.get_file_count()
     }
 }
 

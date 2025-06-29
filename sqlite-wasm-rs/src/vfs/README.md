@@ -9,7 +9,15 @@ Data is stored in memory, this is the default vfs. Reading and writing are very 
 
 Refresh the page and data will be lost. You also need to pay attention to the memory size limit of the browser page.
 
+### SyncAccessHandlePoolVFS
+
+Ported from sqlite-wasm, see [`opfs-sahpool`](https://sqlite.org/wasm/doc/trunk/persistence.md#vfs-opfs-sahpool) for details. Install the [`opfs-explorer`](https://chromewebstore.google.com/detail/opfs-explorer/acndjpgkpaclldomagafnognkcgjignd) plugin to browse files.
+
+The VFS is based on [`FileSystemSyncAccessHandle`](https://developer.mozilla.org/en-US/docs/Web/API/FileSystemSyncAccessHandle) read and write. The Dedicated Worker is required.
+
 ### RelaxedIdbVFS
+
+`relaxed-idb` feature is required.
 
 Inspired by wa-sqlite's [`IDBMirrorVFS`](https://github.com/rhashimoto/wa-sqlite/blob/master/src/examples/IDBMirrorVFS.js), this is an VFS used in a synchronization context.
 
@@ -23,21 +31,15 @@ As with MemoryVFS, you also need to pay attention to the memory size limit of th
 
 It is particularly important to note that using it on multiple pages may cause DB corruption. It is recommended to use it in SharedWorker.
 
-### SyncAccessHandlePoolVFS
-
-Ported from sqlite-wasm, see [`opfs-sahpool`](https://sqlite.org/wasm/doc/trunk/persistence.md#vfs-opfs-sahpool) for details. Install the [`opfs-explorer`](https://chromewebstore.google.com/detail/opfs-explorer/acndjpgkpaclldomagafnognkcgjignd) plugin to browse files.
-
-The VFS is based on [`FileSystemSyncAccessHandle`](https://developer.mozilla.org/en-US/docs/Web/API/FileSystemSyncAccessHandle) read and write. It is particularly important to note that the Dedicated Worker is required.
-
 ## VFS Comparison
 
-||MemoryVFS|RelaxedIdbVFS|SyncAccessHandlePoolVFS|
+||MemoryVFS|SyncAccessHandlePoolVFS|RelaxedIdbVFS|
 |-|-|-|-|
-|Storage|RAM|IndexedDB|OPFS|
-|Contexts|All|All|Dedicated Worker|
+|Storage|RAM|OPFS|IndexedDB|
+|Contexts|All|Dedicated Worker|All|
 |Multiple connections|:x:|:x:|:x:|
-|Full durability|✅|:x:|✅|
-|Relaxed durability|:x:|✅|:x:|
+|Full durability|✅|✅|:x:|
+|Relaxed durability|:x:|:x:|✅|
 |Multi-database transactions|✅|✅|✅|
 |No COOP/COEP requirements|✅|✅|✅|
 
