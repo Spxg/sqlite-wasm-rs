@@ -11,14 +11,14 @@ categories = ["development-tools::ffi", "wasm", "database"]
 keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "javascript"]
 
 [dependencies]
-fragile = "2.0.0"
-once_cell = "1.20.2"
-tokio = { version = "1.42.0", features = ["sync"] }
-thiserror = "2.0.11"
+fragile = "2.0.1"
+once_cell = "1.21.3"
+tokio = { version = "1.45.1", features = ["sync"] }
+thiserror = "2.0.12"
 
-js-sys = "0.3.76"
-wasm-bindgen = "0.2.99"
-wasm-bindgen-futures = "0.4.49"
+js-sys = "0.3.77"
+wasm-bindgen = "0.2.100"
+wasm-bindgen-futures = "0.4.50"
 web-sys = { version = "0.3.77", features = [
   "StorageManager",
   "FileSystemSyncAccessHandle",
@@ -56,12 +56,12 @@ relaxed-idb = ["indexed_db_futures"]
 
 [dev-dependencies]
 paste = "1.0.15"
-wasm-bindgen-test = "0.3.49"
+wasm-bindgen-test = "0.3.50"
 web-time = "1.1.0"
 
 [build-dependencies]
 bindgen = { version = "0.71", optional = true }
-cc = { version = "1.2.24", optional = true }
+cc = { version = "1.2.27", optional = true }
 
 [package.metadata.docs.rs]
 no-default-features = true
