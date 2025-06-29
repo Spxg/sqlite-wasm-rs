@@ -9,6 +9,7 @@ repository = "https://github.com/Spxg/sqlite-wasm-rs"
 description = "Provide sqlite solution for wasm32-unknown-unknown target."
 categories = ["development-tools::ffi", "wasm", "database"]
 keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "javascript"]
+rust-version = "1.78.0"
 
 [dependencies]
 fragile = "2.0.1"
@@ -60,7 +61,7 @@ wasm-bindgen-test = "0.3.50"
 web-time = "1.1.0"
 
 [build-dependencies]
-bindgen = { version = "0.71", optional = true }
+bindgen = { version = "0.72", optional = true }
 cc = { version = "1.2.27", optional = true }
 
 [package.metadata.docs.rs]
