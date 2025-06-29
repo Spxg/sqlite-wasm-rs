@@ -800,18 +800,18 @@ impl RelaxedIdbUtil {
         self.pool.preload_db(prelod).await
     }
 
-    /// Import the db file.
+    /// Import the database.
     ///
     /// If the database is imported with WAL mode enabled,
     /// it will be forced to write back to legacy mode, see
     /// <https://sqlite.org/forum/forumpost/67882c5b04>
     ///
-    /// If the imported DB is encrypted, use `import_db_unchecked` instead.
+    /// If the imported database is encrypted, use `import_db_unchecked` instead.
     pub fn import_db(&self, path: &str, bytes: &[u8]) -> Result<WaitCommit> {
         self.pool.import_db(path, bytes)
     }
 
-    /// Can be used to import encrypted DB
+    /// `import_db` without checking, can be used to import encrypted database.
     pub fn import_db_unchecked(
         &self,
         path: &str,
@@ -821,24 +821,34 @@ impl RelaxedIdbUtil {
         self.pool.import_db_unchecked(path, bytes, page_size, false)
     }
 
-    /// Export database
-    pub fn export_db(&self, name: &str) -> Result<Vec<u8>> {
-        self.pool.export_db(name)
+    /// Export the database.
+    pub fn export_db(&self, path: &str) -> Result<Vec<u8>> {
+        self.pool.export_db(path)
     }
 
-    /// Delete the specified db, please make sure that the db is closed.
-    pub fn delete_db(&self, name: &str) -> Result<WaitCommit> {
-        self.pool.delete_db(name)
+    /// Delete the specified database, please make sure that the database is closed.
+    pub fn delete_db(&self, path: &str) -> Result<WaitCommit> {
+        self.pool.delete_db(path)
     }
 
-    /// Delete all dbs, please make sure that all dbs is closed.
+    /// Delete all database, please make sure that all database is closed.
     pub fn clear_all(&self) -> Result<WaitCommit> {
         self.pool.clear_all()
     }
 
-    /// Does the DB exist.
-    pub fn exists(&self, file: &str) -> bool {
-        self.pool.exists(file)
+    /// Does the database exists.
+    pub fn exists(&self, path: &str) -> bool {
+        self.pool.exists(path)
+    }
+
+    /// List all file paths.
+    pub fn list(&self) -> Vec<String> {
+        self.pool.name2file.read().keys().cloned().collect()
+    }
+
+    /// Number of files.
+    pub fn count(&self) -> usize {
+        self.pool.name2file.read().len()
     }
 }
 
