@@ -19,6 +19,8 @@ jobs:
         ./emsdk activate latest
         source ./emsdk_env.sh
         cd ../sqlite-wasm-rs
+        rustup toolchain install 1.78.0
+        rustup default 1.78.0
         rustup target add wasm32-unknown-unknown
         export CARGO_PROFILE_RELEASE_OPT_LEVEL="z"
         SQLITE_WASM_RS_UPDATE_PREBUILD=1 cargo build --target wasm32-unknown-unknown --features bundled,buildtime-bindgen --release

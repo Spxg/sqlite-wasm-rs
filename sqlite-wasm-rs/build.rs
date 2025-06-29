@@ -1,5 +1,3 @@
-#![allow(deprecated)]
-
 #[cfg(any(feature = "bundled", feature = "buildtime-bindgen"))]
 const FULL_FEATURED: [&str; 23] = [
     "-DSQLITE_OS_OTHER",
@@ -126,11 +124,7 @@ fn bindgen(output: &str) {
     #[cfg(feature = "sqlite3mc")]
     const SQLITE3_HEADER: &str = "sqlite3mc/sqlite3mc_amalgamation.h";
 
-    use bindgen::{
-        callbacks::{IntKind, ParseCallbacks},
-        RustEdition::Edition2021,
-        RustTarget,
-    };
+    use bindgen::callbacks::{IntKind, ParseCallbacks};
 
     #[derive(Debug)]
     struct SqliteTypeChooser;
@@ -214,8 +208,6 @@ fn bindgen(output: &str) {
         .blocklist_item("__.*");
 
     bindings = bindings
-        .rust_edition(Edition2021)
-        .rust_target(RustTarget::Stable_1_77)
         // https://github.com/rust-lang/rust-bindgen/issues/1941
         .clang_arg("-fvisibility=default");
 
