@@ -145,6 +145,13 @@ impl Default for MemVfsUtil {
 }
 
 impl MemVfsUtil {
+    /// Get management tool
+    pub fn new() -> Self {
+        MemVfsUtil(app_data())
+    }
+}
+
+impl MemVfsUtil {
     fn import_db_unchecked_impl(
         &self,
         path: &str,
@@ -168,33 +175,28 @@ impl MemVfsUtil {
         Ok(())
     }
 
-    /// Get management tool
-    pub fn new() -> Self {
-        MemVfsUtil(app_data())
-    }
-
-    /// Import the db file
+    /// Import the database.
     ///
     /// If the database is imported with WAL mode enabled,
     /// it will be forced to write back to legacy mode, see
     /// <https://sqlite.org/forum/forumpost/67882c5b04>
     ///
-    /// If the imported DB is encrypted, use `import_db_unchecked` instead.
+    /// If the imported database is encrypted, use `import_db_unchecked` instead.
     pub fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
         let page_size = check_import_db(bytes)?;
         self.import_db_unchecked_impl(path, bytes, page_size, true)
     }
 
-    /// Can be used to import encrypted DB
+    /// `import_db` without checking, can be used to import encrypted database.
     pub fn import_db_unchecked(&self, path: &str, bytes: &[u8], page_size: usize) -> Result<()> {
         self.import_db_unchecked_impl(path, bytes, page_size, false)
     }
 
-    /// Export database
-    pub fn export_db(&self, name: &str) -> Result<Vec<u8>> {
+    /// Export the database.
+    pub fn export_db(&self, path: &str) -> Result<Vec<u8>> {
         let name2file = self.0.read();
 
-        if let Some(file) = name2file.get(name) {
+        if let Some(file) = name2file.get(path) {
             let file_size = file.size().unwrap();
             let mut ret = vec![0; file_size];
             file.read(&mut ret, 0).unwrap();
@@ -206,19 +208,29 @@ impl MemVfsUtil {
         }
     }
 
-    /// Delete the specified db, please make sure that the db is closed.
-    pub fn delete_db(&self, name: &str) {
-        self.0.write().remove(name);
+    /// Delete the specified database, please make sure that the database is closed.
+    pub fn delete_db(&self, path: &str) {
+        self.0.write().remove(path);
     }
 
-    /// Delete all dbs, please make sure that all dbs is closed.
+    /// Delete all database, please make sure that all database is closed.
     pub fn clear_all(&self) {
         std::mem::take(&mut *self.0.write());
     }
 
-    /// Does the DB exist.
-    pub fn exists(&self, file: &str) -> bool {
-        self.0.read().contains_key(file)
+    /// Does the database exists.
+    pub fn exists(&self, path: &str) -> bool {
+        self.0.read().contains_key(path)
+    }
+
+    /// List all file paths.
+    pub fn list(&self) -> Vec<String> {
+        self.0.read().keys().cloned().collect()
+    }
+
+    /// Number of files.
+    pub fn count(&self) -> usize {
+        self.0.read().len()
     }
 }
 

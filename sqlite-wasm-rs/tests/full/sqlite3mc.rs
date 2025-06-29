@@ -2,7 +2,7 @@ use sqlite_wasm_rs::{
     mem_vfs::MemVfsUtil, relaxed_idb_vfs::RelaxedIdbCfgBuilder, sahpool_vfs::OpfsSAHPoolCfgBuilder,
     *,
 };
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use wasm_bindgen_test::wasm_bindgen_test;
 
 use crate::full::{check_result, prepare_simple_db};
@@ -162,10 +162,10 @@ async unsafe fn test_opfs_sah_vfs_cipher(cipher: &str) {
     let ret = sqlite3_close(db);
     assert_eq!(ret, SQLITE_OK);
 
-    let db1 = util.export_file(&db_name).unwrap();
+    let db1 = util.export_db(&db_name).unwrap();
     let new_db_name = format!("test_opfs_sah_vfs_{cipher}2.db");
     util.import_db_unchecked(&new_db_name, &db1).unwrap();
-    let db2 = util.export_file(&new_db_name).unwrap();
+    let db2 = util.export_db(&new_db_name).unwrap();
     assert_eq!(db1, db2);
 
     let mut db = std::ptr::null_mut();
