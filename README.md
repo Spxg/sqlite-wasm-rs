@@ -27,7 +27,10 @@ sqlite-wasm-rs = { version = "0.3", features = ["sqlite3mc"] }
 ```
 
 ```rust
-use sqlite_wasm_rs::{self as ffi, sahpool_vfs::install as install_opfs_vfs};
+use sqlite_wasm_rs::{
+    self as ffi,
+    sahpool_vfs::{install as install_opfs_sahpool, OpfsSAHPoolCfg},
+};
 
 async fn open_db() {
     // open with memory vfs
@@ -43,7 +46,9 @@ async fn open_db() {
     assert_eq!(ffi::SQLITE_OK, ret);
 
     // install opfs-sahpool persistent vfs and set as default vfs
-    install_opfs_vfs(None, true).await.unwrap();
+    install_opfs_sahpool(&OpfsSAHPoolCfg::default(), true)
+        .await
+        .unwrap();
 
     // open with opfs-sahpool vfs
     let mut db = std::ptr::null_mut();
