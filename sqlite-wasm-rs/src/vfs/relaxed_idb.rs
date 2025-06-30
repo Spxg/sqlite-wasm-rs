@@ -1,10 +1,9 @@
 //! relaxed-idb vfs implementation
 
 use crate::vfs::utils::{
-    check_db_and_page_size, check_import_db, copy_to_slice, copy_to_uint8_array,
-    copy_to_uint8_array_subarray, register_vfs, FragileComfirmed, ImportDbError, MemChunksFile,
-    RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile,
-    VfsResult, VfsStore,
+    check_db_and_page_size, check_import_db, register_vfs, FragileComfirmed, ImportDbError,
+    MemChunksFile, RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData,
+    VfsError, VfsFile, VfsResult, VfsStore,
 };
 use crate::{bail, check_option, check_result, libsqlite3::*};
 
@@ -23,6 +22,7 @@ use std::{
     ffi::{c_char, CStr},
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use wasm_array_cp::ArrayBufferCopy;
 use wasm_bindgen::JsValue;
 
 type Result<T> = std::result::Result<T, RelaxedIdbError>;
@@ -118,7 +118,7 @@ impl VfsFile for IdbPageFile {
             offset,
             |addr| self.blocks.get(&addr),
             |page, buf, (start, end)| {
-                copy_to_slice(&page.subarray(start as u32, end as u32), buf);
+                ArrayBufferCopy::copy_to(&page.subarray(start as u32, end as u32), buf);
             },
         ))
     }
@@ -135,10 +135,13 @@ impl VfsFile for IdbPageFile {
         }
 
         if let Some(buffer) = self.blocks.get_mut(&offset) {
-            copy_to_uint8_array_subarray(buf, buffer);
+            let buffer: &Uint8Array = buffer;
+            ArrayBufferCopy::copy_from(buffer, buf);
         } else {
-            self.blocks
-                .insert(offset, FragileComfirmed::new(copy_to_uint8_array(buf)));
+            self.blocks.insert(
+                offset,
+                FragileComfirmed::new(ArrayBufferCopy::from_slice(buf)),
+            );
         }
 
         self.tx_blocks.insert(offset);
@@ -369,7 +372,7 @@ impl RelaxedIdb {
             .map(|(idx, buffer)| {
                 (
                     idx * page_size,
-                    FragileComfirmed::new(copy_to_uint8_array(buffer)),
+                    FragileComfirmed::new(ArrayBufferCopy::from_slice(buffer)),
                 )
             })
             .collect();
@@ -377,7 +380,7 @@ impl RelaxedIdb {
         // forced to write back to legacy mode
         if clear_wal {
             let header = blocks.get_mut(&0).unwrap();
-            copy_to_uint8_array_subarray(&[1, 1], &header.subarray(18, 20));
+            ArrayBufferCopy::copy_from(&header.subarray(18, 20), &[1, 1]);
         }
 
         let tx_blocks = blocks.keys().copied().collect();
@@ -407,7 +410,8 @@ impl RelaxedIdb {
                     if offset >= file_size {
                         continue;
                     }
-                    copy_to_slice(buffer, &mut ret[offset..offset + file.block_size]);
+                    let buffer: &Uint8Array = buffer;
+                    ArrayBufferCopy::copy_to(buffer, &mut ret[offset..offset + file.block_size]);
                 }
                 Ok(ret)
             } else {

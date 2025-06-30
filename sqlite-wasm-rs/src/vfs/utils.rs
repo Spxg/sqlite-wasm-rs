@@ -3,13 +3,12 @@
 use crate::libsqlite3::*;
 
 use fragile::Fragile;
-use js_sys::{Date, Math, Number, Uint8Array};
+use js_sys::{Date, Math, Number};
 use parking_lot::Mutex;
 use std::{
     ffi::{CStr, CString},
     ops::{Deref, DerefMut},
 };
-use wasm_array_cp::ArrayBufferCopy;
 
 /// The header of the SQLite file is used to determine whether the imported file is legal.
 pub const SQLITE3_HEADER: &str = "SQLite format 3";
@@ -108,29 +107,9 @@ impl<T> DerefMut for FragileComfirmed<T> {
 }
 
 /// get random name if zFileName is null and other cases
-pub fn get_random_name() -> String {
+pub fn random_name() -> String {
     let random = Number::from(Math::random()).to_string(36).unwrap();
     random.slice(2, random.length()).as_string().unwrap()
-}
-
-/// Copy `Uint8Array` and return new `Vec<u8>`
-pub fn copy_to_vec(src: &Uint8Array) -> Vec<u8> {
-    ArrayBufferCopy::to_vec(src)
-}
-
-/// Copy `Uint8Array` to `slice`
-pub fn copy_to_slice(src: &Uint8Array, dst: &mut [u8]) {
-    ArrayBufferCopy::copy_to(src, dst);
-}
-
-/// Copy `slice` and return new `Uint8Array`
-pub fn copy_to_uint8_array(src: &[u8]) -> Uint8Array {
-    ArrayBufferCopy::from_slice(src)
-}
-
-/// Copy `slice` to `Unit8Array`
-pub fn copy_to_uint8_array_subarray(src: &[u8], dst: &Uint8Array) {
-    ArrayBufferCopy::copy_from(dst, src)
 }
 
 /// Chunks storage in memory, used for temporary file
@@ -525,7 +504,7 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
         let app_data = IO::Store::app_data(pVfs);
 
         let name = if zName.is_null() {
-            get_random_name()
+            random_name()
         } else {
             check_result!(CStr::from_ptr(zName).to_str()).into()
         };
@@ -960,32 +939,10 @@ pub fn check_db_and_page_size(db_size: usize, page_size: usize) -> Result<(), Im
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        vfs::utils::{copy_to_slice, copy_to_uint8_array_subarray},
-        SQLITE_IOERR_SHORT_READ,
-    };
+    use crate::SQLITE_IOERR_SHORT_READ;
 
-    use super::{copy_to_uint8_array, copy_to_vec, MemChunksFile, VfsFile};
-    use js_sys::Uint8Array;
+    use super::{MemChunksFile, VfsFile};
     use wasm_bindgen_test::wasm_bindgen_test;
-
-    #[wasm_bindgen_test]
-    fn test_js_utils() {
-        let buf1 = vec![1, 2, 3, 4];
-        let uint8 = copy_to_uint8_array(&buf1);
-        let buf2 = copy_to_vec(&uint8);
-        assert_eq!(buf1, buf2);
-
-        let mut buf3 = vec![0u8; 2];
-        copy_to_slice(&uint8.subarray(0, 2), &mut buf3);
-        assert_eq!(buf3, vec![1, 2]);
-
-        let buf4 = Uint8Array::new_with_length(3);
-        copy_to_uint8_array_subarray(&buf3, &buf4.subarray(1, 3));
-        assert!(buf4.get_index(0) == 0);
-        assert!(buf4.get_index(1) == 1);
-        assert!(buf4.get_index(2) == 2);
-    }
 
     #[wasm_bindgen_test]
     fn test_chunks_file() {
