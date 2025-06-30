@@ -769,11 +769,6 @@ impl OpfsSAHPoolUtil {
         self.pool.get_capacity()
     }
 
-    /// Returns the number of files from the pool currently allocated to VFS slots.
-    pub fn get_file_count(&self) -> u32 {
-        self.pool.get_file_count()
-    }
-
     /// Removes up to n entries from the pool, with the caveat that it can only
     /// remove currently-unused entries.
     pub async fn reserve_minimum_capacity(&self, min: u32) -> Result<()> {
