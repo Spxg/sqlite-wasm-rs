@@ -839,16 +839,11 @@ impl OpfsSAHPoolUtil {
 
 /// Register `opfs-sahpool` vfs and return a utility object which can be used
 /// to perform basic administration of the file pool
-pub async fn install(
-    options: Option<&OpfsSAHPoolCfg>,
-    default_vfs: bool,
-) -> Result<OpfsSAHPoolUtil> {
+pub async fn install(options: &OpfsSAHPoolCfg, default_vfs: bool) -> Result<OpfsSAHPoolUtil> {
     static NAME2VFS: Lazy<
         tokio::sync::Mutex<HashMap<String, &'static VfsAppData<SyncAccessHandleAppData>>>,
     > = Lazy::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
-    let default_options = OpfsSAHPoolCfg::default();
-    let options = options.unwrap_or(&default_options);
     let vfs_name = &options.vfs_name;
 
     let create_pool = async {

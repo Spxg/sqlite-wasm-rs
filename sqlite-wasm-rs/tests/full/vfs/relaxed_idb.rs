@@ -2,7 +2,9 @@ use indexed_db_futures::database::Database;
 use indexed_db_futures::prelude::*;
 use indexed_db_futures::transaction::TransactionMode;
 use js_sys::{Object, Reflect, Uint8Array};
-use sqlite_wasm_rs::relaxed_idb_vfs::{install as install_idb_vfs, Preload, RelaxedIdbCfgBuilder};
+use sqlite_wasm_rs::relaxed_idb_vfs::{
+    install as install_idb_vfs, Preload, RelaxedIdbCfg, RelaxedIdbCfgBuilder,
+};
 use sqlite_wasm_rs::*;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_test::{console_log, wasm_bindgen_test};
@@ -11,7 +13,9 @@ use crate::full::{check_persistent, prepare_simple_db};
 
 #[wasm_bindgen_test]
 async fn test_idb_vfs_default() {
-    install_idb_vfs(None, true).await.unwrap();
+    install_idb_vfs(&RelaxedIdbCfg::default(), true)
+        .await
+        .unwrap();
 
     let mut db = std::ptr::null_mut();
     let ret = unsafe {
@@ -30,7 +34,9 @@ async fn test_idb_vfs_default() {
 
 #[wasm_bindgen_test]
 async fn test_idb_vfs_default_error() {
-    install_idb_vfs(None, true).await.unwrap();
+    install_idb_vfs(&RelaxedIdbCfg::default(), true)
+        .await
+        .unwrap();
 
     let mut db = std::ptr::null_mut();
     let ret = unsafe {
@@ -48,13 +54,11 @@ async fn test_idb_vfs_default_error() {
 #[wasm_bindgen_test]
 async fn test_idb_vfs_custom() {
     install_idb_vfs(
-        Some(
-            &RelaxedIdbCfgBuilder::new()
-                .vfs_name("relaxed-idb-custom")
-                .clear_on_init(true)
-                .preload(Preload::None)
-                .build(),
-        ),
+        &RelaxedIdbCfgBuilder::new()
+            .vfs_name("relaxed-idb-custom")
+            .clear_on_init(true)
+            .preload(Preload::None)
+            .build(),
         false,
     )
     .await
@@ -78,13 +82,11 @@ async fn test_idb_vfs_custom() {
 #[wasm_bindgen_test]
 async fn test_idb_vfs_utils() {
     let util = install_idb_vfs(
-        Some(
-            &RelaxedIdbCfgBuilder::new()
-                .vfs_name("relaxed-idb-utils")
-                .clear_on_init(true)
-                .preload(Preload::All)
-                .build(),
-        ),
+        &RelaxedIdbCfgBuilder::new()
+            .vfs_name("relaxed-idb-utils")
+            .clear_on_init(true)
+            .preload(Preload::All)
+            .build(),
         false,
     )
     .await
@@ -139,13 +141,11 @@ async fn test_idb_vfs_utils() {
 #[wasm_bindgen_test]
 async fn test_idb_vfs_set_page_size() {
     let util = install_idb_vfs(
-        Some(
-            &RelaxedIdbCfgBuilder::new()
-                .vfs_name("relaxed-idb-pagesize")
-                .clear_on_init(true)
-                .preload(Preload::None)
-                .build(),
-        ),
+        &RelaxedIdbCfgBuilder::new()
+            .vfs_name("relaxed-idb-pagesize")
+            .clear_on_init(true)
+            .preload(Preload::None)
+            .build(),
         true,
     )
     .await
@@ -194,11 +194,9 @@ async fn test_idb_vfs_set_page_size() {
 #[wasm_bindgen_test]
 async fn test_idb_vfs_synchronous() {
     install_idb_vfs(
-        Some(
-            &RelaxedIdbCfgBuilder::new()
-                .vfs_name("relaxed-idb-synchronous")
-                .build(),
-        ),
+        &RelaxedIdbCfgBuilder::new()
+            .vfs_name("relaxed-idb-synchronous")
+            .build(),
         true,
     )
     .await
@@ -280,12 +278,10 @@ async fn sqlite3_preload_prepare(block_size: usize) {
 async fn test_idb_vfs_preload(block_size: usize) {
     let now = web_time::Instant::now();
     let util = install_idb_vfs(
-        Some(
-            &RelaxedIdbCfgBuilder::new()
-                .vfs_name("idb-preload")
-                .preload(Preload::None)
-                .build(),
-        ),
+        &RelaxedIdbCfgBuilder::new()
+            .vfs_name("idb-preload")
+            .preload(Preload::None)
+            .build(),
         true,
     )
     .await

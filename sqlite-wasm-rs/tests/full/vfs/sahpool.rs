@@ -6,7 +6,9 @@ use crate::full::{check_persistent, prepare_simple_db};
 
 #[wasm_bindgen_test]
 async fn test_opfs_sah_vfs_default() {
-    install_opfs_sahpool(None, true).await.unwrap();
+    install_opfs_sahpool(&OpfsSAHPoolCfg::default(), true)
+        .await
+        .unwrap();
 
     let mut db = std::ptr::null_mut();
     let ret = unsafe {
@@ -25,7 +27,9 @@ async fn test_opfs_sah_vfs_default() {
 
 #[wasm_bindgen_test]
 async fn test_opfs_sah_vfs_default_error() {
-    install_opfs_sahpool(None, true).await.unwrap();
+    install_opfs_sahpool(&OpfsSAHPoolCfg::default(), true)
+        .await
+        .unwrap();
 
     let mut db = std::ptr::null_mut();
     let ret = unsafe {
@@ -46,7 +50,7 @@ async fn test_opfs_sah_vfs_custom() {
         .vfs_name("test-vfs-1")
         .directory("custom/bar")
         .build();
-    install_opfs_sahpool(Some(&cfg), false).await.unwrap();
+    install_opfs_sahpool(&cfg, false).await.unwrap();
 
     let mut db = std::ptr::null_mut();
     let ret = unsafe {
@@ -70,7 +74,7 @@ async fn test_opfs_sah_vfs_util() {
         .directory("custom/foo")
         .clear_on_init(true)
         .build();
-    let util = install_opfs_sahpool(Some(&cfg), false).await.unwrap();
+    let util = install_opfs_sahpool(&cfg, false).await.unwrap();
 
     let mut db = std::ptr::null_mut();
     let ret = unsafe {

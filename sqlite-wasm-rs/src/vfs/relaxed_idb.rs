@@ -854,12 +854,10 @@ impl RelaxedIdbUtil {
 
 /// Register `relaxed-idb` vfs and return a utility object which can be used
 /// to perform basic administration of the file pool
-pub async fn install(options: Option<&RelaxedIdbCfg>, default_vfs: bool) -> Result<RelaxedIdbUtil> {
+pub async fn install(options: &RelaxedIdbCfg, default_vfs: bool) -> Result<RelaxedIdbUtil> {
     static NAME2VFS: Lazy<tokio::sync::Mutex<HashMap<String, &'static VfsAppData<RelaxedIdb>>>> =
         Lazy::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
-    let default_options = RelaxedIdbCfg::default();
-    let options = options.unwrap_or(&default_options);
     let vfs_name = &options.vfs_name;
 
     let mut name2vfs = NAME2VFS.lock().await;
