@@ -99,14 +99,14 @@ async fn test_opfs_sah_vfs_util() {
     util.reserve_minimum_capacity(before + 2).await.unwrap();
     assert_eq!(before + 2, util.get_capacity());
 
-    let before = util.get_file_count();
+    let before = util.count();
     assert_eq!(util.list(), vec!["/test_opfs_sah_util.db".to_string()]);
 
     // export and import to new.db
     let db = util.export_db("test_opfs_sah_util.db").unwrap();
     util.import_db("new.db", &db).unwrap();
     assert!(util.exists("new.db").unwrap_or_default());
-    assert_eq!(before + 1, util.get_file_count());
+    assert_eq!(before + 1, util.count());
 
     let mut db = std::ptr::null_mut();
     let ret = unsafe {
