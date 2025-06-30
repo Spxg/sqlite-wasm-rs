@@ -154,7 +154,10 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_wasi_random_get(
         if get_random_values(&array).is_err() {
             return FUNCTION_NOT_SUPPORT;
         }
-        crate::utils::copy_to_slice(&array, std::slice::from_raw_parts_mut(buf, buf_len));
+        wasm_array_cp::ArrayBufferCopy::copy_to(
+            &array,
+            std::slice::from_raw_parts_mut(buf, buf_len),
+        );
     }
 
     #[cfg(not(target_feature = "atomics"))]

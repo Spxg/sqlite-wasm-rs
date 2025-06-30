@@ -6,14 +6,14 @@
 
 use crate::libsqlite3::*;
 use crate::vfs::utils::{
-    check_import_db, copy_to_uint8_array_subarray, copy_to_vec, get_random_name, register_vfs,
-    FragileComfirmed, ImportDbError, RegisterVfsError, SQLiteIoMethods, SQLiteVfs, VfsAppData,
-    VfsError, VfsFile, VfsResult, VfsStore,
+    check_import_db, random_name, register_vfs, FragileComfirmed, ImportDbError, RegisterVfsError,
+    SQLiteIoMethods, SQLiteVfs, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
 };
 
 use js_sys::{Array, DataView, IteratorNext, Map, Reflect, Set, Uint8Array};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use wasm_array_cp::ArrayBufferCopy;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
@@ -136,7 +136,7 @@ impl OpfsSAHPool {
     /// to the new capacity.
     async fn add_capacity(&self, n: u32) -> Result<u32> {
         for _ in 0..n {
-            let name = get_random_name();
+            let name = random_name();
             let handle: FileSystemFileHandle =
                 JsFuture::from(self.dh_opaque.get_file_handle_with_options(&name, &{
                     let options = FileSystemGetFileOptions::new();
@@ -229,7 +229,7 @@ impl OpfsSAHPool {
             return Ok(None);
         }
         let path_bytes = self.ap_body.subarray(0, path_size as u32);
-        let vec = copy_to_vec(&path_bytes);
+        let vec = ArrayBufferCopy::to_vec(&path_bytes);
         // set_associated_path ensures that it is utf8
         let path = String::from_utf8(vec).unwrap();
         Ok(Some(path))
@@ -255,9 +255,9 @@ impl OpfsSAHPool {
                 if HEADER_MAX_PATH_SIZE <= path.len() + 1 {
                     return Err(OpfsSAHError::Generic(format!("Path too long: {path}")));
                 }
-                copy_to_uint8_array_subarray(
-                    path.as_bytes(),
+                ArrayBufferCopy::copy_from(
                     &self.ap_body.subarray(0, path.len() as u32),
+                    path.as_bytes(),
                 );
 
                 self.ap_body
