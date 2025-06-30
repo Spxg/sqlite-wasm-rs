@@ -10,20 +10,20 @@ Provide sqlite solution for `wasm32-unknown-unknown` target.
 [dependencies]
 # Using `bundled` default feature causes us to automatically compile
 # and link in an up to date, requires the emscripten toolchain.
-sqlite-wasm-rs = "0.3"
+sqlite-wasm-rs = "0.4"
 ```
 
 ```toml
 [dependencies]
 # If you don't have the emscripten toolchain, you can use the `precompiled` feature.
-sqlite-wasm-rs = { version = "0.3", default-features = false, features = ["precompiled"] }
+sqlite-wasm-rs = { version = "0.4", default-features = false, features = ["precompiled"] }
 ```
 
 ```toml
 [dependencies]
 # Encryption is supported by SQLite3MultipleCiphers, need to enable the bundled feature.
 # See <https://utelle.github.io/SQLite3MultipleCiphers>
-sqlite-wasm-rs = { version = "0.3", features = ["sqlite3mc"] }
+sqlite-wasm-rs = { version = "0.4", features = ["sqlite3mc"] }
 ```
 
 ```rust
@@ -91,7 +91,7 @@ More see [`custom-libc`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/exam
 
 ## Why provide precompiled library
 
-Since `wasm32-unknown-unknown` does not have libc, emscripten is used here for compilation, otherwise we need to copy a bunch of c headers required for sqlite3 compilation, which is a bit of a hack for me. If sqlite3 is compiled at compile time, the emscripten toolchain is required, and we cannot assume that all users have it installed. (Believe me, because rust mainly supports the `wasm32-unknown-unknown` target, most people do not have the emscripten toolchain). Considering that wasm is cross-platform, vendor compilation products are acceptable.
+Since `wasm32-unknown-unknown` does not have libc, emscripten is used here for compilation, otherwise we need to copy a bunch of c headers required for sqlite3 compilation. If sqlite3 is compiled at compile time, the emscripten toolchain is required, and we cannot assume that all users have it installed. (Believe me, because rust mainly supports the `wasm32-unknown-unknown` target, most people do not have the emscripten toolchain). Considering that wasm is cross-platform, vendor compilation products are acceptable.
 
 About security:
 
@@ -102,7 +102,7 @@ About security:
 
 ## Minimum supported Rust version (MSRV)
 
-The minimal officially supported rustc version is 1.78.0
+The minimal officially supported rustc version is 1.78.0.
 
 ## Nice Try
 
@@ -116,4 +116,4 @@ The minimal officially supported rustc version is 1.78.0
 * [`sqlite-wasm`](https://github.com/sqlite/sqlite-wasm): SQLite Wasm conveniently wrapped as an ES Module.
 * [`sqlite-web-rs`](https://github.com/xmtp/sqlite-web-rs): A SQLite WebAssembly backend for Diesel.
 * [`wa-sqlite`](https://github.com/rhashimoto/wa-sqlite): WebAssembly SQLite with support for browser storage extensions.
-* [`SQLite3MultipleCiphers`](https://github.com/utelle/SQLite3MultipleCiphers): SQLite3 encryption extension with support for multiple ciphers
+* [`SQLite3MultipleCiphers`](https://github.com/utelle/SQLite3MultipleCiphers): SQLite3 encryption extension with support for multiple ciphers.
