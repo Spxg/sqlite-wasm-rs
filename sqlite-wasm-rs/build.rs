@@ -1,4 +1,7 @@
-#[cfg(any(feature = "bundled", feature = "buildtime-bindgen"))]
+#[cfg(any(
+    all(feature = "bundled", not(feature = "precompiled")),
+    feature = "buildtime-bindgen",
+))]
 const FULL_FEATURED: [&str; 23] = [
     "-DSQLITE_OS_OTHER",
     "-DSQLITE_USE_URI",
@@ -34,61 +37,6 @@ const FULL_FEATURED: [&str; 23] = [
 ))]
 const SQLITE3_MC_FEATURED: [&str; 1] = ["-D__WASM__"];
 
-#[cfg(all(not(feature = "bundled"), feature = "precompiled"))]
-fn main() {
-    #[cfg(feature = "buildtime-bindgen")]
-    bindgen(&std::env::var("OUT_DIR").expect("OUT_DIR env not set"));
-
-    let path = std::env::current_dir().unwrap().join("sqlite3");
-    let lib_path = path.to_str().unwrap();
-    println!("cargo::rerun-if-changed=sqlite3");
-    static_linking(lib_path);
-}
-
-#[cfg(all(not(feature = "precompiled"), feature = "bundled"))]
-fn main() {
-    const UPDATE_LIB_ENV: &str = "SQLITE_WASM_RS_UPDATE_PREBUILD";
-
-    println!("cargo::rerun-if-env-changed={UPDATE_LIB_ENV}");
-    println!("cargo::rerun-if-changed=shim");
-
-    let update_precompiled = std::env::var(UPDATE_LIB_ENV).is_ok();
-    let output = std::env::var("OUT_DIR").expect("OUT_DIR env not set");
-
-    #[cfg(feature = "sqlite3mc")]
-    println!("cargo::rerun-if-changed=sqlite3mc");
-
-    #[cfg(not(feature = "sqlite3mc"))]
-    println!("cargo::rerun-if-changed=sqlite3");
-
-    compile(&output, update_precompiled);
-
-    #[cfg(feature = "buildtime-bindgen")]
-    bindgen(&output);
-
-    if update_precompiled {
-        #[cfg(not(feature = "sqlite3mc"))]
-        {
-            std::fs::copy(
-                format!("{output}/libsqlite3linked.a"),
-                "sqlite3/libsqlite3linked.a",
-            )
-            .unwrap();
-            std::fs::copy(format!("{output}/libsqlite3.a"), "sqlite3/libsqlite3.a").unwrap();
-        }
-        #[cfg(feature = "buildtime-bindgen")]
-        {
-            #[cfg(not(feature = "sqlite3mc"))]
-            const SQLITE3_BINDGEN: &str = "src/libsqlite3/sqlite3_bindgen.rs";
-            #[cfg(feature = "sqlite3mc")]
-            const SQLITE3_BINDGEN: &str = "src/libsqlite3/sqlite3mc_bindgen.rs";
-            std::fs::copy(format!("{output}/bindgen.rs"), SQLITE3_BINDGEN).unwrap();
-        }
-    }
-
-    static_linking(&output);
-}
-
 #[cfg(all(not(feature = "bundled"), not(feature = "precompiled")))]
 fn main() {
     panic!(
@@ -107,14 +55,75 @@ fn main() {
     );
 }
 
-#[cfg(any(feature = "bundled", feature = "precompiled"))]
-fn static_linking(lib_path: &str) {
-    println!("cargo:rustc-link-search=native={lib_path}");
-    if cfg!(feature = "custom-libc") {
-        println!("cargo:rustc-link-lib=static=sqlite3");
+#[cfg(all(not(feature = "bundled"), feature = "precompiled"))]
+fn main() {
+    const CUSTOM_LD_LIB_PATH: &str = "SQLITE_WASM_RS_PREBUILD_LD_LIB_PATH";
+
+    println!("cargo::rerun-if-env-changed={CUSTOM_LD_LIB_PATH}");
+
+    #[cfg(feature = "buildtime-bindgen")]
+    bindgen(&std::env::var("OUT_DIR").expect("OUT_DIR env not set"));
+
+    if let Ok(path) = std::env::var(CUSTOM_LD_LIB_PATH) {
+        let ld_path = std::path::Path::new(&path)
+            .canonicalize()
+            .expect("failed to canonicalize ld path");
+        let ld_path = ld_path.to_str().unwrap();
+        println!("cargo::rerun-if-changed={ld_path}");
+        static_linking(ld_path);
     } else {
-        println!("cargo:rustc-link-lib=static=sqlite3linked");
+        println!("cargo::rerun-if-changed=sqlite3");
+        let path = std::env::current_dir().unwrap().join("sqlite3");
+        let ld_path = path.to_str().unwrap();
+        static_linking(ld_path);
     }
+}
+
+#[cfg(all(not(feature = "precompiled"), feature = "bundled"))]
+fn main() {
+    const UPDATE_LIB_ENV: &str = "SQLITE_WASM_RS_UPDATE_PREBUILD";
+
+    println!("cargo::rerun-if-env-changed={UPDATE_LIB_ENV}");
+    println!("cargo::rerun-if-changed=shim");
+
+    let update_precompiled = std::env::var(UPDATE_LIB_ENV).is_ok();
+    let output = std::env::var("OUT_DIR").expect("OUT_DIR env not set");
+
+    #[cfg(feature = "sqlite3mc")]
+    println!("cargo::rerun-if-changed=sqlite3mc");
+
+    #[cfg(not(feature = "sqlite3mc"))]
+    println!("cargo::rerun-if-changed=sqlite3");
+
+    compile(&output);
+
+    #[cfg(feature = "buildtime-bindgen")]
+    bindgen(&output);
+
+    if update_precompiled {
+        #[cfg(not(feature = "sqlite3mc"))]
+        std::fs::copy(format!("{output}/libsqlite3.a"), "sqlite3/libsqlite3.a").unwrap();
+
+        #[cfg(feature = "buildtime-bindgen")]
+        {
+            #[cfg(not(feature = "sqlite3mc"))]
+            const SQLITE3_BINDGEN: &str = "src/libsqlite3/sqlite3_bindgen.rs";
+            #[cfg(feature = "sqlite3mc")]
+            const SQLITE3_BINDGEN: &str = "src/libsqlite3/sqlite3mc_bindgen.rs";
+            std::fs::copy(format!("{output}/bindgen.rs"), SQLITE3_BINDGEN).unwrap();
+        }
+    }
+
+    static_linking(&output);
+}
+
+#[cfg(all(
+    any(feature = "bundled", feature = "precompiled"),
+    not(all(feature = "bundled", feature = "precompiled"))
+))]
+fn static_linking(ld_path: &str) {
+    println!("cargo:rustc-link-search=native={ld_path}");
+    println!("cargo:rustc-link-lib=static=sqlite3");
 }
 
 #[cfg(feature = "buildtime-bindgen")]
@@ -222,8 +231,8 @@ fn bindgen(output: &str) {
         .unwrap();
 }
 
-#[cfg(feature = "bundled")]
-fn compile(output: &str, build_all: bool) {
+#[cfg(all(feature = "bundled", not(feature = "precompiled")))]
+fn compile(output: &str) {
     #[cfg(not(feature = "sqlite3mc"))]
     const SQLITE3_SOURCE: &str = "sqlite3/sqlite3.c";
     #[cfg(feature = "sqlite3mc")]
@@ -246,7 +255,12 @@ or use the precompiled binaries via the `default-features = false` and `precompi
 
     cc.flag("-o").flag(format!("{output}/sqlite3.o")).flag("-r");
 
-    if !cfg!(feature = "custom-libc") || build_all {
+    if cfg!(feature = "custom-libc") {
+        cc.get_compiler()
+            .to_command()
+            .status()
+            .expect("Failed to compile sqlite3");
+    } else {
         cc.get_compiler()
             .to_command()
             .arg("shim/wasm-shim.c")
@@ -254,28 +268,14 @@ or use the precompiled binaries via the `default-features = false` and `precompi
             .arg("-lc")
             .status()
             .expect("Failed to compile sqlite3");
-
-        cc.get_archiver()
-            .arg("rcs")
-            .arg(format!("{output}/libsqlite3linked.a"))
-            .arg(format!("{output}/sqlite3.o"))
-            .status()
-            .expect("Failed to archive sqlite3linked.o");
     }
 
-    if cfg!(feature = "custom-libc") || build_all {
-        cc.get_compiler()
-            .to_command()
-            .status()
-            .expect("Failed to compile sqlite3");
-
-        cc.get_archiver()
-            .arg("rcs")
-            .arg(format!("{output}/libsqlite3.a"))
-            .arg(format!("{output}/sqlite3.o"))
-            .status()
-            .expect("Failed to archive sqlite3.o");
-    }
+    cc.get_archiver()
+        .arg("rcs")
+        .arg(format!("{output}/libsqlite3.a"))
+        .arg(format!("{output}/sqlite3.o"))
+        .status()
+        .expect("Failed to archive sqlite3.o");
 
     let _ = std::fs::remove_file(format!("{output}/sqlite3.o"));
 }

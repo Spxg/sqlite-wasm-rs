@@ -45,4 +45,3 @@ jobs:
       with:
         subject-path: |
           sqlite-wasm-rs/sqlite3/libsqlite3.a
-          sqlite-wasm-rs/sqlite3/libsqlite3linked.a
