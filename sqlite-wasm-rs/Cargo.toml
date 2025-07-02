@@ -46,9 +46,9 @@ parking_lot = { version = "0.12", features = ["nightly"] }
 [features]
 default = ["bundled"]
 bundled = ["cc"]
-buildtime-bindgen = ["bindgen"]
 precompiled = []
-custom-libc = ["sqlite-wasm-libc"]
+buildtime-bindgen = ["bindgen"]
+custom-libc = ["bundled", "sqlite-wasm-libc"]
 # SQLite3MultipleCiphers
 # <https://github.com/utelle/SQLite3MultipleCiphers>
 # <https://utelle.github.io/SQLite3MultipleCiphers>

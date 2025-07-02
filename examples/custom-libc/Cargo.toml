@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-sqlite-wasm-rs = { path = "../../sqlite-wasm-rs", default-features = false, features = ["precompiled", "custom-libc"] }
+sqlite-wasm-rs = { path = "../../sqlite-wasm-rs", features = ["custom-libc"] }
 
 js-sys = "0.3.77"
 wasm-bindgen = "0.2.100"
