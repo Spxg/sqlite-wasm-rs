@@ -36,6 +36,13 @@ jobs:
         .\emsdk_env
         cd ../sqlite-wasm-rs
         wasm-pack test --chrome --headless --features relaxed-idb
+    - name: Test custom-libc
+      if: matrix.os != 'windows-latest'
+      run: |
+        cd emsdk
+        source ./emsdk_env.sh
+        cd ../examples/custom-libc
+        RUSTFLAGS="-L $(pwd)" wasm-pack test --chrome --headless
 
   test_bundled_sqlite3mc:
     strategy:
@@ -141,17 +148,6 @@ jobs:
       run: |
         cd sqlite-wasm-rs
         wasm-pack test --chrome --headless --no-default-features --features precompiled
-    - name: Test custom-libc
-      if: matrix.os != 'windows-latest'
-      run: |
-        git clone https://github.com/emscripten-core/emsdk.git
-        cd emsdk
-        ./emsdk install latest
-        ./emsdk activate latest
-        source ./emsdk_env.sh
-        cd ..
-        cd examples/custom-libc
-        RUSTFLAGS="-L $(pwd)" wasm-pack test --chrome --headless
 
   test_atomics:
     strategy:
