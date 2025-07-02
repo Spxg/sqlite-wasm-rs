@@ -10,9 +10,6 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-/// The header of the SQLite file is used to determine whether the imported file is legal.
-pub const SQLITE3_HEADER: &str = "SQLite format 3";
-
 /// Return error code if expr is true.
 ///
 /// The default error code is SQLITE_ERROR.
@@ -73,6 +70,9 @@ macro_rules! unused {
         let _ = $ex;
     };
 }
+
+/// The header of the SQLite file is used to determine whether the imported file is legal.
+pub const SQLITE3_HEADER: &str = "SQLite format 3";
 
 /// A [`FragileComfirmed<T>`] wraps a non sendable `T` to be safely send to other threads.
 ///
