@@ -64,19 +64,15 @@ fn main() {
     #[cfg(feature = "buildtime-bindgen")]
     bindgen(&std::env::var("OUT_DIR").expect("OUT_DIR env not set"));
 
-    if let Ok(path) = std::env::var(CUSTOM_LD_LIB_PATH) {
-        let ld_path = std::path::Path::new(&path)
-            .canonicalize()
-            .expect("failed to canonicalize ld path");
-        let ld_path = ld_path.to_str().unwrap();
-        println!("cargo::rerun-if-changed={ld_path}");
-        static_linking(ld_path);
-    } else {
-        println!("cargo::rerun-if-changed=sqlite3");
-        let path = std::env::current_dir().unwrap().join("sqlite3");
-        let ld_path = path.to_str().unwrap();
-        static_linking(ld_path);
-    }
+    let ld_path = std::env::var(CUSTOM_LD_LIB_PATH).unwrap_or_else(|_| {
+        std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+            .join("sqlite3")
+            .to_string_lossy()
+            .to_string()
+    });
+
+    println!("cargo::rerun-if-changed={ld_path}");
+    static_linking(&ld_path);
 }
 
 #[cfg(all(not(feature = "precompiled"), feature = "bundled"))]
