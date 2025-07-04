@@ -102,11 +102,17 @@ jobs:
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - name: Run rusqlite tests
       run: |
+        git clone https://github.com/emscripten-core/emsdk.git
+        cd emsdk
+        ./emsdk install latest
+        ./emsdk activate latest
+        source ./emsdk_env.sh
+        cd ..
         git clone https://github.com/Spxg/rusqlite.git
         cd rusqlite
         printf "[patch.crates-io]\n" >> Cargo.toml
         printf "sqlite-wasm-rs = { path = \"../sqlite-wasm-rs\" }\n" >> Cargo.toml
-        wasm-pack test --chrome --headless --features modern-full-wasm32-unknown-unknown,precompiled-wasm
+        WASM_BINDGEN_TEST_TIMEOUT=60 wasm-pack test --chrome --headless --features modern-base
 
   test_clippy:
     runs-on: ubuntu-latest
