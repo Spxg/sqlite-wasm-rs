@@ -733,9 +733,6 @@ pub enum OpfsSAHError {
     Reflect(JsValue),
     #[error("Generic error: {0}")]
     Generic(String),
-    #[deprecated(note = "Has been renamed to OpfsSAHError::Generic")]
-    #[error("custom error")]
-    Custom(String),
 }
 
 impl OpfsSAHError {
