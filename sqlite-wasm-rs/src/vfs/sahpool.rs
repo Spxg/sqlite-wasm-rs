@@ -6,7 +6,7 @@
 
 use crate::libsqlite3::*;
 use crate::vfs::utils::{
-    check_import_db, random_name, register_vfs, FragileComfirmed, ImportDbError, RegisterVfsError,
+    check_import_db, random_name, register_vfs, FragileConfirmed, ImportDbError, RegisterVfsError,
     SQLiteIoMethods, SQLiteVfs, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
 };
 
@@ -522,7 +522,7 @@ impl VfsFile for FileSystemSyncAccessHandle {
     }
 }
 
-type SyncAccessHandleAppData = FragileComfirmed<OpfsSAHPool>;
+type SyncAccessHandleAppData = FragileConfirmed<OpfsSAHPool>;
 
 struct SyncAccessHandleStore;
 
@@ -843,7 +843,7 @@ pub async fn install(options: &OpfsSAHPoolCfg, default_vfs: bool) -> Result<Opfs
 
     let create_pool = async {
         let pool = OpfsSAHPool::new(options).await?;
-        Ok::<_, OpfsSAHError>(FragileComfirmed::new(pool))
+        Ok::<_, OpfsSAHError>(FragileConfirmed::new(pool))
     };
 
     let mut name2vfs = NAME2VFS.lock().await;

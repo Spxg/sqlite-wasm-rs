@@ -74,33 +74,33 @@ macro_rules! unused {
 /// The header of the SQLite file is used to determine whether the imported file is legal.
 pub const SQLITE3_HEADER: &str = "SQLite format 3";
 
-/// A [`FragileComfirmed<T>`] wraps a non sendable `T` to be safely send to other threads.
+/// A [`FragileConfirmed<T>`] wraps a non sendable `T` to be safely send to other threads.
 ///
 /// Once the value has been wrapped it can be sent to other threads but access
 /// to the value on those threads will fail.
-pub struct FragileComfirmed<T> {
+pub struct FragileConfirmed<T> {
     fragile: Fragile<T>,
 }
 
-unsafe impl<T> Send for FragileComfirmed<T> {}
-unsafe impl<T> Sync for FragileComfirmed<T> {}
+unsafe impl<T> Send for FragileConfirmed<T> {}
+unsafe impl<T> Sync for FragileConfirmed<T> {}
 
-impl<T> FragileComfirmed<T> {
+impl<T> FragileConfirmed<T> {
     pub fn new(t: T) -> Self {
-        FragileComfirmed {
+        FragileConfirmed {
             fragile: Fragile::new(t),
         }
     }
 }
 
-impl<T> Deref for FragileComfirmed<T> {
+impl<T> Deref for FragileConfirmed<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         self.fragile.get()
     }
 }
 
-impl<T> DerefMut for FragileComfirmed<T> {
+impl<T> DerefMut for FragileConfirmed<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.fragile.get_mut()
     }
