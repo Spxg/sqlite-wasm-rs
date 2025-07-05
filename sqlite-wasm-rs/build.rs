@@ -2,7 +2,7 @@
     all(feature = "bundled", not(feature = "precompiled")),
     feature = "buildtime-bindgen",
 ))]
-const FULL_FEATURED: [&str; 23] = [
+const FULL_FEATURED: [&str; 24] = [
     "-DSQLITE_OS_OTHER",
     "-DSQLITE_USE_URI",
     // wasm is single-threaded
@@ -15,6 +15,7 @@ const FULL_FEATURED: [&str; 23] = [
     "-DSQLITE_OMIT_LOAD_EXTENSION",
     // single-threaded, single connection is enough
     "-DSQLITE_OMIT_SHARED_CACHE",
+    "-DSQLITE_ENABLE_UNLOCK_NOTIFY",
     "-DSQLITE_ENABLE_API_ARMOR",
     "-DSQLITE_ENABLE_MATH_FUNCTIONS",
     "-DSQLITE_ENABLE_BYTECODE_VTAB",
