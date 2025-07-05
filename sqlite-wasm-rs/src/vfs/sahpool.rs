@@ -841,17 +841,12 @@ pub async fn install(options: &OpfsSAHPoolCfg, default_vfs: bool) -> Result<Opfs
 
     let vfs_name = &options.vfs_name;
 
-    let create_pool = async {
-        let pool = OpfsSAHPool::new(options).await?;
-        Ok::<_, OpfsSAHError>(FragileConfirmed::new(pool))
-    };
-
     let mut name2vfs = NAME2VFS.lock().await;
 
     let pool = if let Some(pool) = name2vfs.get(vfs_name) {
         pool
     } else {
-        let pool = create_pool.await?;
+        let pool = FragileConfirmed::new(OpfsSAHPool::new(options).await?);
         let vfs = register_vfs::<SyncAccessHandleIoMethods, SyncAccessHandleVfs>(
             vfs_name,
             pool,
