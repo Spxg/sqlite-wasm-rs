@@ -124,9 +124,7 @@ impl OpfsSAHPool {
         };
 
         pool.acquire_access_handles(clear_files).await?;
-        if pool.get_capacity() == 0 {
-            pool.add_capacity(capacity).await?;
-        }
+        pool.reserve_minimum_capacity(capacity).await?;
 
         Ok(pool)
     }
@@ -157,6 +155,12 @@ impl OpfsSAHPool {
         Ok(self.get_capacity())
     }
 
+    async fn reserve_minimum_capacity(&self, min: u32) -> Result<()> {
+        self.add_capacity(min.saturating_sub(self.get_capacity()))
+            .await?;
+        Ok(())
+    }
+
     /// Reduce capacity by n, but can only reduce up to the limit
     /// of currently-available SAHs. Returns a Promise which resolves
     /// to the number of slots really removed.
@@ -167,10 +171,7 @@ impl OpfsSAHPool {
                 break;
             }
             let sah = FileSystemSyncAccessHandle::from(sah);
-
-            let name = self.map_sah_to_opaque_name.get(&sah);
-            assert!(!name.is_undefined(), "name must exists");
-            let name = name.as_string().unwrap();
+            let name = self.map_sah_to_opaque_name.get(&sah).as_string().unwrap();
 
             sah.close();
             JsFuture::from(self.dh_opaque.remove_entry(&name))
@@ -178,6 +179,7 @@ impl OpfsSAHPool {
                 .map_err(OpfsSAHError::RemoveEntity)?;
             self.map_sah_to_opaque_name.delete(&sah);
             self.available_sah.delete(&sah);
+
             result += 1;
         }
         Ok(result)
@@ -291,7 +293,6 @@ impl OpfsSAHPool {
     /// cleared when its handle is acquired, including its name, flags,
     /// and any data stored after the metadata block.
     async fn acquire_access_handles(&self, clear_files: bool) -> Result<()> {
-        let mut files = vec![];
         let iter = self.dh_opaque.entries();
         while let Ok(future) = iter.next() {
             let next: IteratorNext = JsFuture::from(future)
@@ -302,22 +303,17 @@ impl OpfsSAHPool {
                 break;
             }
             let array: Array = next.value().into();
-            let key = array.get(0);
+            let name = array.get(0);
             let value = array.get(1);
             let kind = Reflect::get(&value, &JsValue::from("kind"))
                 .map_err(OpfsSAHError::Reflect)?
                 .as_string();
             if kind.as_deref() == Some("file") {
-                files.push((key, FileSystemFileHandle::from(value)));
-            }
-        }
-
-        let fut = async {
-            for (file, handle) in files {
+                let handle = FileSystemFileHandle::from(value);
                 let sah = JsFuture::from(handle.create_sync_access_handle())
                     .await
                     .map_err(OpfsSAHError::CreateSyncAccessHandle)?;
-                self.map_sah_to_opaque_name.set(&sah, &file);
+                self.map_sah_to_opaque_name.set(&sah, &name);
                 let sah = FileSystemSyncAccessHandle::from(sah);
                 if clear_files {
                     self.set_associated_path(&sah, None, 0)?;
@@ -327,12 +323,6 @@ impl OpfsSAHPool {
                     self.available_sah.add(&sah);
                 }
             }
-            Ok::<_, OpfsSAHError>(())
-        };
-
-        if let Err(e) = fut.await {
-            self.release_access_handles();
-            return Err(e);
         }
 
         Ok(())
@@ -750,6 +740,11 @@ pub struct OpfsSAHPoolUtil {
 }
 
 impl OpfsSAHPoolUtil {
+    /// Returns the number of files currently contained in the SAH pool.
+    pub fn get_capacity(&self) -> u32 {
+        self.pool.get_capacity()
+    }
+
     /// Adds n entries to the current pool.
     pub async fn add_capacity(&self, n: u32) -> Result<u32> {
         self.pool.add_capacity(n).await
@@ -761,19 +756,10 @@ impl OpfsSAHPoolUtil {
         self.pool.reduce_capacity(n).await
     }
 
-    /// Returns the number of files currently contained in the SAH pool.
-    pub fn get_capacity(&self) -> u32 {
-        self.pool.get_capacity()
-    }
-
     /// Removes up to n entries from the pool, with the caveat that it can only
     /// remove currently-unused entries.
     pub async fn reserve_minimum_capacity(&self, min: u32) -> Result<()> {
-        let now = self.pool.get_capacity();
-        if min > now {
-            self.pool.add_capacity(min - now).await?;
-        }
-        Ok(())
+        self.pool.reserve_minimum_capacity(min).await
     }
 }
 
