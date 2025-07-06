@@ -923,6 +923,132 @@ pub fn check_db_and_page_size(db_size: usize, page_size: usize) -> Result<(), Im
 }
 
 #[cfg(test)]
+pub mod test_suite {
+    use super::{
+        sqlite3_file, sqlite3_vfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult,
+        VfsStore, SQLITE_IOERR, SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_MAIN_DB,
+        SQLITE_OPEN_READWRITE,
+    };
+
+    fn test_vfs_file<File: VfsFile>(file: &mut File) -> VfsResult<i32> {
+        let base_offset = 1024 * 1024;
+
+        let mut write_buffer = vec![42; 64 * 1024];
+        let mut read_buffer = vec![42; base_offset + write_buffer.len()];
+        let hw = "hello world!";
+        write_buffer[0..hw.len()].copy_from_slice(hw.as_bytes());
+
+        file.write(&write_buffer, 0)?;
+        assert!(!file.read(&mut read_buffer, 0)?);
+        if &read_buffer[0..hw.len()] != hw.as_bytes()
+            || read_buffer[hw.len()..write_buffer.len()]
+                .iter()
+                .any(|&x| x != 42)
+            || read_buffer[write_buffer.len()..].iter().any(|&x| x != 0)
+        {
+            return Err(VfsError::new(SQLITE_IOERR, "incorrect buffer data".into()))?;
+        }
+        if file.size()? != write_buffer.len() {
+            return Err(VfsError::new(
+                SQLITE_IOERR,
+                "incorrect buffer length".into(),
+            ))?;
+        }
+
+        file.write(&write_buffer, base_offset)?;
+        if file.size()? != base_offset + write_buffer.len() {
+            return Err(VfsError::new(
+                SQLITE_IOERR,
+                "incorrect buffer length".into(),
+            ))?;
+        }
+        assert!(file.read(&mut read_buffer, 0)?);
+        if &read_buffer[0..hw.len()] != hw.as_bytes()
+            || read_buffer[hw.len()..write_buffer.len()]
+                .iter()
+                .any(|&x| x != 42)
+            || read_buffer[write_buffer.len()..base_offset]
+                .iter()
+                .all(|&x| x != 0)
+            || &read_buffer[base_offset..base_offset + hw.len()] != hw.as_bytes()
+            || read_buffer[base_offset + hw.len()..]
+                .iter()
+                .any(|&x| x != 42)
+        {
+            return Err(VfsError::new(SQLITE_IOERR, "incorrect buffer data".into()))?;
+        }
+
+        Ok(SQLITE_OK)
+    }
+
+    pub fn test_vfs_store<AppData, File: VfsFile, Store: VfsStore<File, AppData>>(
+        vfs_data: VfsAppData<AppData>,
+    ) -> VfsResult<()> {
+        let layout = std::alloc::Layout::new::<sqlite3_vfs>();
+        let vfs = unsafe {
+            let vfs = std::alloc::alloc(layout) as *mut sqlite3_vfs;
+            (*vfs).pAppData = vfs_data.leak().cast();
+            vfs
+        };
+
+        let test_file = |filename: &str, flags: i32| {
+            if Store::contains_file(vfs, filename)? {
+                return Err(VfsError::new(SQLITE_IOERR, "found file before test".into()))?;
+            }
+
+            let vfs_file = SQLiteVfsFile {
+                io_methods: sqlite3_file {
+                    pMethods: std::ptr::null(),
+                },
+                vfs,
+                flags,
+                name_ptr: filename.as_ptr(),
+                name_length: filename.len(),
+            };
+
+            Store::add_file(vfs, filename, flags)?;
+
+            if !Store::contains_file(vfs, filename)? {
+                return Err(VfsError::new(
+                    SQLITE_IOERR,
+                    "not found file after create".into(),
+                ))?;
+            }
+
+            Store::with_file_mut(&vfs_file, |file| test_vfs_file(file))?;
+
+            Store::delete_file(vfs, filename)?;
+
+            if Store::contains_file(vfs, filename)? {
+                return Err(VfsError::new(
+                    SQLITE_IOERR,
+                    "found file after delete".into(),
+                ))?;
+            }
+
+            Ok(())
+        };
+
+        test_file(
+            "___test_vfs_store#1___",
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB,
+        )?;
+
+        test_file(
+            "___test_vfs_store#2___",
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+        )?;
+
+        unsafe {
+            drop(VfsAppData::<AppData>::from_raw((*vfs).pAppData as *mut _));
+            std::alloc::dealloc(vfs.cast(), layout);
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::{MemChunksFile, VfsFile};
     use wasm_bindgen_test::wasm_bindgen_test;

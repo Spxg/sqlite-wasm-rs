@@ -784,3 +784,31 @@ pub async fn install(options: &OpfsSAHPoolCfg, default_vfs: bool) -> Result<Opfs
 
     Ok(util)
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        sahpool_vfs::{
+            OpfsSAHPool, OpfsSAHPoolCfgBuilder, SyncAccessHandleAppData, SyncAccessHandleStore,
+        },
+        utils::{test_suite::test_vfs_store, FragileConfirmed, VfsAppData},
+    };
+    use wasm_bindgen_test::wasm_bindgen_test;
+    use web_sys::FileSystemSyncAccessHandle;
+
+    #[wasm_bindgen_test]
+    async fn test_opfs_vfs_store() {
+        let data = FragileConfirmed::new(
+            OpfsSAHPool::new(
+                &OpfsSAHPoolCfgBuilder::new()
+                    .directory("test_opfs_suite")
+                    .build(),
+            )
+            .await
+            .unwrap(),
+        );
+
+        test_vfs_store::<SyncAccessHandleAppData, FileSystemSyncAccessHandle, SyncAccessHandleStore>(VfsAppData::new(data))
+            .unwrap();
+    }
+}
