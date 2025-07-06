@@ -149,20 +149,20 @@ impl MemChunksFile {
 }
 
 impl VfsFile for MemChunksFile {
-    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<i32> {
+    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<bool> {
         let Some(chunk_size) = self.chunk_size else {
             buf.fill(0);
-            return Ok(SQLITE_IOERR_SHORT_READ);
+            return Ok(false);
         };
 
         if self.file_size <= offset {
             buf.fill(0);
-            return Ok(SQLITE_IOERR_SHORT_READ);
+            return Ok(false);
         }
 
         if chunk_size == buf.len() && offset % chunk_size == 0 {
             buf.copy_from_slice(&self.chunks[offset / chunk_size]);
-            Ok(SQLITE_OK)
+            Ok(true)
         } else {
             let mut size = buf.len();
             let chunk_idx = offset / chunk_size;
@@ -182,9 +182,9 @@ impl VfsFile for MemChunksFile {
 
             if offset < buf.len() {
                 buf[offset..].fill(0);
-                Ok(SQLITE_IOERR_SHORT_READ)
+                Ok(false)
             } else {
-                Ok(SQLITE_OK)
+                Ok(true)
             }
         }
     }
@@ -419,8 +419,8 @@ impl<T> Deref for VfsAppData<T> {
 
 /// Some basic capabilities of file
 pub trait VfsFile {
-    /// Abstraction of `xRead`, returns `SQLITE_OK` or `SQLITE_IOERR_SHORT_READ`
-    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<i32>;
+    /// Abstraction of `xRead`, returns true for `SQLITE_OK` and false for `SQLITE_IOERR_SHORT_READ`
+    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<bool>;
     /// Abstraction of `xWrite`
     fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()>;
     /// Abstraction of `xTruncate`
@@ -453,9 +453,12 @@ pub trait VfsStore<File, AppData> {
     /// Delete the specified file in the Store, use for `xClose` and `xDelete`
     fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<()>;
     /// Read the file contents, use for `xRead`, `xFileSize`
-    fn with_file<F: Fn(&File) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> VfsResult<i32>;
+    fn with_file<F: Fn(&File) -> VfsResult<i32>>(vfs_file: &SQLiteVfsFile, f: F) -> VfsResult<i32>;
     /// Write the file contents, use for `xWrite`, `xTruncate` and `xSync`
-    fn with_file_mut<F: Fn(&mut File) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> VfsResult<i32>;
+    fn with_file_mut<F: Fn(&mut File) -> VfsResult<i32>>(
+        vfs_file: &SQLiteVfsFile,
+        f: F,
+    ) -> VfsResult<i32>;
 }
 
 /// Abstraction of SQLite vfs
@@ -685,10 +688,12 @@ pub trait SQLiteIoMethods {
             let size = iAmt as usize;
             let offset = iOfst as usize;
             let slice = std::slice::from_raw_parts_mut(zBuf.cast::<u8>(), size);
-            match file.read(slice, offset) {
-                Ok(code) => code,
-                Err(err) => app_data.store_err(err),
-            }
+            let code = if file.read(slice, offset)? {
+                SQLITE_OK
+            } else {
+                SQLITE_IOERR_SHORT_READ
+            };
+            Ok(code)
         };
 
         match Self::Store::with_file(vfs_file, f) {
@@ -709,11 +714,8 @@ pub trait SQLiteIoMethods {
         let f = |file: &mut Self::File| {
             let (offset, size) = (iOfst as usize, iAmt as usize);
             let slice = std::slice::from_raw_parts(zBuf.cast::<u8>(), size);
-            if let Err(err) = file.write(slice, offset) {
-                app_data.store_err(err)
-            } else {
-                SQLITE_OK
-            }
+            file.write(slice, offset)?;
+            Ok(SQLITE_OK)
         };
 
         match Self::Store::with_file_mut(vfs_file, f) {
@@ -730,11 +732,8 @@ pub trait SQLiteIoMethods {
         let app_data = Self::Store::app_data(vfs_file.vfs);
 
         let f = |file: &mut Self::File| {
-            if let Err(err) = file.truncate(size as usize) {
-                app_data.store_err(err)
-            } else {
-                SQLITE_OK
-            }
+            file.truncate(size as usize)?;
+            Ok(SQLITE_OK)
         };
 
         match Self::Store::with_file_mut(vfs_file, f) {
@@ -753,11 +752,8 @@ pub trait SQLiteIoMethods {
         let app_data = Self::Store::app_data(vfs_file.vfs);
 
         let f = |file: &mut Self::File| {
-            if let Err(err) = file.flush() {
-                app_data.store_err(err)
-            } else {
-                SQLITE_OK
-            }
+            file.flush()?;
+            Ok(SQLITE_OK)
         };
 
         match Self::Store::with_file_mut(vfs_file, f) {
@@ -773,12 +769,11 @@ pub trait SQLiteIoMethods {
         let vfs_file = SQLiteVfsFile::from_file(pFile);
         let app_data = Self::Store::app_data(vfs_file.vfs);
 
-        let f = |file: &Self::File| match file.size() {
-            Ok(size) => {
+        let f = |file: &Self::File| {
+            file.size().map(|size| {
                 *pSize = size as sqlite3_int64;
-                SQLITE_OK
-            }
-            Err(err) => app_data.store_err(err),
+            })?;
+            Ok(SQLITE_OK)
         };
 
         match Self::Store::with_file(vfs_file, f) {
@@ -939,8 +934,6 @@ pub fn check_db_and_page_size(db_size: usize, page_size: usize) -> Result<(), Im
 
 #[cfg(test)]
 mod tests {
-    use crate::SQLITE_IOERR_SHORT_READ;
-
     use super::{MemChunksFile, VfsFile};
     use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -952,14 +945,14 @@ mod tests {
 
         let mut buffer = [1; 2];
         let ret = file.read(&mut buffer, 0).unwrap();
-        assert_eq!(ret, SQLITE_IOERR_SHORT_READ);
+        assert_eq!(ret, false);
         assert_eq!([0; 2], buffer);
 
         file.write(&[1], 0).unwrap();
         assert!(file.size().unwrap() == 1);
         let mut buffer = [2; 2];
         let ret = file.read(&mut buffer, 0).unwrap();
-        assert_eq!(ret, SQLITE_IOERR_SHORT_READ);
+        assert_eq!(ret, false);
         assert_eq!([1, 0], buffer);
 
         let mut file = MemChunksFile::new(512);
@@ -977,7 +970,7 @@ mod tests {
 
         let mut buffer = [0; 3];
         let ret = file.read(&mut buffer, 511).unwrap();
-        assert_eq!(ret, 0);
+        assert_eq!(ret, true);
         assert_eq!(buffer, [41, 42, 43]);
 
         file.truncate(513).unwrap();

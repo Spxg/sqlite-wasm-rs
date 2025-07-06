@@ -10,7 +10,7 @@ use sqlite_wasm_rs::{
     utils::{
         register_vfs, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsFile, VfsResult, VfsStore,
     },
-    SQLITE_IOERR_SHORT_READ, SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_READWRITE,
+    SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_READWRITE,
 };
 use std::collections::HashMap;
 use wasm_bindgen_test::{console_log, wasm_bindgen_test};
@@ -24,13 +24,13 @@ impl VfsFile for MemFile {
     /// Called by `xRead`
     ///
     /// We copy the data starting at offset in the memory file to buffer,
-    /// and if it cannot be read completely, `SQLITE_IOERR_SHORT_READ` is returned.
-    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<i32> {
+    /// and if it cannot be read completely, false is returned.
+    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<bool> {
         let size = buf.len();
         let end = size + offset;
         if self.0.len() <= offset {
             buf.fill(0);
-            return Ok(SQLITE_IOERR_SHORT_READ);
+            return Ok(false);
         }
 
         let read_end = end.min(self.0.len());
@@ -39,9 +39,9 @@ impl VfsFile for MemFile {
 
         if read_size < size {
             buf[read_size..].fill(0);
-            return Ok(SQLITE_IOERR_SHORT_READ);
+            return Ok(false);
         }
-        Ok(SQLITE_OK)
+        Ok(true)
     }
 
     /// Called by `xWrite`
@@ -128,17 +128,23 @@ impl VfsStore<MemFile, MemAppData> for MemFileStore {
     /// Called by `xRead` and `xFileSize`
     ///
     /// Read the file contents
-    fn with_file<F: Fn(&MemFile) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> VfsResult<i32> {
+    fn with_file<F: Fn(&MemFile) -> VfsResult<i32>>(
+        vfs_file: &SQLiteVfsFile,
+        f: F,
+    ) -> VfsResult<i32> {
         let app_data = unsafe { Self::app_data(vfs_file.vfs) };
         let name = unsafe { vfs_file.name() };
         console_log!("with_file() called, vfs: {:?} file: {}", vfs_file.vfs, name);
-        Ok(f(app_data.read().get(name).unwrap()))
+        f(app_data.read().get(name).unwrap())
     }
 
     /// Called by `xWrite`, `xTruncate` and `xSync`
     ///
     /// Write the file contents
-    fn with_file_mut<F: Fn(&mut MemFile) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> VfsResult<i32> {
+    fn with_file_mut<F: Fn(&mut MemFile) -> VfsResult<i32>>(
+        vfs_file: &SQLiteVfsFile,
+        f: F,
+    ) -> VfsResult<i32> {
         let app_data = unsafe { Self::app_data(vfs_file.vfs) };
         let name = unsafe { vfs_file.name() };
         console_log!(
@@ -146,7 +152,7 @@ impl VfsStore<MemFile, MemAppData> for MemFileStore {
             vfs_file.vfs,
             name
         );
-        Ok(f(app_data.write().get_mut(name).unwrap()))
+        f(app_data.write().get_mut(name).unwrap())
     }
 }
 
