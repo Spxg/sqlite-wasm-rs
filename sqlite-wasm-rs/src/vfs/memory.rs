@@ -255,3 +255,18 @@ pub(crate) fn install() -> ::std::os::raw::c_int {
     )));
     unsafe { sqlite3_vfs_register(vfs, 1) }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        mem_vfs::{MemAppData, MemFile, MemStore},
+        utils::{test_suite::test_vfs_store, VfsAppData},
+    };
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    #[wasm_bindgen_test]
+    fn test_memory_vfs_store() {
+        test_vfs_store::<MemAppData, MemFile, MemStore>(VfsAppData::new(MemAppData::default()))
+            .unwrap();
+    }
+}

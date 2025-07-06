@@ -887,3 +887,30 @@ pub async fn install(options: &RelaxedIdbCfg, default_vfs: bool) -> Result<Relax
 
     Ok(RelaxedIdbUtil { pool })
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        utils::{test_suite::test_vfs_store, VfsAppData},
+        vfs::relaxed_idb::{IdbFile, RelaxedIdb, RelaxedIdbCfgBuilder, RelaxedIdbStore},
+    };
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    #[wasm_bindgen_test]
+    async fn test_relaxed_idb_vfs_store() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        test_vfs_store::<RelaxedIdb, IdbFile, RelaxedIdbStore>(VfsAppData::new(
+            RelaxedIdb::new(
+                &RelaxedIdbCfgBuilder::new()
+                    .vfs_name("test_relaxed_idb_suite")
+                    .build(),
+                tx,
+            )
+            .await
+            .unwrap(),
+        ))
+        .unwrap();
+
+        wasm_bindgen_futures::spawn_local(async move { while let Some(_) = rx.recv().await {} });
+    }
+}

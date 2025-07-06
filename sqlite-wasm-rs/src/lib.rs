@@ -39,4 +39,4 @@ pub use vfs::utils;
 pub use sqlite_wasm_libc;
 
 #[cfg(test)]
-wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_dedicated_worker);
