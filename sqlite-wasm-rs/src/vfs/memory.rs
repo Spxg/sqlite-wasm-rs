@@ -38,7 +38,7 @@ impl MemFile {
 }
 
 impl VfsFile for MemFile {
-    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<i32> {
+    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<bool> {
         self.file().read(buf, offset)
     }
 
@@ -86,20 +86,26 @@ impl VfsStore<MemFile, MemAppData> for MemStore {
         Ok(())
     }
 
-    fn with_file<F: Fn(&MemFile) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> VfsResult<i32> {
+    fn with_file<F: Fn(&MemFile) -> VfsResult<i32>>(
+        vfs_file: &SQLiteVfsFile,
+        f: F,
+    ) -> VfsResult<i32> {
         let name = unsafe { vfs_file.name() };
         let app_data = unsafe { Self::app_data(vfs_file.vfs) };
         match app_data.read().get(name) {
-            Some(file) => Ok(f(file)),
+            Some(file) => f(file),
             None => Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
         }
     }
 
-    fn with_file_mut<F: Fn(&mut MemFile) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> VfsResult<i32> {
+    fn with_file_mut<F: Fn(&mut MemFile) -> VfsResult<i32>>(
+        vfs_file: &SQLiteVfsFile,
+        f: F,
+    ) -> VfsResult<i32> {
         let name = unsafe { vfs_file.name() };
         let app_data = unsafe { Self::app_data(vfs_file.vfs) };
         match app_data.write().get_mut(name) {
-            Some(file) => Ok(f(file)),
+            Some(file) => f(file),
             None => Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
         }
     }

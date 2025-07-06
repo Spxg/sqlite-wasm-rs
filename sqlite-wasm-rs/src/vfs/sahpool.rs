@@ -419,7 +419,7 @@ impl OpfsSAHPool {
 }
 
 impl VfsFile for FileSystemSyncAccessHandle {
-    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<i32> {
+    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<bool> {
         let n_read = self
             .read_with_u8_array_and_options(
                 buf,
@@ -430,10 +430,10 @@ impl VfsFile for FileSystemSyncAccessHandle {
 
         if (n_read as usize) < buf.len() {
             buf[n_read as usize..].fill(0);
-            return Ok(SQLITE_IOERR_SHORT_READ);
+            return Ok(false);
         }
 
-        Ok(SQLITE_OK)
+        Ok(true)
     }
 
     fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()> {
@@ -515,26 +515,26 @@ impl VfsStore<FileSystemSyncAccessHandle, SyncAccessHandleAppData> for SyncAcces
         Ok(())
     }
 
-    fn with_file<F: Fn(&FileSystemSyncAccessHandle) -> i32>(
+    fn with_file<F: Fn(&FileSystemSyncAccessHandle) -> VfsResult<i32>>(
         vfs_file: &super::utils::SQLiteVfsFile,
         f: F,
     ) -> VfsResult<i32> {
         let name = unsafe { vfs_file.name() };
         let pool = unsafe { Self::app_data(vfs_file.vfs) };
         match pool.get_sah_for_path(name) {
-            Some(file) => Ok(f(&file)),
+            Some(file) => f(&file),
             None => Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
         }
     }
 
-    fn with_file_mut<F: Fn(&mut FileSystemSyncAccessHandle) -> i32>(
+    fn with_file_mut<F: Fn(&mut FileSystemSyncAccessHandle) -> VfsResult<i32>>(
         vfs_file: &super::utils::SQLiteVfsFile,
         f: F,
     ) -> VfsResult<i32> {
         let name = unsafe { vfs_file.name() };
         let pool = unsafe { Self::app_data(vfs_file.vfs) };
         match pool.get_sah_for_path(name) {
-            Some(mut file) => Ok(f(&mut file)),
+            Some(mut file) => f(&mut file),
             None => Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
         }
     }

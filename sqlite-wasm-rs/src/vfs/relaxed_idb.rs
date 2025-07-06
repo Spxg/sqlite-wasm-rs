@@ -34,10 +34,10 @@ fn page_read<T, G: Fn(usize) -> Option<T>, R: Fn(T, &mut [u8], (usize, usize))>(
     offset: usize,
     get_page: G,
     read_fn: R,
-) -> i32 {
+) -> bool {
     if page_size == 0 || file_size == 0 {
         buf.fill(0);
-        return SQLITE_IOERR_SHORT_READ;
+        return false;
     }
 
     let mut bytes_read = 0;
@@ -68,10 +68,10 @@ fn page_read<T, G: Fn(usize) -> Option<T>, R: Fn(T, &mut [u8], (usize, usize))>(
 
     if bytes_read < p_data_length {
         buf[bytes_read..].fill(0);
-        return SQLITE_IOERR_SHORT_READ;
+        return false;
     }
 
-    SQLITE_OK
+    true
 }
 
 struct IdbCommit {
@@ -110,7 +110,7 @@ struct IdbPageFile {
 }
 
 impl VfsFile for IdbPageFile {
-    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<i32> {
+    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<bool> {
         Ok(page_read(
             buf,
             self.block_size,
@@ -165,7 +165,7 @@ impl VfsFile for IdbPageFile {
 }
 
 impl VfsFile for IdbFile {
-    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<i32> {
+    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<bool> {
         match self {
             IdbFile::Main(idb_page_file) => idb_page_file.read(buf, offset),
             IdbFile::Temp(mem_chunks_file) => mem_chunks_file.read(buf, offset),
@@ -591,20 +591,26 @@ impl VfsStore<IdbFile, RelaxedIdb> for RelaxedIdbStore {
         Ok(())
     }
 
-    fn with_file<F: Fn(&IdbFile) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> VfsResult<i32> {
+    fn with_file<F: Fn(&IdbFile) -> VfsResult<i32>>(
+        vfs_file: &SQLiteVfsFile,
+        f: F,
+    ) -> VfsResult<i32> {
         let name = unsafe { vfs_file.name() };
         let pool = unsafe { Self::app_data(vfs_file.vfs) };
         match pool.name2file.read().get(name) {
-            Some(file) => Ok(f(file)),
+            Some(file) => f(file),
             None => Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
         }
     }
 
-    fn with_file_mut<F: Fn(&mut IdbFile) -> i32>(vfs_file: &SQLiteVfsFile, f: F) -> VfsResult<i32> {
+    fn with_file_mut<F: Fn(&mut IdbFile) -> VfsResult<i32>>(
+        vfs_file: &SQLiteVfsFile,
+        f: F,
+    ) -> VfsResult<i32> {
         let name = unsafe { vfs_file.name() };
         let pool = unsafe { Self::app_data(vfs_file.vfs) };
         match pool.name2file.write().get_mut(name) {
-            Some(file) => Ok(f(file)),
+            Some(file) => f(file),
             None => Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
         }
     }
