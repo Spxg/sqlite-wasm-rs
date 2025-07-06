@@ -30,7 +30,6 @@ web-sys = { version = "0.3.77", features = [
   "WorkerNavigator",
   "FileSystemGetFileOptions",
   "FileSystemFileHandle",
-  "Url",
 ]}
 wasm-array-cp = "0.1.1"
 
