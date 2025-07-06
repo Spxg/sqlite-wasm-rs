@@ -6,11 +6,55 @@ Go to [`here`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-rs
 
 ### MemoryVFS
 
+```rust
+use sqlite_wasm_rs as ffi;
+
+fn open_db() {
+    // open with memory vfs
+    let mut db = std::ptr::null_mut();
+    let ret = unsafe {
+        ffi::sqlite3_open_v2(
+            c"mem.db".as_ptr().cast(),
+            &mut db as *mut _,
+            ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
+            std::ptr::null()
+        )
+    };
+    assert_eq!(ffi::SQLITE_OK, ret);
+}
+```
+
 Data is stored in memory, this is the default vfs, and reading and writing are very fast, after all, in memory.
 
 Refresh the page and data will be lost, and you also need to pay attention to the memory size limit of the browser page.
 
 ### SyncAccessHandlePoolVFS
+
+```rust
+use sqlite_wasm_rs::{
+    self as ffi,
+    sahpool_vfs::{install as install_opfs_sahpool, OpfsSAHPoolCfg},
+};
+
+async fn open_db() {
+    // install opfs-sahpool persistent vfs and set as default vfs
+    install_opfs_sahpool(&OpfsSAHPoolCfg::default(), true)
+        .await
+        .unwrap();
+
+    // open with opfs-sahpool vfs
+    let mut db = std::ptr::null_mut();
+    let ret = unsafe {
+        ffi::sqlite3_open_v2(
+            c"opfs-sahpool.db".as_ptr().cast(),
+            &mut db as *mut _,
+            ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
+            std::ptr::null()
+        )
+    };
+    assert_eq!(ffi::SQLITE_OK, ret);
+}
+```
 
 Ported from sqlite-wasm, see [`opfs-sahpool`](https://sqlite.org/wasm/doc/trunk/persistence.md#vfs-opfs-sahpool) for details. 
 
@@ -19,6 +63,32 @@ The VFS is based on [`FileSystemSyncAccessHandle`](https://developer.mozilla.org
 ### RelaxedIdbVFS
 
 **The `relaxed-idb` feature is required, and it is not recommended to use in a production environment.**
+
+```rust
+use sqlite_wasm_rs::{
+    self as ffi,
+    relaxed_idb_vfs::{install as install_idb_vfs, RelaxedIdbCfg},
+};
+
+async fn open_db() {
+    // install relaxed-idb persistent vfs and set as default vfs
+    install_idb_vfs(&RelaxedIdbCfg::default(), true)
+        .await
+        .unwrap();
+
+    // open with relaxed-idb vfs
+    let mut db = std::ptr::null_mut();
+    let ret = unsafe {
+        ffi::sqlite3_open_v2(
+            c"relaxed-idb.db".as_ptr().cast(),
+            &mut db as *mut _,
+            ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
+            std::ptr::null()
+        )
+    };
+    assert_eq!(ffi::SQLITE_OK, ret);
+}
+```
 
 Inspired by wa-sqlite's [`IDBMirrorVFS`](https://github.com/rhashimoto/wa-sqlite/blob/master/src/examples/IDBMirrorVFS.js), this is an VFS used in a synchronization context.
 
