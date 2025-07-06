@@ -380,24 +380,26 @@ impl OpfsSAHPool {
     }
 
     fn import_db_unchecked(&self, filename: &str, bytes: &[u8], clear_wal: bool) -> Result<()> {
-        let length = bytes.len();
         let path = self.get_path(filename)?;
 
-        let sah = self.map_filename_to_sah.get(&JsValue::from(&path));
-        let sah = if sah.is_undefined() {
-            self.next_available_sah()
-                .ok_or_else(|| OpfsSAHError::Generic("No available handles to import to.".into()))?
-        } else {
-            FileSystemSyncAccessHandle::from(sah)
-        };
+        if self.has_filename(&path) {
+            return Err(OpfsSAHError::Generic(format!(
+                "{path} file already exists."
+            )));
+        }
 
-        let write = sah
+        let sah = self
+            .next_available_sah()
+            .ok_or_else(|| OpfsSAHError::Generic("No available handles to import to.".into()))?;
+
+        let length = bytes.len() as f64;
+        let written = sah
             .write_with_u8_array_and_options(bytes, &read_write_options(HEADER_OFFSET_DATA as f64))
             .map_err(OpfsSAHError::Write)?;
-        if write != length as f64 {
+        if written != length {
             self.set_associated_path(&sah, None, 0)?;
             return Err(OpfsSAHError::Generic(format!(
-                "Expected to write {length} bytes but wrote {write}.",
+                "Expected to write {length} bytes but wrote {written}.",
             )));
         }
 
@@ -409,6 +411,7 @@ impl OpfsSAHPool {
             )
             .map_err(OpfsSAHError::Write)?;
         }
+
         self.set_associated_path(&sah, Some(&path), SQLITE_OPEN_MAIN_DB)?;
 
         Ok(())
