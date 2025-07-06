@@ -346,23 +346,23 @@ impl RelaxedIdb {
         Ok(())
     }
 
-    fn import_db(&self, path: &str, bytes: &[u8]) -> Result<WaitCommit> {
+    fn import_db(&self, filename: &str, bytes: &[u8]) -> Result<WaitCommit> {
         let page_size = check_import_db(bytes)?;
-        self.import_db_unchecked(path, bytes, page_size, true)
+        self.import_db_unchecked(filename, bytes, page_size, true)
     }
 
     fn import_db_unchecked(
         &self,
-        path: &str,
+        filename: &str,
         bytes: &[u8],
         page_size: usize,
         clear_wal: bool,
     ) -> Result<WaitCommit> {
         check_db_and_page_size(bytes.len(), page_size)?;
 
-        if self.name2file.read().contains_key(path) {
+        if self.name2file.read().contains_key(filename) {
             return Err(RelaxedIdbError::Generic(format!(
-                "{path} file already exists"
+                "{filename} file already exists"
             )));
         }
 
@@ -386,7 +386,7 @@ impl RelaxedIdb {
         let tx_blocks = blocks.keys().copied().collect();
 
         self.name2file.write().insert(
-            path.into(),
+            filename.into(),
             IdbFile::Main(IdbPageFile {
                 file_size: blocks.len() * page_size,
                 block_size: page_size,
@@ -396,7 +396,7 @@ impl RelaxedIdb {
             }),
         );
 
-        self.send_task_with_notify(IdbCommitOp::Sync(path.into()))
+        self.send_task_with_notify(IdbCommitOp::Sync(filename.into()))
     }
 
     fn export_db(&self, name: &str) -> Result<Vec<u8>> {
@@ -800,8 +800,8 @@ impl RelaxedIdbUtil {
     ///
     /// Because indexed db reading data is an asynchronous operation,
     /// the db must be preloaded into memory before opening the sqlite db.
-    pub async fn preload_db(&self, prelod: Vec<String>) -> Result<()> {
-        self.pool.preload_db(prelod).await
+    pub async fn preload_db(&self, preload: Vec<String>) -> Result<()> {
+        self.pool.preload_db(preload).await
     }
 
     /// Import the database.
@@ -811,28 +811,29 @@ impl RelaxedIdbUtil {
     /// <https://sqlite.org/forum/forumpost/67882c5b04>
     ///
     /// If the imported database is encrypted, use `import_db_unchecked` instead.
-    pub fn import_db(&self, path: &str, bytes: &[u8]) -> Result<WaitCommit> {
-        self.pool.import_db(path, bytes)
+    pub fn import_db(&self, filename: &str, bytes: &[u8]) -> Result<WaitCommit> {
+        self.pool.import_db(filename, bytes)
     }
 
     /// `import_db` without checking, can be used to import encrypted database.
     pub fn import_db_unchecked(
         &self,
-        path: &str,
+        filename: &str,
         bytes: &[u8],
         page_size: usize,
     ) -> Result<WaitCommit> {
-        self.pool.import_db_unchecked(path, bytes, page_size, false)
+        self.pool
+            .import_db_unchecked(filename, bytes, page_size, false)
     }
 
     /// Export the database.
-    pub fn export_db(&self, path: &str) -> Result<Vec<u8>> {
-        self.pool.export_db(path)
+    pub fn export_db(&self, filename: &str) -> Result<Vec<u8>> {
+        self.pool.export_db(filename)
     }
 
     /// Delete the specified database, please make sure that the database is closed.
-    pub fn delete_db(&self, path: &str) -> Result<WaitCommit> {
-        self.pool.delete_db(path)
+    pub fn delete_db(&self, filename: &str) -> Result<WaitCommit> {
+        self.pool.delete_db(filename)
     }
 
     /// Delete all database, please make sure that all database is closed.
@@ -841,11 +842,11 @@ impl RelaxedIdbUtil {
     }
 
     /// Does the database exists.
-    pub fn exists(&self, path: &str) -> bool {
-        self.pool.exists(path)
+    pub fn exists(&self, filename: &str) -> bool {
+        self.pool.exists(filename)
     }
 
-    /// List all file paths.
+    /// List all files.
     pub fn list(&self) -> Vec<String> {
         self.pool.name2file.read().keys().cloned().collect()
     }

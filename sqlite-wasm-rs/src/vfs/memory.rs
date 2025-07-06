@@ -154,16 +154,18 @@ impl MemVfsUtil {
 impl MemVfsUtil {
     fn import_db_unchecked_impl(
         &self,
-        path: &str,
+        filename: &str,
         bytes: &[u8],
         page_size: usize,
         clear_wal: bool,
     ) -> Result<()> {
-        if self.exists(path) {
-            return Err(MemVfsError::Generic(format!("{path} file already exists")));
+        if self.exists(filename) {
+            return Err(MemVfsError::Generic(format!(
+                "{filename} file already exists"
+            )));
         }
 
-        self.0.write().insert(path.into(), {
+        self.0.write().insert(filename.into(), {
             let mut file = MemFile::Main(MemChunksFile::new(page_size));
             file.write(bytes, 0).unwrap();
             if clear_wal {
@@ -182,21 +184,26 @@ impl MemVfsUtil {
     /// <https://sqlite.org/forum/forumpost/67882c5b04>
     ///
     /// If the imported database is encrypted, use `import_db_unchecked` instead.
-    pub fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
+    pub fn import_db(&self, filename: &str, bytes: &[u8]) -> Result<()> {
         let page_size = check_import_db(bytes)?;
-        self.import_db_unchecked_impl(path, bytes, page_size, true)
+        self.import_db_unchecked_impl(filename, bytes, page_size, true)
     }
 
     /// `import_db` without checking, can be used to import encrypted database.
-    pub fn import_db_unchecked(&self, path: &str, bytes: &[u8], page_size: usize) -> Result<()> {
-        self.import_db_unchecked_impl(path, bytes, page_size, false)
+    pub fn import_db_unchecked(
+        &self,
+        filename: &str,
+        bytes: &[u8],
+        page_size: usize,
+    ) -> Result<()> {
+        self.import_db_unchecked_impl(filename, bytes, page_size, false)
     }
 
     /// Export the database.
-    pub fn export_db(&self, path: &str) -> Result<Vec<u8>> {
+    pub fn export_db(&self, filename: &str) -> Result<Vec<u8>> {
         let name2file = self.0.read();
 
-        if let Some(file) = name2file.get(path) {
+        if let Some(file) = name2file.get(filename) {
             let file_size = file.size().unwrap();
             let mut ret = vec![0; file_size];
             file.read(&mut ret, 0).unwrap();
@@ -209,8 +216,8 @@ impl MemVfsUtil {
     }
 
     /// Delete the specified database, please make sure that the database is closed.
-    pub fn delete_db(&self, path: &str) {
-        self.0.write().remove(path);
+    pub fn delete_db(&self, filename: &str) {
+        self.0.write().remove(filename);
     }
 
     /// Delete all database, please make sure that all database is closed.
@@ -219,11 +226,11 @@ impl MemVfsUtil {
     }
 
     /// Does the database exists.
-    pub fn exists(&self, path: &str) -> bool {
-        self.0.read().contains_key(path)
+    pub fn exists(&self, filename: &str) -> bool {
+        self.0.read().contains_key(filename)
     }
 
-    /// List all file paths.
+    /// List all files.
     pub fn list(&self) -> Vec<String> {
         self.0.read().keys().cloned().collect()
     }

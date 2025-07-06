@@ -197,7 +197,7 @@ impl OpfsSAHPool {
 
     /// Returns an array of the names of all
     /// currently-opened client-specified filenames.
-    fn get_file_names(&self) -> Vec<String> {
+    fn get_filenames(&self) -> Vec<String> {
         self.map_filename_to_sah
             .keys()
             .into_iter()
@@ -340,8 +340,8 @@ impl OpfsSAHPool {
     /// Removes the association of the given client-specified file
     /// name (JS string) from the pool. Returns true if a mapping
     /// is found, else false.
-    fn delete_path(&self, path: &str) -> Result<bool> {
-        let path = self.get_path(path)?;
+    fn delete_path(&self, filename: &str) -> Result<bool> {
+        let path = self.get_path(filename)?;
         let path = path.as_str();
 
         let sah = self.map_filename_to_sah.get(&JsValue::from(path));
@@ -356,16 +356,16 @@ impl OpfsSAHPool {
 
     /// All "../" parts and duplicate slashes are resolve/removed from
     /// the returned result.
-    fn get_path(&self, name: &str) -> Result<String> {
-        Url::new_with_base(name, "file://localhost/")
+    fn get_path(&self, filename: &str) -> Result<String> {
+        Url::new_with_base(filename, "file://localhost/")
             .map(|x| x.pathname())
             .map_err(OpfsSAHError::GetPath)
     }
 
     /// Returns true if the given client-defined file name is in this
     /// object's name-to-SAH map.
-    fn has_filename(&self, name: &str) -> bool {
-        self.map_filename_to_sah.has(&JsValue::from(name))
+    fn has_filename(&self, filename: &str) -> bool {
+        self.map_filename_to_sah.has(&JsValue::from(filename))
     }
 
     /// Returns the SAH associated with the given
@@ -386,8 +386,8 @@ impl OpfsSAHPool {
             .map(|x| x.value().into())
     }
 
-    fn export_db(&self, path: &str) -> Result<Vec<u8>> {
-        let name = self.get_path(path)?;
+    fn export_db(&self, filename: &str) -> Result<Vec<u8>> {
+        let name = self.get_path(filename)?;
         let sah = self.map_filename_to_sah.get(&JsValue::from(&name));
         if sah.is_undefined() {
             return Err(OpfsSAHError::Generic(format!("File not found: {name}")));
@@ -415,14 +415,14 @@ impl OpfsSAHPool {
         Ok(data)
     }
 
-    fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
+    fn import_db(&self, filename: &str, bytes: &[u8]) -> Result<()> {
         check_import_db(bytes)?;
-        self.import_db_unchecked(path, bytes, true)
+        self.import_db_unchecked(filename, bytes, true)
     }
 
-    fn import_db_unchecked(&self, path: &str, bytes: &[u8], clear_wal: bool) -> Result<()> {
+    fn import_db_unchecked(&self, filename: &str, bytes: &[u8], clear_wal: bool) -> Result<()> {
         let length = bytes.len();
-        let path = self.get_path(path)?;
+        let path = self.get_path(filename)?;
 
         let sah = self.map_filename_to_sah.get(&JsValue::from(&path));
         let sah = if sah.is_undefined() {
@@ -770,24 +770,24 @@ impl OpfsSAHPoolUtil {
     /// it will be forced to write back to legacy mode, see
     /// <https://sqlite.org/forum/forumpost/67882c5b04>.
     ///
-    /// If the imported DB is encrypted, use `import_db_unchecked` instead.
-    pub fn import_db(&self, path: &str, bytes: &[u8]) -> Result<()> {
-        self.pool.import_db(path, bytes)
+    /// If the imported database is encrypted, use `import_db_unchecked` instead.
+    pub fn import_db(&self, filename: &str, bytes: &[u8]) -> Result<()> {
+        self.pool.import_db(filename, bytes)
     }
 
     /// `import_db` without checking, can be used to import encrypted database.
-    pub fn import_db_unchecked(&self, path: &str, bytes: &[u8]) -> Result<()> {
-        self.pool.import_db_unchecked(path, bytes, false)
+    pub fn import_db_unchecked(&self, filename: &str, bytes: &[u8]) -> Result<()> {
+        self.pool.import_db_unchecked(filename, bytes, false)
     }
 
     /// Export the database.
-    pub fn export_db(&self, path: &str) -> Result<Vec<u8>> {
-        self.pool.export_db(path)
+    pub fn export_db(&self, filename: &str) -> Result<Vec<u8>> {
+        self.pool.export_db(filename)
     }
 
     /// Delete the specified database, please make sure that the database is closed.
-    pub fn delete_db(&self, path: &str) -> Result<bool> {
-        self.pool.delete_path(path)
+    pub fn delete_db(&self, filename: &str) -> Result<bool> {
+        self.pool.delete_path(filename)
     }
 
     /// Delete all database, please make sure that all database is closed.
@@ -798,14 +798,14 @@ impl OpfsSAHPoolUtil {
     }
 
     /// Does the database exists.
-    pub fn exists(&self, path: &str) -> Result<bool> {
-        let file = self.pool.get_path(path)?;
+    pub fn exists(&self, filename: &str) -> Result<bool> {
+        let file = self.pool.get_path(filename)?;
         Ok(self.pool.has_filename(&file))
     }
 
-    /// List all file paths.
+    /// List all files.
     pub fn list(&self) -> Vec<String> {
-        self.pool.get_file_names()
+        self.pool.get_filenames()
     }
 
     /// Number of files.
