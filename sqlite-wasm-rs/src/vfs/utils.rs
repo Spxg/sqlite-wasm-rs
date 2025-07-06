@@ -441,11 +441,6 @@ pub trait VfsStore<File, AppData> {
     unsafe fn app_data(vfs: *mut sqlite3_vfs) -> &'static VfsAppData<AppData> {
         &*(*vfs).pAppData.cast()
     }
-    /// Get file path, use for `xOpen`
-    fn name2path(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<String> {
-        unused!(vfs);
-        Ok(file.into())
-    }
     /// Adding files to the Store, use for `xOpen` and `xAccess`
     fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32) -> VfsResult<()>;
     /// Checks if the specified file exists in the Store, use for `xOpen` and `xAccess`
@@ -510,11 +505,6 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
             random_name()
         } else {
             check_result!(CStr::from_ptr(zName).to_str()).into()
-        };
-
-        let name = match IO::Store::name2path(pVfs, &name) {
-            Ok(name) => name,
-            Err(err) => return app_data.store_err(err),
         };
 
         let exist = match IO::Store::contains_file(pVfs, &name) {

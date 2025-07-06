@@ -100,7 +100,7 @@ async fn test_opfs_sah_vfs_util() {
     assert_eq!(before + 2, util.get_capacity());
 
     let before = util.count();
-    assert_eq!(util.list(), vec!["/test_opfs_sah_util.db".to_string()]);
+    assert_eq!(util.list(), vec!["test_opfs_sah_util.db".to_string()]);
 
     // export and import to new.db
     let db = util.export_db("test_opfs_sah_util.db").unwrap();

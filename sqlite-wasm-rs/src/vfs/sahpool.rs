@@ -18,7 +18,7 @@ use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
     FileSystemDirectoryHandle, FileSystemFileHandle, FileSystemGetDirectoryOptions,
-    FileSystemGetFileOptions, FileSystemReadWriteOptions, FileSystemSyncAccessHandle, Url,
+    FileSystemGetFileOptions, FileSystemReadWriteOptions, FileSystemSyncAccessHandle,
     WorkerGlobalScope,
 };
 
@@ -308,23 +308,14 @@ impl OpfsSAHPool {
     }
 
     fn delete_path(&self, filename: &str) -> Result<bool> {
-        let path = self.get_path(filename)?;
-        let path = path.as_str();
-
-        let sah = self.map_filename_to_sah.get(&JsValue::from(path));
+        let sah = self.map_filename_to_sah.get(&JsValue::from(filename));
         let found = !sah.is_undefined();
         if found {
             let sah: FileSystemSyncAccessHandle = sah.into();
-            self.map_filename_to_sah.delete(&JsValue::from(path));
+            self.map_filename_to_sah.delete(&JsValue::from(filename));
             self.set_associated_path(&sah, None, 0)?;
         }
         Ok(found)
-    }
-
-    fn get_path(&self, filename: &str) -> Result<String> {
-        Url::new_with_base(filename, "file://localhost/")
-            .map(|x| x.pathname())
-            .map_err(OpfsSAHError::GetPath)
     }
 
     fn has_filename(&self, filename: &str) -> bool {
@@ -346,10 +337,9 @@ impl OpfsSAHPool {
     }
 
     fn export_db(&self, filename: &str) -> Result<Vec<u8>> {
-        let name = self.get_path(filename)?;
-        let sah = self.map_filename_to_sah.get(&JsValue::from(&name));
+        let sah = self.map_filename_to_sah.get(&JsValue::from(filename));
         if sah.is_undefined() {
-            return Err(OpfsSAHError::Generic(format!("File not found: {name}")));
+            return Err(OpfsSAHError::Generic(format!("File not found: {filename}")));
         }
 
         let sah = FileSystemSyncAccessHandle::from(sah);
@@ -380,11 +370,9 @@ impl OpfsSAHPool {
     }
 
     fn import_db_unchecked(&self, filename: &str, bytes: &[u8], clear_wal: bool) -> Result<()> {
-        let path = self.get_path(filename)?;
-
-        if self.has_filename(&path) {
+        if self.has_filename(filename) {
             return Err(OpfsSAHError::Generic(format!(
-                "{path} file already exists."
+                "{filename} file already exists."
             )));
         }
 
@@ -412,7 +400,7 @@ impl OpfsSAHPool {
             .map_err(OpfsSAHError::Write)?;
         }
 
-        self.set_associated_path(&sah, Some(&path), SQLITE_OPEN_MAIN_DB)?;
+        self.set_associated_path(&sah, Some(filename), SQLITE_OPEN_MAIN_DB)?;
 
         Ok(())
     }
@@ -478,14 +466,6 @@ type SyncAccessHandleAppData = FragileConfirmed<OpfsSAHPool>;
 struct SyncAccessHandleStore;
 
 impl VfsStore<FileSystemSyncAccessHandle, SyncAccessHandleAppData> for SyncAccessHandleStore {
-    fn name2path(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<String> {
-        let pool = unsafe { Self::app_data(vfs) };
-        let file = pool
-            .get_path(file)
-            .map_err(|err| err.vfs_err(SQLITE_CANTOPEN))?;
-        Ok(file)
-    }
-
     fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32) -> VfsResult<()> {
         let pool = unsafe { Self::app_data(vfs) };
 
@@ -509,7 +489,7 @@ impl VfsStore<FileSystemSyncAccessHandle, SyncAccessHandleAppData> for SyncAcces
 
     fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<()> {
         let pool = unsafe { Self::app_data(vfs) };
-        if let Err(err) = pool.get_path(file).map(|file| pool.delete_path(&file)) {
+        if let Err(err) = pool.delete_path(file) {
             return Err(err.vfs_err(SQLITE_IOERR_DELETE));
         }
         Ok(())
@@ -761,8 +741,7 @@ impl OpfsSAHPoolUtil {
 
     /// Does the database exists.
     pub fn exists(&self, filename: &str) -> Result<bool> {
-        let file = self.pool.get_path(filename)?;
-        Ok(self.pool.has_filename(&file))
+        Ok(self.pool.has_filename(filename))
     }
 
     /// List all files.
