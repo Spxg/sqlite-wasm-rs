@@ -198,11 +198,12 @@ impl OpfsSAHPool {
     /// Returns an array of the names of all
     /// currently-opened client-specified filenames.
     fn get_file_names(&self) -> Vec<String> {
-        let mut result = vec![];
-        for name in self.map_filename_to_sah.keys().into_iter().flatten() {
-            result.push(name.as_string().unwrap());
-        }
-        result
+        self.map_filename_to_sah
+            .keys()
+            .into_iter()
+            .flatten()
+            .map(|x| x.as_string().unwrap())
+            .collect()
     }
 
     /// Given an SAH, returns the client-specified name of
@@ -230,10 +231,11 @@ impl OpfsSAHPool {
                 .map_err(OpfsSAHError::Truncate)?;
             return Ok(None);
         }
-        let path_bytes = self.ap_body.subarray(0, path_size as u32);
-        let vec = ArrayBufferCopy::to_vec(&path_bytes);
         // set_associated_path ensures that it is utf8
-        let path = String::from_utf8(vec).unwrap();
+        let path = String::from_utf8(ArrayBufferCopy::to_vec(
+            &self.ap_body.subarray(0, path_size as u32),
+        ))
+        .unwrap();
         Ok(Some(path))
     }
 
@@ -249,33 +251,28 @@ impl OpfsSAHPool {
     ) -> Result<()> {
         self.dv_body.set_uint32(HEADER_OFFSET_FLAGS, flags as u32);
 
-        match path {
-            Some(path) => {
-                if path.is_empty() {
-                    return Err(OpfsSAHError::Generic("Path is empty".into()));
-                }
-                if HEADER_MAX_PATH_SIZE <= path.len() + 1 {
-                    return Err(OpfsSAHError::Generic(format!("Path too long: {path}")));
-                }
-                ArrayBufferCopy::copy_from(
-                    &self.ap_body.subarray(0, path.len() as u32),
-                    path.as_bytes(),
-                );
-
-                self.ap_body
-                    .fill(0, path.len() as u32, HEADER_MAX_PATH_SIZE as u32);
-
-                self.map_filename_to_sah.set(&JsValue::from(path), sah);
-                self.available_sah.delete(sah);
+        if let Some(path) = path {
+            if path.is_empty() {
+                return Err(OpfsSAHError::Generic("Path is empty".into()));
             }
-            None => {
-                self.ap_body.fill(0, 0, HEADER_MAX_PATH_SIZE as u32);
-
-                sah.truncate_with_u32(HEADER_OFFSET_DATA as u32)
-                    .map_err(OpfsSAHError::Truncate)?;
-                self.available_sah.add(sah);
+            if HEADER_MAX_PATH_SIZE <= path.len() + 1 {
+                return Err(OpfsSAHError::Generic(format!("Path too long: {path}")));
             }
-        };
+            ArrayBufferCopy::copy_from(
+                &self.ap_body.subarray(0, path.len() as u32),
+                path.as_bytes(),
+            );
+
+            self.ap_body
+                .fill(0, path.len() as u32, HEADER_MAX_PATH_SIZE as u32);
+            self.map_filename_to_sah.set(&JsValue::from(path), sah);
+            self.available_sah.delete(sah);
+        } else {
+            self.ap_body.fill(0, 0, HEADER_MAX_PATH_SIZE as u32);
+            sah.truncate_with_u32(HEADER_OFFSET_DATA as u32)
+                .map_err(OpfsSAHError::Truncate)?;
+            self.available_sah.add(sah);
+        }
 
         sah.write_with_js_u8_array_and_options(&self.ap_body, &read_write_options(0.0))
             .map_err(OpfsSAHError::Write)?;
@@ -391,25 +388,27 @@ impl OpfsSAHPool {
 
     fn export_db(&self, path: &str) -> Result<Vec<u8>> {
         let name = self.get_path(path)?;
-
         let sah = self.map_filename_to_sah.get(&JsValue::from(&name));
         if sah.is_undefined() {
             return Err(OpfsSAHError::Generic(format!("File not found: {name}")));
         }
+
         let sah = FileSystemSyncAccessHandle::from(sah);
-        let n = sah.get_size().map_err(OpfsSAHError::GetSize)? - HEADER_OFFSET_DATA as f64;
-        let n = n.max(0.0) as usize;
-        let mut data = vec![0; n];
-        if n > 0 {
+        let actual_size = (sah.get_size().map_err(OpfsSAHError::GetSize)?
+            - HEADER_OFFSET_DATA as f64)
+            .max(0.0) as usize;
+
+        let mut data = vec![0; actual_size];
+        if actual_size > 0 {
             let read = sah
                 .read_with_u8_array_and_options(
                     &mut data,
                     &read_write_options(HEADER_OFFSET_DATA as f64),
                 )
                 .map_err(OpfsSAHError::Read)?;
-            if read != n as f64 {
+            if read != actual_size as f64 {
                 return Err(OpfsSAHError::Generic(format!(
-                    "Expected to read {n} bytes but read {read}.",
+                    "Expected to read {actual_size} bytes but read {read}.",
                 )));
             }
         }
