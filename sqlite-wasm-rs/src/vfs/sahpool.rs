@@ -49,17 +49,15 @@ fn read_write_options(at: f64) -> FileSystemReadWriteOptions {
     options
 }
 
-/// Class for managing OPFS-related state for the OPFS
-/// SharedAccessHandle Pool sqlite3_vfs.
 struct OpfsSAHPool {
     /// Directory handle to the subdir of vfs root which holds
     /// the randomly-named "opaque" files. This subdir exists in the
     /// hope that we can eventually support client-created files in
     dh_opaque: FileSystemDirectoryHandle,
-    /// Buffer used by [sg]etAssociatedPath()
-    ap_body: Uint8Array,
-    /// DataView for self.apBody
-    dv_body: DataView,
+    /// Buffer used by [sg]et_associated_path()
+    header_buffer: Uint8Array,
+    /// DataView for self.header_buffer
+    header_buffer_view: DataView,
     /// Set of currently-unused SAHs
     available_sah: Set,
     /// Maps client-side file names to SAHs
@@ -116,8 +114,8 @@ impl OpfsSAHPool {
 
         let pool = Self {
             dh_opaque,
-            ap_body,
-            dv_body,
+            header_buffer: ap_body,
+            header_buffer_view: dv_body,
             map_filename_to_sah: Map::new(),
             available_sah: Set::default(),
             map_sah_to_opaque_name: Map::new(),
@@ -129,9 +127,6 @@ impl OpfsSAHPool {
         Ok(pool)
     }
 
-    /// Adds n files to the pool's capacity. This change is
-    /// persistent across settings. Returns a Promise which resolves
-    /// to the new capacity.
     async fn add_capacity(&self, n: u32) -> Result<u32> {
         for _ in 0..n {
             let name = random_name();
@@ -161,9 +156,6 @@ impl OpfsSAHPool {
         Ok(())
     }
 
-    /// Reduce capacity by n, but can only reduce up to the limit
-    /// of currently-available SAHs. Returns a Promise which resolves
-    /// to the number of slots really removed.
     async fn reduce_capacity(&self, n: u32) -> Result<u32> {
         let mut result = 0;
         for sah in Array::from(&self.available_sah) {
@@ -185,18 +177,14 @@ impl OpfsSAHPool {
         Ok(result)
     }
 
-    /// Current pool capacity.
     fn get_capacity(&self) -> u32 {
         self.map_sah_to_opaque_name.size()
     }
 
-    /// Current number of in-use files from pool.
     fn get_file_count(&self) -> u32 {
         self.map_filename_to_sah.size()
     }
 
-    /// Returns an array of the names of all
-    /// currently-opened client-specified filenames.
     fn get_filenames(&self) -> Vec<String> {
         self.map_filename_to_sah
             .keys()
@@ -206,15 +194,11 @@ impl OpfsSAHPool {
             .collect()
     }
 
-    /// Given an SAH, returns the client-specified name of
-    /// that file by extracting it from the SAH's header.
-    /// On error, it disassociates SAH from the pool and
-    /// returns an empty string.
     fn get_associated_path(&self, sah: &FileSystemSyncAccessHandle) -> Result<Option<String>> {
-        sah.read_with_buffer_source_and_options(&self.ap_body, &read_write_options(0.0))
+        sah.read_with_buffer_source_and_options(&self.header_buffer, &read_write_options(0.0))
             .map_err(OpfsSAHError::Read)?;
-        let flags = self.dv_body.get_uint32(HEADER_OFFSET_FLAGS);
-        if self.ap_body.get_index(0) != 0
+        let flags = self.header_buffer_view.get_uint32(HEADER_OFFSET_FLAGS);
+        if self.header_buffer.get_index(0) != 0
             && ((flags & SQLITE_OPEN_DELETEONCLOSE as u32 != 0)
                 || (flags & PERSISTENT_FILE_TYPES as u32) == 0)
         {
@@ -222,7 +206,7 @@ impl OpfsSAHPool {
             return Ok(None);
         }
 
-        let path_size = Array::from(&self.ap_body)
+        let path_size = Array::from(&self.header_buffer)
             .iter()
             .position(|x| x.as_f64().unwrap() as u8 == 0)
             .unwrap_or_default();
@@ -233,23 +217,20 @@ impl OpfsSAHPool {
         }
         // set_associated_path ensures that it is utf8
         let path = String::from_utf8(ArrayBufferCopy::to_vec(
-            &self.ap_body.subarray(0, path_size as u32),
+            &self.header_buffer.subarray(0, path_size as u32),
         ))
         .unwrap();
         Ok(Some(path))
     }
 
-    /// Stores the given client-defined path and SQLITE_OPEN_xyz flags
-    /// into the given SAH. If path is an empty string then the file is
-    /// disassociated from the pool but its previous name is preserved
-    /// in the metadata.
     fn set_associated_path(
         &self,
         sah: &FileSystemSyncAccessHandle,
         path: Option<&str>,
         flags: i32,
     ) -> Result<()> {
-        self.dv_body.set_uint32(HEADER_OFFSET_FLAGS, flags as u32);
+        self.header_buffer_view
+            .set_uint32(HEADER_OFFSET_FLAGS, flags as u32);
 
         if let Some(path) = path {
             if path.is_empty() {
@@ -259,36 +240,27 @@ impl OpfsSAHPool {
                 return Err(OpfsSAHError::Generic(format!("Path too long: {path}")));
             }
             ArrayBufferCopy::copy_from(
-                &self.ap_body.subarray(0, path.len() as u32),
+                &self.header_buffer.subarray(0, path.len() as u32),
                 path.as_bytes(),
             );
 
-            self.ap_body
+            self.header_buffer
                 .fill(0, path.len() as u32, HEADER_MAX_PATH_SIZE as u32);
             self.map_filename_to_sah.set(&JsValue::from(path), sah);
             self.available_sah.delete(sah);
         } else {
-            self.ap_body.fill(0, 0, HEADER_MAX_PATH_SIZE as u32);
+            self.header_buffer.fill(0, 0, HEADER_MAX_PATH_SIZE as u32);
             sah.truncate_with_u32(HEADER_OFFSET_DATA as u32)
                 .map_err(OpfsSAHError::Truncate)?;
             self.available_sah.add(sah);
         }
 
-        sah.write_with_js_u8_array_and_options(&self.ap_body, &read_write_options(0.0))
+        sah.write_with_js_u8_array_and_options(&self.header_buffer, &read_write_options(0.0))
             .map_err(OpfsSAHError::Write)?;
 
         Ok(())
     }
 
-    /// Opens all files under self.dh_opaque and acquires
-    /// a SAH for each. returns a Promise which resolves to no value
-    /// but completes once all SAHs are acquired. If acquiring an SAH
-    /// throws, SAHPool.$error will contain the corresponding
-    /// exception.
-    ///
-    /// If clearFiles is true, the client-stored state of each file is
-    /// cleared when its handle is acquired, including its name, flags,
-    /// and any data stored after the metadata block.
     async fn acquire_access_handles(&self, clear_files: bool) -> Result<()> {
         let iter = self.dh_opaque.entries();
         while let Ok(future) = iter.next() {
@@ -325,8 +297,6 @@ impl OpfsSAHPool {
         Ok(())
     }
 
-    /// Releases all currently-opened SAHs. The only legal
-    /// operation after this is acquireAccessHandles().
     fn release_access_handles(&self) {
         for sah in self.map_sah_to_opaque_name.keys().into_iter().flatten() {
             let sah = FileSystemSyncAccessHandle::from(sah);
@@ -337,9 +307,6 @@ impl OpfsSAHPool {
         self.available_sah.clear();
     }
 
-    /// Removes the association of the given client-specified file
-    /// name (JS string) from the pool. Returns true if a mapping
-    /// is found, else false.
     fn delete_path(&self, filename: &str) -> Result<bool> {
         let path = self.get_path(filename)?;
         let path = path.as_str();
@@ -354,29 +321,21 @@ impl OpfsSAHPool {
         Ok(found)
     }
 
-    /// All "../" parts and duplicate slashes are resolve/removed from
-    /// the returned result.
     fn get_path(&self, filename: &str) -> Result<String> {
         Url::new_with_base(filename, "file://localhost/")
             .map(|x| x.pathname())
             .map_err(OpfsSAHError::GetPath)
     }
 
-    /// Returns true if the given client-defined file name is in this
-    /// object's name-to-SAH map.
     fn has_filename(&self, filename: &str) -> bool {
         self.map_filename_to_sah.has(&JsValue::from(filename))
     }
 
-    /// Returns the SAH associated with the given
-    /// client-defined file name.
     fn get_sah_for_path(&self, path: &str) -> Option<FileSystemSyncAccessHandle> {
         self.has_filename(path)
             .then(|| self.map_filename_to_sah.get(&JsValue::from(path)).into())
     }
 
-    /// Returns the next available SAH without removing
-    /// it from the set.
     fn next_available_sah(&self) -> Option<FileSystemSyncAccessHandle> {
         self.available_sah
             .keys()
