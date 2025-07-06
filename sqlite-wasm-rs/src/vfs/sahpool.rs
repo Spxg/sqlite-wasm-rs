@@ -23,10 +23,10 @@ use web_sys::{
 };
 
 const SECTOR_SIZE: usize = 4096;
-const HEADER_MAX_PATH_SIZE: usize = 512;
+const HEADER_MAX_FILENAME_SIZE: usize = 512;
 const HEADER_FLAGS_SIZE: usize = 4;
-const HEADER_CORPUS_SIZE: usize = HEADER_MAX_PATH_SIZE + HEADER_FLAGS_SIZE;
-const HEADER_OFFSET_FLAGS: usize = HEADER_MAX_PATH_SIZE;
+const HEADER_CORPUS_SIZE: usize = HEADER_MAX_FILENAME_SIZE + HEADER_FLAGS_SIZE;
+const HEADER_OFFSET_FLAGS: usize = HEADER_MAX_FILENAME_SIZE;
 const HEADER_OFFSET_DATA: usize = SECTOR_SIZE;
 
 // Will be enabled after sqlite fix is released
@@ -54,7 +54,7 @@ struct OpfsSAHPool {
     /// the randomly-named "opaque" files. This subdir exists in the
     /// hope that we can eventually support client-created files in
     dh_opaque: FileSystemDirectoryHandle,
-    /// Buffer used by [sg]et_associated_path()
+    /// Buffer used by [sg]et_associated_filename()
     header_buffer: Uint8Array,
     /// DataView for self.header_buffer
     header_buffer_view: DataView,
@@ -145,7 +145,7 @@ impl OpfsSAHPool {
                     .map_err(OpfsSAHError::CreateSyncAccessHandle)?
                     .into();
             self.map_sah_to_opaque_name.set(&sah, &JsValue::from(name));
-            self.set_associated_path(&sah, None, 0)?;
+            self.set_associated_filename(&sah, None, 0)?;
         }
         Ok(self.get_capacity())
     }
@@ -194,7 +194,7 @@ impl OpfsSAHPool {
             .collect()
     }
 
-    fn get_associated_path(&self, sah: &FileSystemSyncAccessHandle) -> Result<Option<String>> {
+    fn get_associated_filename(&self, sah: &FileSystemSyncAccessHandle) -> Result<Option<String>> {
         sah.read_with_buffer_source_and_options(&self.header_buffer, &read_write_options(0.0))
             .map_err(OpfsSAHError::Read)?;
         let flags = self.header_buffer_view.get_uint32(HEADER_OFFSET_FLAGS);
@@ -202,54 +202,57 @@ impl OpfsSAHPool {
             && ((flags & SQLITE_OPEN_DELETEONCLOSE as u32 != 0)
                 || (flags & PERSISTENT_FILE_TYPES as u32) == 0)
         {
-            self.set_associated_path(sah, None, 0)?;
+            self.set_associated_filename(sah, None, 0)?;
             return Ok(None);
         }
 
-        let path_size = Array::from(&self.header_buffer)
+        let name_length = Array::from(&self.header_buffer)
             .iter()
             .position(|x| x.as_f64().unwrap() as u8 == 0)
             .unwrap_or_default();
-        if path_size == 0 {
+        if name_length == 0 {
             sah.truncate_with_u32(HEADER_OFFSET_DATA as u32)
                 .map_err(OpfsSAHError::Truncate)?;
             return Ok(None);
         }
-        // set_associated_path ensures that it is utf8
-        let path = String::from_utf8(ArrayBufferCopy::to_vec(
-            &self.header_buffer.subarray(0, path_size as u32),
+        // set_associated_filename ensures that it is utf8
+        let filename = String::from_utf8(ArrayBufferCopy::to_vec(
+            &self.header_buffer.subarray(0, name_length as u32),
         ))
         .unwrap();
-        Ok(Some(path))
+        Ok(Some(filename))
     }
 
-    fn set_associated_path(
+    fn set_associated_filename(
         &self,
         sah: &FileSystemSyncAccessHandle,
-        path: Option<&str>,
+        filename: Option<&str>,
         flags: i32,
     ) -> Result<()> {
         self.header_buffer_view
             .set_uint32(HEADER_OFFSET_FLAGS, flags as u32);
 
-        if let Some(path) = path {
-            if path.is_empty() {
-                return Err(OpfsSAHError::Generic("Path is empty".into()));
+        if let Some(filename) = filename {
+            if filename.is_empty() {
+                return Err(OpfsSAHError::Generic("Filename is empty".into()));
             }
-            if HEADER_MAX_PATH_SIZE <= path.len() + 1 {
-                return Err(OpfsSAHError::Generic(format!("Path too long: {path}")));
+            if HEADER_MAX_FILENAME_SIZE <= filename.len() + 1 {
+                return Err(OpfsSAHError::Generic(format!(
+                    "Filename too long: {filename}"
+                )));
             }
             ArrayBufferCopy::copy_from(
-                &self.header_buffer.subarray(0, path.len() as u32),
-                path.as_bytes(),
+                &self.header_buffer.subarray(0, filename.len() as u32),
+                filename.as_bytes(),
             );
 
             self.header_buffer
-                .fill(0, path.len() as u32, HEADER_MAX_PATH_SIZE as u32);
-            self.map_filename_to_sah.set(&JsValue::from(path), sah);
+                .fill(0, filename.len() as u32, HEADER_MAX_FILENAME_SIZE as u32);
+            self.map_filename_to_sah.set(&JsValue::from(filename), sah);
             self.available_sah.delete(sah);
         } else {
-            self.header_buffer.fill(0, 0, HEADER_MAX_PATH_SIZE as u32);
+            self.header_buffer
+                .fill(0, 0, HEADER_MAX_FILENAME_SIZE as u32);
             sah.truncate_with_u32(HEADER_OFFSET_DATA as u32)
                 .map_err(OpfsSAHError::Truncate)?;
             self.available_sah.add(sah);
@@ -285,9 +288,9 @@ impl OpfsSAHPool {
                 self.map_sah_to_opaque_name.set(&sah, &name);
                 let sah = FileSystemSyncAccessHandle::from(sah);
                 if clear_files {
-                    self.set_associated_path(&sah, None, 0)?;
-                } else if let Some(path) = self.get_associated_path(&sah)? {
-                    self.map_filename_to_sah.set(&JsValue::from(path), &sah);
+                    self.set_associated_filename(&sah, None, 0)?;
+                } else if let Some(filename) = self.get_associated_filename(&sah)? {
+                    self.map_filename_to_sah.set(&JsValue::from(filename), &sah);
                 } else {
                     self.available_sah.add(&sah);
                 }
@@ -307,13 +310,13 @@ impl OpfsSAHPool {
         self.available_sah.clear();
     }
 
-    fn delete_path(&self, filename: &str) -> Result<bool> {
+    fn delete_file(&self, filename: &str) -> Result<bool> {
         let sah = self.map_filename_to_sah.get(&JsValue::from(filename));
         let found = !sah.is_undefined();
         if found {
             let sah: FileSystemSyncAccessHandle = sah.into();
             self.map_filename_to_sah.delete(&JsValue::from(filename));
-            self.set_associated_path(&sah, None, 0)?;
+            self.set_associated_filename(&sah, None, 0)?;
         }
         Ok(found)
     }
@@ -322,9 +325,12 @@ impl OpfsSAHPool {
         self.map_filename_to_sah.has(&JsValue::from(filename))
     }
 
-    fn get_sah_for_path(&self, path: &str) -> Option<FileSystemSyncAccessHandle> {
-        self.has_filename(path)
-            .then(|| self.map_filename_to_sah.get(&JsValue::from(path)).into())
+    fn get_sah(&self, filename: &str) -> Option<FileSystemSyncAccessHandle> {
+        self.has_filename(filename).then(|| {
+            self.map_filename_to_sah
+                .get(&JsValue::from(filename))
+                .into()
+        })
     }
 
     fn next_available_sah(&self) -> Option<FileSystemSyncAccessHandle> {
@@ -385,7 +391,7 @@ impl OpfsSAHPool {
             .write_with_u8_array_and_options(bytes, &read_write_options(HEADER_OFFSET_DATA as f64))
             .map_err(OpfsSAHError::Write)?;
         if written != length {
-            self.set_associated_path(&sah, None, 0)?;
+            self.set_associated_filename(&sah, None, 0)?;
             return Err(OpfsSAHError::Generic(format!(
                 "Expected to write {length} bytes but wrote {written}.",
             )));
@@ -400,7 +406,7 @@ impl OpfsSAHPool {
             .map_err(OpfsSAHError::Write)?;
         }
 
-        self.set_associated_path(&sah, Some(filename), SQLITE_OPEN_MAIN_DB)?;
+        self.set_associated_filename(&sah, Some(filename), SQLITE_OPEN_MAIN_DB)?;
 
         Ok(())
     }
@@ -470,7 +476,7 @@ impl VfsStore<FileSystemSyncAccessHandle, SyncAccessHandleAppData> for SyncAcces
         let pool = unsafe { Self::app_data(vfs) };
 
         if let Some(sah) = pool.next_available_sah() {
-            pool.set_associated_path(&sah, Some(file), flags)
+            pool.set_associated_filename(&sah, Some(file), flags)
                 .map_err(|err| err.vfs_err(SQLITE_CANTOPEN))?;
         } else {
             return Err(VfsError::new(
@@ -489,7 +495,7 @@ impl VfsStore<FileSystemSyncAccessHandle, SyncAccessHandleAppData> for SyncAcces
 
     fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<()> {
         let pool = unsafe { Self::app_data(vfs) };
-        if let Err(err) = pool.delete_path(file) {
+        if let Err(err) = pool.delete_file(file) {
             return Err(err.vfs_err(SQLITE_IOERR_DELETE));
         }
         Ok(())
@@ -501,7 +507,7 @@ impl VfsStore<FileSystemSyncAccessHandle, SyncAccessHandleAppData> for SyncAcces
     ) -> VfsResult<i32> {
         let name = unsafe { vfs_file.name() };
         let pool = unsafe { Self::app_data(vfs_file.vfs) };
-        match pool.get_sah_for_path(name) {
+        match pool.get_sah(name) {
             Some(file) => f(&file),
             None => Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
         }
@@ -513,7 +519,7 @@ impl VfsStore<FileSystemSyncAccessHandle, SyncAccessHandleAppData> for SyncAcces
     ) -> VfsResult<i32> {
         let name = unsafe { vfs_file.name() };
         let pool = unsafe { Self::app_data(vfs_file.vfs) };
-        match pool.get_sah_for_path(name) {
+        match pool.get_sah(name) {
             Some(mut file) => f(&mut file),
             None => Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
         }
@@ -552,7 +558,7 @@ struct SyncAccessHandleVfs;
 
 impl SQLiteVfs<SyncAccessHandleIoMethods> for SyncAccessHandleVfs {
     const VERSION: ::std::os::raw::c_int = 2;
-    const MAX_PATH_SIZE: ::std::os::raw::c_int = HEADER_MAX_PATH_SIZE as _;
+    const MAX_PATH_SIZE: ::std::os::raw::c_int = HEADER_MAX_FILENAME_SIZE as _;
 }
 
 /// Build `OpfsSAHPoolCfg`
@@ -646,7 +652,7 @@ pub enum OpfsSAHError {
     CreateSyncAccessHandle(JsValue),
     #[error("An error occurred while iterating")]
     IterHandle(JsValue),
-    #[error("An error occurred while getting path")]
+    #[error("An error occurred while getting filename")]
     GetPath(JsValue),
     #[error("An error occurred while removing entity")]
     RemoveEntity(JsValue),
@@ -729,7 +735,7 @@ impl OpfsSAHPoolUtil {
 
     /// Delete the specified database, please make sure that the database is closed.
     pub fn delete_db(&self, filename: &str) -> Result<bool> {
-        self.pool.delete_path(filename)
+        self.pool.delete_file(filename)
     }
 
     /// Delete all database, please make sure that all database is closed.
@@ -762,10 +768,9 @@ pub async fn install(options: &OpfsSAHPoolCfg, default_vfs: bool) -> Result<Opfs
         tokio::sync::Mutex<HashMap<String, &'static VfsAppData<SyncAccessHandleAppData>>>,
     > = Lazy::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
-    let vfs_name = &options.vfs_name;
-
     let mut name2vfs = NAME2VFS.lock().await;
 
+    let vfs_name = &options.vfs_name;
     let pool = if let Some(pool) = name2vfs.get(vfs_name) {
         pool
     } else {
