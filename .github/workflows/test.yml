@@ -131,7 +131,12 @@ jobs:
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - name: Test implement-a-vfs example
       run: |
-        cd examples/implement-a-vfs
+        git clone https://github.com/emscripten-core/emsdk.git
+        cd emsdk
+        ./emsdk install latest
+        ./emsdk activate latest
+        source ./emsdk_env.sh
+        cd ../examples/implement-a-vfs
         wasm-pack test --chrome --headless -- -- --nocapture
 
   test_fmt:

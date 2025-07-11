@@ -370,12 +370,12 @@ mod tests {
         unsafe {
             rust_sqlite_wasm_shim_localtime_js(1733976732, &mut tm as *mut tm);
         };
-
         let gmtoff = tm.tm_gmtoff / 3600;
+
         assert_eq!(tm.tm_year, 2024 - 1900);
         assert_eq!(tm.tm_mon, 12 - 1);
         assert_eq!(tm.tm_mday, 12);
-        assert_eq!(tm.tm_hour, 12 - 8 + gmtoff);
+        assert_eq!(tm.tm_hour as std::os::raw::c_long, 12 - 8 + gmtoff);
         assert_eq!(tm.tm_min, 12);
         assert_eq!(tm.tm_sec, 12);
         assert_eq!(tm.tm_wday, 4);
