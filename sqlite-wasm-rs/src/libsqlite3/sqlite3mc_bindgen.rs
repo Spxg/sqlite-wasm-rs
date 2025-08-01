@@ -25,12 +25,12 @@ extern "C" {
 
 pub const SQLITE3MC_VERSION_MAJOR: i32 = 2;
 pub const SQLITE3MC_VERSION_MINOR: i32 = 2;
-pub const SQLITE3MC_VERSION_RELEASE: i32 = 3;
+pub const SQLITE3MC_VERSION_RELEASE: i32 = 4;
 pub const SQLITE3MC_VERSION_SUBRELEASE: i32 = 0;
-pub const SQLITE3MC_VERSION_STRING: &::std::ffi::CStr = c"SQLite3 Multiple Ciphers 2.2.3";
-pub const SQLITE_VERSION: &::std::ffi::CStr = c"3.50.3";
-pub const SQLITE_VERSION_NUMBER: i32 = 3050003;
-pub const SQLITE_SOURCE_ID: &::std::ffi::CStr = c"2025-07-17 13:25:10 3ce993b8657d6d9deda380a93cdd6404a8c8ba1b185b2bc423703e41ae5f2543";
+pub const SQLITE3MC_VERSION_STRING: &::std::ffi::CStr = c"SQLite3 Multiple Ciphers 2.2.4";
+pub const SQLITE_VERSION: &::std::ffi::CStr = c"3.50.4";
+pub const SQLITE_VERSION_NUMBER: i32 = 3050004;
+pub const SQLITE_SOURCE_ID: &::std::ffi::CStr = c"2025-07-30 19:33:53 4d8adfb30e03f9cf27f800a2c1ba3c48fb4ca1b08b0f5ed59a4d5ecbf45e20a3";
 pub const SQLITE_OK: i32 = 0;
 pub const SQLITE_ERROR: i32 = 1;
 pub const SQLITE_INTERNAL: i32 = 2;
