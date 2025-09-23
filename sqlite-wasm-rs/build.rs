@@ -239,8 +239,14 @@ or use the precompiled binaries via the `default-features = false` and `precompi
     #[cfg(feature = "sqlite3mc")]
     cc.flags(SQLITE3_MC_FEATURED);
 
+    let target_features = std::env::var("CARGO_CFG_TARGET_FEATURE").unwrap();
+
     if !cfg!(feature = "custom-libc") {
         cc.flag("-include").flag("shim/wasm-shim.h");
+    }
+
+    if target_features.contains("atomics") {
+        cc.flag("-pthread");
     }
 
     cc.out_dir(output).compile("sqlite3");
