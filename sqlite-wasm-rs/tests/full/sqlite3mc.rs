@@ -1,7 +1,4 @@
-use sqlite_wasm_rs::{
-    mem_vfs::MemVfsUtil, relaxed_idb_vfs::RelaxedIdbCfgBuilder, sahpool_vfs::OpfsSAHPoolCfgBuilder,
-    *,
-};
+use sqlite_wasm_rs::{mem_vfs::MemVfsUtil, sahpool_vfs::OpfsSAHPoolCfgBuilder, *};
 use std::ffi::CString;
 use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -73,9 +70,10 @@ unsafe fn test_memvfs_cipher(cipher: &str) {
     assert_eq!(ret, SQLITE_OK);
 }
 
+#[cfg(feature = "relaxed-idb")]
 async unsafe fn test_relaxed_db_vfs_cipher(cipher: &str) {
     let util = sqlite_wasm_rs::relaxed_idb_vfs::install(
-        &RelaxedIdbCfgBuilder::new()
+        &sqlite_wasm_rs::relaxed_idb_vfs::RelaxedIdbCfgBuilder::new()
             .vfs_name("relaxed-db-cipher")
             .clear_on_init(true)
             .build(),
@@ -196,6 +194,7 @@ macro_rules! test_sah_cipher {
 macro_rules! test_relaxed_db_cipher {
     ($cipher:literal) => {
         paste::paste! {
+            #[cfg(feature = "relaxed-idb")]
             #[wasm_bindgen_test]
             async fn [<test_relaxed_db_vfs_cipher_$cipher>]() {
                 unsafe {
