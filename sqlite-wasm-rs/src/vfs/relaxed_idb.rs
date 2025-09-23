@@ -22,7 +22,6 @@ use std::{
     ffi::{c_char, CStr},
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use wasm_array_cp::ArrayBufferCopy;
 use wasm_bindgen::JsValue;
 
 type Result<T> = std::result::Result<T, RelaxedIdbError>;
@@ -118,7 +117,7 @@ impl VfsFile for IdbPageFile {
             offset,
             |addr| self.blocks.get(&addr),
             |page, buf, (start, end)| {
-                ArrayBufferCopy::copy_to(&page.subarray(start as u32, end as u32), buf);
+                page.subarray(start as u32, end as u32).copy_to(buf);
             },
         ))
     }
@@ -135,12 +134,11 @@ impl VfsFile for IdbPageFile {
         }
 
         if let Some(buffer) = self.blocks.get_mut(&offset) {
-            let buffer: &Uint8Array = buffer;
-            ArrayBufferCopy::copy_from(buffer, buf);
+            buffer.copy_from(buf);
         } else {
             self.blocks.insert(
                 offset,
-                FragileConfirmed::new(ArrayBufferCopy::from_slice(buf)),
+                FragileConfirmed::new(Uint8Array::new_from_slice(buf)),
             );
         }
 
@@ -372,7 +370,7 @@ impl RelaxedIdb {
             .map(|(idx, buffer)| {
                 (
                     idx * page_size,
-                    FragileConfirmed::new(ArrayBufferCopy::from_slice(buffer)),
+                    FragileConfirmed::new(Uint8Array::new_from_slice(buffer)),
                 )
             })
             .collect();
@@ -380,7 +378,7 @@ impl RelaxedIdb {
         // forced to write back to legacy mode
         if clear_wal {
             let header = blocks.get_mut(&0).unwrap();
-            ArrayBufferCopy::copy_from(&header.subarray(18, 20), &[1, 1]);
+            header.subarray(18, 20).copy_from(&[1, 1]);
         }
 
         let tx_blocks = blocks.keys().copied().collect();
@@ -410,8 +408,7 @@ impl RelaxedIdb {
                     if offset >= file_size {
                         continue;
                     }
-                    let buffer: &Uint8Array = buffer;
-                    ArrayBufferCopy::copy_to(buffer, &mut ret[offset..offset + file.block_size]);
+                    buffer.copy_to(&mut ret[offset..offset + file.block_size]);
                 }
                 Ok(ret)
             } else {

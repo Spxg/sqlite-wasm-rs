@@ -224,10 +224,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_getentropy(
         if get_random_values(&array).is_err() {
             return FUNCTION_NOT_SUPPORT;
         }
-        wasm_array_cp::ArrayBufferCopy::copy_to(
-            &array,
-            std::slice::from_raw_parts_mut(buf, buf_len),
-        );
+        array.copy_to(std::slice::from_raw_parts_mut(buf, buf_len));
     }
 
     #[cfg(not(target_feature = "atomics"))]

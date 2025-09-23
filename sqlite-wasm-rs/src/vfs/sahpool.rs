@@ -13,7 +13,6 @@ use crate::vfs::utils::{
 use js_sys::{Array, DataView, IteratorNext, Map, Reflect, Set, Uint8Array};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use wasm_array_cp::ArrayBufferCopy;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
@@ -216,10 +215,8 @@ impl OpfsSAHPool {
             return Ok(None);
         }
         // set_associated_filename ensures that it is utf8
-        let filename = String::from_utf8(ArrayBufferCopy::to_vec(
-            &self.header_buffer.subarray(0, name_length as u32),
-        ))
-        .unwrap();
+        let filename =
+            String::from_utf8(self.header_buffer.subarray(0, name_length as u32).to_vec()).unwrap();
         Ok(Some(filename))
     }
 
@@ -241,11 +238,9 @@ impl OpfsSAHPool {
                     "Filename too long: {filename}"
                 )));
             }
-            ArrayBufferCopy::copy_from(
-                &self.header_buffer.subarray(0, filename.len() as u32),
-                filename.as_bytes(),
-            );
-
+            self.header_buffer
+                .subarray(0, filename.len() as u32)
+                .copy_from(filename.as_bytes());
             self.header_buffer
                 .fill(0, filename.len() as u32, HEADER_MAX_FILENAME_SIZE as u32);
             self.map_filename_to_sah.set(&JsValue::from(filename), sah);
