@@ -36,7 +36,7 @@ const FULL_FEATURED: [&str; 24] = [
     any(feature = "bundled", feature = "buildtime-bindgen"),
     feature = "sqlite3mc"
 ))]
-const SQLITE3_MC_FEATURED: [&str; 1] = ["-D__WASM__"];
+const SQLITE3_MC_FEATURED: [&str; 2] = ["-D__WASM__", "-DARGON2_NO_THREADS"];
 
 #[cfg(all(not(feature = "bundled"), not(feature = "precompiled")))]
 fn main() {
@@ -73,7 +73,8 @@ fn main() {
     });
 
     println!("cargo::rerun-if-changed={ld_path}");
-    static_linking(&ld_path);
+    println!("cargo:rustc-link-search=native={ld_path}");
+    println!("cargo:rustc-link-lib=static=sqlite3")
 }
 
 #[cfg(all(not(feature = "precompiled"), feature = "bundled"))]
@@ -110,17 +111,6 @@ fn main() {
             std::fs::copy(format!("{output}/bindgen.rs"), SQLITE3_BINDGEN).unwrap();
         }
     }
-
-    static_linking(&output);
-}
-
-#[cfg(all(
-    any(feature = "bundled", feature = "precompiled"),
-    not(all(feature = "bundled", feature = "precompiled"))
-))]
-fn static_linking(ld_path: &str) {
-    println!("cargo:rustc-link-search=native={ld_path}");
-    println!("cargo:rustc-link-lib=static=sqlite3");
 }
 
 #[cfg(feature = "buildtime-bindgen")]
@@ -236,7 +226,7 @@ fn compile(output: &str) {
     const SQLITE3_SOURCE: &str = "sqlite3mc/sqlite3mc_amalgamation.c";
 
     let mut cc = cc::Build::new();
-    cc.target("wasm32-unknown-emscripten");
+    cc.warnings(false).target("wasm32-unknown-emscripten");
 
     if cc.get_compiler().to_command().status().is_err() {
         panic!("
@@ -245,34 +235,21 @@ or use the precompiled binaries via the `default-features = false` and `precompi
 ");
     }
 
-    cc.flag(SQLITE3_SOURCE).flags(FULL_FEATURED);
-
+    cc.file(SQLITE3_SOURCE).flags(FULL_FEATURED);
     #[cfg(feature = "sqlite3mc")]
     cc.flags(SQLITE3_MC_FEATURED);
 
-    cc.flag("-o").flag(format!("{output}/sqlite3.o")).flag("-r");
-
-    if cfg!(feature = "custom-libc") {
-        cc.get_compiler()
-            .to_command()
-            .status()
-            .expect("Failed to compile sqlite3");
-    } else {
-        cc.get_compiler()
-            .to_command()
-            .arg("shim/wasm-shim.c")
-            .arg("-Ishim")
-            .arg("-lc")
-            .status()
-            .expect("Failed to compile sqlite3");
+    if !cfg!(feature = "custom-libc") {
+        cc.flag("-include").flag("shim/wasm-shim.h");
     }
 
-    cc.get_archiver()
-        .arg("rcs")
-        .arg(format!("{output}/libsqlite3.a"))
-        .arg(format!("{output}/sqlite3.o"))
-        .status()
-        .expect("Failed to archive sqlite3.o");
+    cc.out_dir(output).compile("sqlite3");
 
-    let _ = std::fs::remove_file(format!("{output}/sqlite3.o"));
+    #[cfg(feature = "sqlite3mc")]
+    cc::Build::new()
+        .warnings(false)
+        .target("wasm32-unknown-emscripten")
+        .file("shim/printf/printf.c")
+        .out_dir(output)
+        .compile("printf");
 }

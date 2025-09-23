@@ -1,5 +1,8 @@
 //! This module fills in the external functions needed to link to `sqlite.o`
 
+use std::ffi::{c_char, c_double, c_int, c_void};
+use std::ptr;
+
 use js_sys::{Date, Number};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
@@ -15,14 +18,8 @@ extern "C" {
     fn get_random_values(buf: &js_sys::Uint8Array) -> Result<(), JsValue>;
 }
 
-#[wasm_bindgen]
-extern "C" {
-    // performance.now()
-    #[wasm_bindgen(js_namespace = ["globalThis", "performance"], js_name = now)]
-    fn performance_now() -> Option<f64>;
-}
-
-pub type time_t = std::os::raw::c_longlong;
+type c_size_t = usize;
+type c_time_t = std::os::raw::c_longlong;
 
 /// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/musl/include/time.h#L40
 #[repr(C)]
@@ -61,8 +58,7 @@ fn yday_from_date(date: &Date) -> u32 {
 /// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/emscripten_internal.h#L42
 ///
 /// https://github.com/sqlite/sqlite-wasm/blob/7c1b309c3bd07d8e6d92f82344108cebbd14f161/sqlite-wasm/jswasm/sqlite3-bundler-friendly.mjs#L3404
-#[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_localtime_js(t: time_t, tm: *mut tm) {
+unsafe fn localtime_js(t: c_time_t, tm: *mut tm) {
     let date = Date::new(&Number::from((t * 1000) as f64).into());
 
     (*tm).tm_sec = date.get_seconds() as _;
@@ -86,62 +82,136 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_localtime_js(t: time_t, tm: *mut 
     (*tm).tm_gmtoff = -(date.get_timezone_offset() * 60.0) as _;
 }
 
-/// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/emscripten_internal.h#L45
-///
-/// https://github.com/sqlite/sqlite-wasm/blob/7c1b309c3bd07d8e6d92f82344108cebbd14f161/sqlite-wasm/jswasm/sqlite3-bundler-friendly.mjs#L3460
-#[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_tzset_js(
-    timezone: *mut std::os::raw::c_long,
-    daylight: *mut std::os::raw::c_int,
-    std_name: *mut std::os::raw::c_char,
-    dst_name: *mut std::os::raw::c_char,
-) {
-    unsafe fn set_name(name: String, dst: *mut std::os::raw::c_char) {
-        for (idx, byte) in name.bytes().enumerate() {
-            *dst.add(idx) = byte as _;
+unsafe fn strspn_impl(s: *const c_char, c: *const c_char, reject: bool) -> c_size_t {
+    let mut lookup_table = [false; 256];
+
+    let mut list_ptr = c;
+    while *list_ptr != 0 {
+        lookup_table[*list_ptr as u8 as usize] = true;
+        list_ptr = list_ptr.add(1);
+    }
+
+    let mut s_ptr = s;
+    let mut count = 0;
+
+    while *s_ptr != 0 {
+        if lookup_table[*s_ptr as u8 as usize] == reject {
+            break;
         }
-        *dst.add(name.len()) = 0;
+        count += 1;
+        s_ptr = s_ptr.add(1);
     }
 
-    fn extract_zone(timezone_offset: f64) -> String {
-        let sign = if timezone_offset >= 0.0 { '-' } else { '+' };
-        let offset = timezone_offset.abs();
-        let hours = format!("{:02}", (offset / 60.0).floor() as i32);
-        let minutes = format!("{:02}", (offset % 60.0) as i32);
-        format!("UTC{sign}{hours}{minutes}")
-    }
-
-    let current_year = Date::new_0().get_full_year();
-    let winter = Date::new_with_year_month_day(current_year, 0, 1);
-    let summer = Date::new_with_year_month_day(current_year, 6, 1);
-    let winter_offset = winter.get_timezone_offset();
-    let summer_offset = summer.get_timezone_offset();
-
-    let std_timezone_offset = winter_offset.max(summer_offset);
-    *timezone = (std_timezone_offset * 60.0) as _;
-    *daylight = i32::from(winter_offset != summer_offset);
-
-    let winter_name = extract_zone(winter_offset);
-    let summer_name = extract_zone(summer_offset);
-
-    if summer_offset < winter_offset {
-        set_name(winter_name, std_name);
-        set_name(summer_name, dst_name);
-    } else {
-        set_name(winter_name, dst_name);
-        set_name(summer_name, std_name);
-    }
+    count
 }
 
-/// https://github.com/sqlite/sqlite-wasm/blob/7c1b309c3bd07d8e6d92f82344108cebbd14f161/sqlite-wasm/jswasm/sqlite3-bundler-friendly.mjs#L3496
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strcpy.html>.
+#[cfg(feature = "sqlite3mc")]
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_emscripten_get_now() -> std::os::raw::c_double {
-    performance_now().expect("performance should be available")
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_strcpy(
+    dest: *mut c_char,
+    src: *const c_char,
+) -> *mut c_char {
+    let mut d = dest;
+    let mut s = src;
+    while *s != 0 {
+        *d = *s;
+        d = d.add(1);
+        s = s.add(1);
+    }
+    *d = 0;
+    dest
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strncpy.html>.
+#[cfg(feature = "sqlite3mc")]
+#[no_mangle]
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_strncpy(
+    dest: *mut c_char,
+    src: *const c_char,
+    n: usize,
+) -> *mut c_char {
+    if n == 0 {
+        return dest;
+    }
+    let mut d = dest;
+    let mut s = src;
+    let mut i = 0;
+
+    while i < n && *s != 0 {
+        *d = *s;
+        d = d.add(1);
+        s = s.add(1);
+        i += 1;
+    }
+
+    while i < n {
+        *d = 0;
+        d = d.add(1);
+        i += 1;
+    }
+
+    dest
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strcat.html>.
+#[cfg(feature = "sqlite3mc")]
+#[no_mangle]
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_strcat(
+    dest: *mut c_char,
+    src: *const c_char,
+) -> *mut c_char {
+    let mut d = dest;
+    while *d != 0 {
+        d = d.add(1);
+    }
+
+    let mut s = src;
+    while *s != 0 {
+        *d = *s;
+        d = d.add(1);
+        s = s.add(1);
+    }
+    *d = 0;
+
+    dest
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strncat.html>.
+#[cfg(feature = "sqlite3mc")]
+#[no_mangle]
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_strncat(
+    dest: *mut c_char,
+    src: *const c_char,
+    n: usize,
+) -> *mut c_char {
+    if n == 0 {
+        return dest;
+    }
+
+    let mut d = dest;
+    while *d != 0 {
+        d = d.add(1);
+    }
+
+    let mut s = src;
+    let mut i = 0;
+
+    while i < n && *s != 0 {
+        *d = *s;
+        d = d.add(1);
+        s = s.add(1);
+        i += 1;
+    }
+
+    *d = 0;
+    dest
 }
 
 /// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/include/wasi/api.h#L2652
+#[cfg(feature = "sqlite3mc")]
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_wasi_random_get(
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_getentropy(
     buf: *mut u8,
     buf_len: usize,
 ) -> std::os::raw::c_ushort {
@@ -168,16 +238,176 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_wasi_random_get(
     0
 }
 
-/// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/musl/src/exit/exit.c#L27
+#[cfg(feature = "sqlite3mc")]
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_exit(code: std::os::raw::c_int) {
-    std::process::exit(code);
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_abort() {
+    std::process::abort();
 }
 
-/// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/emscripten_internal.h#L29
+// https://github.com/emscripten-core/emscripten/blob/089590d17eeb705424bf32f8a1afe34a034b4682/system/lib/libc/musl/src/errno/__errno_location.c#L10
+#[cfg(feature = "sqlite3mc")]
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_abort_js() {
-    std::process::abort();
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_errno_location() -> *mut c_int {
+    thread_local! {
+        static ERROR_STORAGE: std::cell::UnsafeCell<i32> = std::cell::UnsafeCell::new(0);
+    }
+    ERROR_STORAGE.with(|e| e.get())
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strcmp.html>.
+#[no_mangle]
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_strcmp(
+    s1: *const c_char,
+    s2: *const c_char,
+) -> c_int {
+    let mut i = 0;
+    loop {
+        let c1 = *s1.add(i);
+        let c2 = *s2.add(i);
+
+        if c1 != c2 || c1 == 0 {
+            return (c1 as c_int) - (c2 as c_int);
+        }
+
+        i += 1;
+    }
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strncmp.html>.
+#[no_mangle]
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_strncmp(
+    s1: *const c_char,
+    s2: *const c_char,
+    n: c_size_t,
+) -> c_int {
+    for i in 0..n {
+        let c1 = *s1.add(i);
+        let c2 = *s2.add(i);
+
+        if c1 != c2 || c1 == 0 {
+            return (c1 as c_int) - (c2 as c_int);
+        }
+    }
+    0
+}
+
+// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strcspn.html>.
+#[no_mangle]
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_strcspn(
+    s: *const c_char,
+    reject: *const c_char,
+) -> c_size_t {
+    strspn_impl(s, reject, true)
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strspn.html>.
+#[no_mangle]
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_strspn(
+    s: *const c_char,
+    accept: *const c_char,
+) -> usize {
+    strspn_impl(s, accept, false)
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strrchr.html>.
+#[no_mangle]
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_strrchr(
+    s: *const c_char,
+    c: c_int,
+) -> *const c_char {
+    let c = c as u8 as c_char;
+    let mut ptr = s;
+    let mut last = ptr::null();
+
+    while *ptr != 0 {
+        if *ptr == c {
+            last = ptr;
+        }
+        ptr = ptr.add(1);
+    }
+
+    if c == 0 {
+        return ptr;
+    }
+
+    last
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strchr.html>.
+#[no_mangle]
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_strchr(s: *const c_char, c: c_int) -> *const c_char {
+    let ch = c as u8 as c_char;
+    let mut ptr = s;
+
+    while *ptr != 0 {
+        if *ptr == ch {
+            return ptr;
+        }
+        ptr = ptr.add(1);
+    }
+
+    if ch == 0 {
+        return ptr;
+    }
+
+    ptr::null()
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/memchr.html>.
+#[no_mangle]
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_memchr(
+    s: *const c_void,
+    c: c_int,
+    n: c_size_t,
+) -> *const c_void {
+    let s_ptr = s as *const u8;
+    let c = c as u8;
+
+    for i in 0..n {
+        if *s_ptr.add(i) == c {
+            return s_ptr.add(i) as *const c_void;
+        }
+    }
+
+    ptr::null()
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/acosh.html>.
+#[no_mangle]
+pub extern "C" fn rust_sqlite_wasm_shim_acosh(x: c_double) -> c_double {
+    x.acosh()
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/asinh.html>.
+#[no_mangle]
+pub extern "C" fn rust_sqlite_wasm_shim_asinh(x: c_double) -> c_double {
+    x.asinh()
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/atanh.html>.
+#[no_mangle]
+pub extern "C" fn rust_sqlite_wasm_shim_atanh(x: c_double) -> c_double {
+    x.atanh()
+}
+
+/// See <https://github.com/emscripten-core/emscripten/blob/089590d17eeb705424bf32f8a1afe34a034b4682/system/lib/libc/mktime.c#L28>.
+#[no_mangle]
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_localtime(t: *const c_time_t) -> *mut tm {
+    static mut TM: tm = tm {
+        tm_sec: 0,
+        tm_min: 0,
+        tm_hour: 0,
+        tm_mday: 0,
+        tm_mon: 0,
+        tm_year: 0,
+        tm_wday: 0,
+        tm_yday: 0,
+        tm_isdst: 0,
+        tm_gmtoff: 0,
+        tm_zone: std::ptr::null_mut(),
+    };
+    localtime_js(*t, std::ptr::addr_of_mut!(TM));
+    std::ptr::addr_of_mut!(TM)
 }
 
 // https://github.com/alexcrichton/dlmalloc-rs/blob/fb116603713825b43b113cc734bb7d663cb64be9/src/dlmalloc.rs#L141
@@ -231,11 +461,6 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_calloc(num: usize, size: usize) -
     ptr
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn sqlite3_os_init() -> std::os::raw::c_int {
-    crate::vfs::memory::install()
-}
-
 #[cfg(test)]
 mod tests {
     use std::ffi::CStr;
@@ -245,35 +470,19 @@ mod tests {
         sqlite3_open, sqlite3_prepare_v3, sqlite3_step, SQLITE_OK, SQLITE_ROW, SQLITE_TEXT,
     };
 
+    #[cfg(feature = "sqlite3mc")]
+    use super::rust_sqlite_wasm_shim_getentropy;
     use super::{
-        rust_sqlite_wasm_shim_abort_js, rust_sqlite_wasm_shim_calloc,
-        rust_sqlite_wasm_shim_emscripten_get_now, rust_sqlite_wasm_shim_exit,
-        rust_sqlite_wasm_shim_free, rust_sqlite_wasm_shim_localtime_js,
-        rust_sqlite_wasm_shim_malloc, rust_sqlite_wasm_shim_realloc,
-        rust_sqlite_wasm_shim_tzset_js, rust_sqlite_wasm_shim_wasi_random_get, tm,
+        localtime_js, rust_sqlite_wasm_shim_calloc, rust_sqlite_wasm_shim_free,
+        rust_sqlite_wasm_shim_malloc, rust_sqlite_wasm_shim_realloc, tm,
     };
     use wasm_bindgen_test::{console_log, wasm_bindgen_test};
 
-    #[should_panic]
-    #[wasm_bindgen_test]
-    fn test_abort() {
-        unsafe {
-            rust_sqlite_wasm_shim_abort_js();
-        }
-    }
-
-    #[should_panic]
-    #[wasm_bindgen_test]
-    fn test_exit() {
-        unsafe {
-            rust_sqlite_wasm_shim_exit(114514);
-        }
-    }
-
+    #[cfg(feature = "sqlite3mc")]
     #[wasm_bindgen_test]
     fn test_random_get() {
         let mut buf = [0u8; 10];
-        unsafe { rust_sqlite_wasm_shim_wasi_random_get(buf.as_mut_ptr(), buf.len()) };
+        unsafe { rust_sqlite_wasm_shim_getentropy(buf.as_mut_ptr(), buf.len()) };
         console_log!("test_random_get: {buf:?}");
     }
 
@@ -290,34 +499,6 @@ mod tests {
 
             assert!(buf.iter().all(|&x| x == 0));
         }
-    }
-
-    #[wasm_bindgen_test]
-    fn test_get_now() {
-        let now = unsafe { rust_sqlite_wasm_shim_emscripten_get_now() };
-        console_log!("test_get_now: {now}");
-    }
-
-    #[wasm_bindgen_test]
-    fn test_tzset() {
-        let mut timezone: std::os::raw::c_long = 0;
-        let mut daylight: std::os::raw::c_int = 0;
-        let mut std_name = [0i8; 9];
-        let mut dst_name = [0i8; 9];
-
-        unsafe {
-            rust_sqlite_wasm_shim_tzset_js(
-                &mut timezone as _,
-                &mut daylight as _,
-                std_name.as_mut_ptr(),
-                dst_name.as_mut_ptr(),
-            );
-        }
-
-        let std_name = unsafe { CStr::from_ptr(std_name.as_ptr()) };
-        let dst_name = unsafe { CStr::from_ptr(dst_name.as_ptr()) };
-
-        console_log!("test_tzset: {timezone} {daylight} {std_name:?} {dst_name:?}");
     }
 
     #[wasm_bindgen_test]
@@ -368,7 +549,7 @@ mod tests {
             tm_zone: std::ptr::null_mut(),
         };
         unsafe {
-            rust_sqlite_wasm_shim_localtime_js(1733976732, &mut tm as *mut tm);
+            localtime_js(1733976732, &mut tm as *mut tm);
         };
         let gmtoff = tm.tm_gmtoff / 3600;
 
