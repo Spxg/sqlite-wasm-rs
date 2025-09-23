@@ -1,0 +1,40 @@
+# .github/actions/setup-emscripten-universal/action.yml
+name: 'Setup Emscripten Universal'
+description: 'Setup Emscripten on multiple platforms'
+
+inputs:
+  version:
+    description: 'Emscripten version'
+    required: false
+    default: 'latest'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Emscripten on Windows
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        if (!(Test-Path "emsdk")) {
+          git clone https://github.com/emscripten-core/emsdk.git
+        }
+        cd emsdk
+        .\emsdk install ${{ inputs.version }}
+        .\emsdk activate ${{ inputs.version }}
+        . .\emsdk_env.ps1
+        echo "EMSDK=$(Get-Location)" >> $env:GITHUB_ENV
+        echo "$(Get-Location)\upstream\emscripten" >> $env:GITHUB_PATH
+        echo "$(Get-Location)" >> $env:GITHUB_PATH
+
+    - name: Setup Emscripten on Linux/macOS
+      if: runner.os == 'Linux' || runner.os == 'macOS'
+      shell: bash
+      run: |
+        git clone https://github.com/emscripten-core/emsdk.git
+        cd emsdk
+        ./emsdk install ${{ inputs.version }}
+        ./emsdk activate ${{ inputs.version }}
+        source ./emsdk_env.sh
+        echo "EMSDK=$(pwd)" >> $GITHUB_ENV
+        echo "$(pwd)" >> $GITHUB_PATH
+        echo "$(pwd)/upstream/emscripten" >> $GITHUB_PATH
