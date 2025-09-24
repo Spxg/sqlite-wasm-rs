@@ -442,7 +442,7 @@ impl RelaxedIdb {
     }
 
     // already drop
-    #[allow(clippy::await_holding_lock)]
+    #[allow(clippy::await_holding_refcell_ref)]
     async fn sync_db_impl(&self, file: &str) -> Result<()> {
         let mut name2file = self.name2file.borrow_mut();
         let Some(idb_file) = name2file.get_mut(file) else {
