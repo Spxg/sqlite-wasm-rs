@@ -4,7 +4,6 @@
 
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
-use parking_lot::RwLock;
 use sqlite_wasm_rs::{
     sqlite3_close, sqlite3_exec, sqlite3_file, sqlite3_open_v2, sqlite3_vfs,
     utils::{
@@ -12,7 +11,7 @@ use sqlite_wasm_rs::{
     },
     SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_READWRITE,
 };
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::HashMap};
 use wasm_bindgen_test::{console_log, wasm_bindgen_test};
 
 /// Our data is simply stored in memory, and we can use Vec<u8>
@@ -87,7 +86,7 @@ impl VfsFile for MemFile {
 ///
 /// Since we will have multiple different databases,
 /// we use hashmap to store the data with the file name as the key.
-type MemAppData = RwLock<HashMap<String, MemFile>>;
+type MemAppData = RefCell<HashMap<String, MemFile>>;
 
 /// Something that manages our memory files
 struct MemFileStore;
@@ -101,7 +100,7 @@ impl VfsStore<MemFile, MemAppData> for MemFileStore {
         console_log!("add_file() called, vfs: {vfs:?} file: {file} flags: {flags}");
         let app_data = unsafe { Self::app_data(vfs) };
         app_data
-            .write()
+            .borrow_mut()
             .insert(file.to_string(), MemFile::default());
         Ok(())
     }
@@ -112,7 +111,7 @@ impl VfsStore<MemFile, MemAppData> for MemFileStore {
     fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<bool> {
         console_log!("contains_file() called, vfs: {vfs:?} file: {file}");
         let app_data = unsafe { Self::app_data(vfs) };
-        Ok(app_data.read().contains_key(file))
+        Ok(app_data.borrow().contains_key(file))
     }
 
     /// Called by `xDelete` and `xClose`
@@ -121,7 +120,7 @@ impl VfsStore<MemFile, MemAppData> for MemFileStore {
     fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<()> {
         console_log!("delete_file() called, vfs: {vfs:?} file: {file}");
         let app_data = unsafe { Self::app_data(vfs) };
-        app_data.write().remove(file);
+        app_data.borrow_mut().remove(file);
         Ok(())
     }
 
@@ -135,7 +134,7 @@ impl VfsStore<MemFile, MemAppData> for MemFileStore {
         let app_data = unsafe { Self::app_data(vfs_file.vfs) };
         let name = unsafe { vfs_file.name() };
         console_log!("with_file() called, vfs: {:?} file: {}", vfs_file.vfs, name);
-        f(app_data.read().get(name).unwrap())
+        f(app_data.borrow().get(name).unwrap())
     }
 
     /// Called by `xWrite`, `xTruncate` and `xSync`
@@ -152,7 +151,7 @@ impl VfsStore<MemFile, MemAppData> for MemFileStore {
             vfs_file.vfs,
             name
         );
-        f(app_data.write().get_mut(name).unwrap())
+        f(app_data.borrow_mut().get_mut(name).unwrap())
     }
 }
 
