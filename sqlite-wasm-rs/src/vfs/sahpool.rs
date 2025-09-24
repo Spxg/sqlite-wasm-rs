@@ -5,13 +5,13 @@
 //! <https://github.com/sqlite/sqlite/blob/master/ext/wasm/api/sqlite3-vfs-opfs-sahpool.c-pp.js>
 
 use crate::libsqlite3::*;
+use crate::utils::LazyCell;
 use crate::vfs::utils::{
-    check_import_db, random_name, register_vfs, FragileConfirmed, ImportDbError, RegisterVfsError,
-    SQLiteIoMethods, SQLiteVfs, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
+    check_import_db, random_name, register_vfs, ImportDbError, RegisterVfsError, SQLiteIoMethods,
+    SQLiteVfs, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
 };
 
 use js_sys::{Array, DataView, IteratorNext, Map, Reflect, Set, Uint8Array};
-use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
@@ -462,7 +462,7 @@ impl VfsFile for FileSystemSyncAccessHandle {
     }
 }
 
-type SyncAccessHandleAppData = FragileConfirmed<OpfsSAHPool>;
+type SyncAccessHandleAppData = OpfsSAHPool;
 
 struct SyncAccessHandleStore;
 
@@ -759,9 +759,10 @@ impl OpfsSAHPoolUtil {
 /// Register `opfs-sahpool` vfs and return a utility object which can be used
 /// to perform basic administration of the file pool
 pub async fn install(options: &OpfsSAHPoolCfg, default_vfs: bool) -> Result<OpfsSAHPoolUtil> {
-    static NAME2VFS: Lazy<
+    #[cfg_attr(target_feature = "atomics", thread_local)]
+    static NAME2VFS: LazyCell<
         tokio::sync::Mutex<HashMap<String, &'static VfsAppData<SyncAccessHandleAppData>>>,
-    > = Lazy::new(|| tokio::sync::Mutex::new(HashMap::new()));
+    > = LazyCell::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
     let mut name2vfs = NAME2VFS.lock().await;
 
@@ -769,7 +770,7 @@ pub async fn install(options: &OpfsSAHPoolCfg, default_vfs: bool) -> Result<Opfs
     let pool = if let Some(pool) = name2vfs.get(vfs_name) {
         pool
     } else {
-        let pool = FragileConfirmed::new(OpfsSAHPool::new(options).await?);
+        let pool = OpfsSAHPool::new(options).await?;
         let vfs = register_vfs::<SyncAccessHandleIoMethods, SyncAccessHandleVfs>(
             vfs_name,
             pool,
@@ -791,22 +792,20 @@ mod tests {
         sahpool_vfs::{
             OpfsSAHPool, OpfsSAHPoolCfgBuilder, SyncAccessHandleAppData, SyncAccessHandleStore,
         },
-        utils::{test_suite::test_vfs_store, FragileConfirmed, VfsAppData},
+        utils::{test_suite::test_vfs_store, VfsAppData},
     };
     use wasm_bindgen_test::wasm_bindgen_test;
     use web_sys::FileSystemSyncAccessHandle;
 
     #[wasm_bindgen_test]
     async fn test_opfs_vfs_store() {
-        let data = FragileConfirmed::new(
-            OpfsSAHPool::new(
-                &OpfsSAHPoolCfgBuilder::new()
-                    .directory("test_opfs_suite")
-                    .build(),
-            )
-            .await
-            .unwrap(),
-        );
+        let data = OpfsSAHPool::new(
+            &OpfsSAHPoolCfgBuilder::new()
+                .directory("test_opfs_suite")
+                .build(),
+        )
+        .await
+        .unwrap();
 
         test_vfs_store::<SyncAccessHandleAppData, FileSystemSyncAccessHandle, SyncAccessHandleStore>(VfsAppData::new(data))
             .unwrap();

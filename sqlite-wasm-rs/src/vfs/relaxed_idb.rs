@@ -1,18 +1,17 @@
 //! relaxed-idb vfs implementation
 
 use crate::vfs::utils::{
-    check_db_and_page_size, check_import_db, register_vfs, FragileConfirmed, ImportDbError,
-    MemChunksFile, RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData,
-    VfsError, VfsFile, VfsResult, VfsStore,
+    check_db_and_page_size, check_import_db, register_vfs, ImportDbError, LazyCell, MemChunksFile,
+    RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile,
+    VfsResult, VfsStore,
 };
 use crate::{bail, check_option, check_result, libsqlite3::*};
+use std::cell::RefCell;
 
 use indexed_db_futures::database::Database;
 use indexed_db_futures::prelude::*;
 use indexed_db_futures::transaction::TransactionMode;
 use js_sys::{Number, Object, Reflect, Uint8Array};
-use once_cell::sync::Lazy;
-use parking_lot::RwLock;
 use std::collections::{hash_map, HashSet};
 use std::future::Future;
 use std::pin::Pin;
@@ -103,7 +102,7 @@ impl IdbFile {
 struct IdbPageFile {
     file_size: usize,
     block_size: usize,
-    blocks: HashMap<usize, FragileConfirmed<Uint8Array>>,
+    blocks: HashMap<usize, Uint8Array>,
     tx_blocks: HashSet<usize>,
     sync_notified: bool,
 }
@@ -126,20 +125,15 @@ impl VfsFile for IdbPageFile {
         let page_size = buf.len();
 
         for fill in (self.file_size..offset).step_by(page_size) {
-            self.blocks.insert(
-                fill,
-                FragileConfirmed::new(Uint8Array::new_with_length(page_size as u32)),
-            );
+            self.blocks
+                .insert(fill, Uint8Array::new_with_length(page_size as u32));
             self.tx_blocks.insert(fill);
         }
 
         if let Some(buffer) = self.blocks.get_mut(&offset) {
             buffer.copy_from(buf);
         } else {
-            self.blocks.insert(
-                offset,
-                FragileConfirmed::new(Uint8Array::new_from_slice(buf)),
-            );
+            self.blocks.insert(offset, Uint8Array::new_from_slice(buf));
         }
 
         self.tx_blocks.insert(offset);
@@ -241,13 +235,13 @@ async fn preload_db_impl(
                     unreachable!();
                 };
                 db.file_size += db.block_size;
-                db.blocks.insert(offset, FragileConfirmed::new(data));
+                db.blocks.insert(offset, data);
             }
             hash_map::Entry::Vacant(vacant_entry) => {
                 vacant_entry.insert(IdbFile::Main(IdbPageFile {
                     file_size: data.length() as _,
                     block_size: data.length() as _,
-                    blocks: HashMap::from([(offset, FragileConfirmed::new(data))]),
+                    blocks: HashMap::from([(offset, data)]),
                     tx_blocks: HashSet::new(),
                     sync_notified: false,
                 }));
@@ -279,8 +273,8 @@ async fn preload_db_impl(
 }
 
 struct RelaxedIdb {
-    idb: FragileConfirmed<Database>,
-    name2file: RwLock<HashMap<String, IdbFile>>,
+    idb: Database,
+    name2file: RefCell<HashMap<String, IdbFile>>,
     tx: UnboundedSender<IdbCommit>,
 }
 
@@ -302,8 +296,8 @@ impl RelaxedIdb {
 
         let name2file = preload_db_impl(&indexed_db, &options.preload).await?;
         Ok(RelaxedIdb {
-            idb: FragileConfirmed::new(indexed_db),
-            name2file: RwLock::new(name2file),
+            idb: indexed_db,
+            name2file: RefCell::new(name2file),
             tx,
         })
     }
@@ -333,14 +327,14 @@ impl RelaxedIdb {
 
     async fn preload_db(&self, files: Vec<String>) -> Result<()> {
         let preload = {
-            let name2file = self.name2file.read();
+            let name2file = self.name2file.borrow();
             files
                 .into_iter()
                 .filter(|x| !name2file.contains_key(x))
                 .collect::<Vec<_>>()
         };
         let preload = preload_db_impl(&self.idb, &Preload::Paths(preload)).await?;
-        self.name2file.write().extend(preload);
+        self.name2file.borrow_mut().extend(preload);
         Ok(())
     }
 
@@ -358,21 +352,16 @@ impl RelaxedIdb {
     ) -> Result<WaitCommit> {
         check_db_and_page_size(bytes.len(), page_size)?;
 
-        if self.name2file.read().contains_key(filename) {
+        if self.name2file.borrow().contains_key(filename) {
             return Err(RelaxedIdbError::Generic(format!(
                 "{filename} file already exists"
             )));
         }
 
-        let mut blocks: HashMap<usize, FragileConfirmed<Uint8Array>> = bytes
+        let mut blocks: HashMap<usize, Uint8Array> = bytes
             .chunks(page_size)
             .enumerate()
-            .map(|(idx, buffer)| {
-                (
-                    idx * page_size,
-                    FragileConfirmed::new(Uint8Array::new_from_slice(buffer)),
-                )
-            })
+            .map(|(idx, buffer)| (idx * page_size, Uint8Array::new_from_slice(buffer)))
             .collect();
 
         // forced to write back to legacy mode
@@ -383,7 +372,7 @@ impl RelaxedIdb {
 
         let tx_blocks = blocks.keys().copied().collect();
 
-        self.name2file.write().insert(
+        self.name2file.borrow_mut().insert(
             filename.into(),
             IdbFile::Main(IdbPageFile {
                 file_size: blocks.len() * page_size,
@@ -398,7 +387,7 @@ impl RelaxedIdb {
     }
 
     fn export_db(&self, name: &str) -> Result<Vec<u8>> {
-        let name2file = self.name2file.read();
+        let name2file = self.name2file.borrow();
 
         if let Some(file) = name2file.get(name) {
             if let IdbFile::Main(file) = file {
@@ -424,17 +413,17 @@ impl RelaxedIdb {
     }
 
     fn delete_db(&self, name: &str) -> Result<WaitCommit> {
-        self.name2file.write().remove(name);
+        self.name2file.borrow_mut().remove(name);
         self.send_task_with_notify(IdbCommitOp::Delete(name.into()))
     }
 
     fn clear_all(&self) -> Result<WaitCommit> {
-        std::mem::take(&mut *self.name2file.write());
+        std::mem::take(&mut *self.name2file.borrow_mut());
         self.send_task_with_notify(IdbCommitOp::Clear)
     }
 
     fn exists(&self, file: &str) -> bool {
-        self.name2file.read().contains_key(file)
+        self.name2file.borrow().contains_key(file)
     }
 
     async fn delete_db_impl(&self, file: &str) -> Result<()> {
@@ -453,9 +442,9 @@ impl RelaxedIdb {
     }
 
     // already drop
-    #[allow(clippy::await_holding_lock)]
+    #[allow(clippy::await_holding_refcell_ref)]
     async fn sync_db_impl(&self, file: &str) -> Result<()> {
-        let mut name2file = self.name2file.write();
+        let mut name2file = self.name2file.borrow_mut();
         let Some(idb_file) = name2file.get_mut(file) else {
             return Ok(());
         };
@@ -519,12 +508,13 @@ impl RelaxedIdb {
     }
 }
 
-static ONCE_JS_VALUE: Lazy<FragileConfirmed<(JsValue, JsValue, JsValue)>> = Lazy::new(|| {
-    FragileConfirmed::new((
+#[cfg_attr(target_feature = "atomics", thread_local)]
+static ONCE_JS_VALUE: LazyCell<(JsValue, JsValue, JsValue)> = LazyCell::new(|| {
+    (
         JsValue::from("path"),
         JsValue::from("offset"),
         JsValue::from("data"),
-    ))
+    )
 });
 
 fn get_block(value: JsValue) -> (String, usize, Uint8Array) {
@@ -555,19 +545,19 @@ impl VfsStore<IdbFile, RelaxedIdb> for RelaxedIdbStore {
     fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32) -> VfsResult<()> {
         let pool = unsafe { Self::app_data(vfs) };
         pool.name2file
-            .write()
+            .borrow_mut()
             .insert(file.into(), IdbFile::new(flags));
         Ok(())
     }
 
     fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<bool> {
         let pool = unsafe { Self::app_data(vfs) };
-        Ok(pool.name2file.read().contains_key(file))
+        Ok(pool.name2file.borrow().contains_key(file))
     }
 
     fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<()> {
         let pool = unsafe { Self::app_data(vfs) };
-        let idb_file = match pool.name2file.write().remove(file) {
+        let idb_file = match pool.name2file.borrow_mut().remove(file) {
             Some(file) => file,
             None => {
                 return Err(VfsError::new(
@@ -594,7 +584,7 @@ impl VfsStore<IdbFile, RelaxedIdb> for RelaxedIdbStore {
     ) -> VfsResult<i32> {
         let name = unsafe { vfs_file.name() };
         let pool = unsafe { Self::app_data(vfs_file.vfs) };
-        match pool.name2file.read().get(name) {
+        match pool.name2file.borrow().get(name) {
             Some(file) => f(file),
             None => Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
         }
@@ -606,7 +596,7 @@ impl VfsStore<IdbFile, RelaxedIdb> for RelaxedIdbStore {
     ) -> VfsResult<i32> {
         let name = unsafe { vfs_file.name() };
         let pool = unsafe { Self::app_data(vfs_file.vfs) };
-        match pool.name2file.write().get_mut(name) {
+        match pool.name2file.borrow_mut().get_mut(name) {
             Some(file) => f(file),
             None => Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
         }
@@ -631,7 +621,7 @@ impl SQLiteIoMethods for RelaxedIdbIoMethods {
         let pool = Self::Store::app_data(vfs_file.vfs);
         let name = vfs_file.name();
 
-        let mut name2file = pool.name2file.write();
+        let mut name2file = pool.name2file.borrow_mut();
         let file = check_option!(name2file.get_mut(name));
 
         let IdbFile::Main(file) = file else {
@@ -851,20 +841,22 @@ impl RelaxedIdbUtil {
 
     /// List all files.
     pub fn list(&self) -> Vec<String> {
-        self.pool.name2file.read().keys().cloned().collect()
+        self.pool.name2file.borrow().keys().cloned().collect()
     }
 
     /// Number of files.
     pub fn count(&self) -> usize {
-        self.pool.name2file.read().len()
+        self.pool.name2file.borrow().len()
     }
 }
 
 /// Register `relaxed-idb` vfs and return a utility object which can be used
 /// to perform basic administration of the file pool
 pub async fn install(options: &RelaxedIdbCfg, default_vfs: bool) -> Result<RelaxedIdbUtil> {
-    static NAME2VFS: Lazy<tokio::sync::Mutex<HashMap<String, &'static VfsAppData<RelaxedIdb>>>> =
-        Lazy::new(|| tokio::sync::Mutex::new(HashMap::new()));
+    #[cfg_attr(target_feature = "atomics", thread_local)]
+    static NAME2VFS: LazyCell<
+        tokio::sync::Mutex<HashMap<String, &'static VfsAppData<RelaxedIdb>>>,
+    > = LazyCell::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
     let vfs_name = &options.vfs_name;
 

@@ -71,7 +71,7 @@ unsafe fn test_memvfs_cipher(cipher: &str) {
 }
 
 #[cfg(feature = "relaxed-idb")]
-async unsafe fn test_relaxed_db_vfs_cipher(cipher: &str) {
+async unsafe fn test_relaxed_idb_vfs_cipher(cipher: &str) {
     let util = sqlite_wasm_rs::relaxed_idb_vfs::install(
         &sqlite_wasm_rs::relaxed_idb_vfs::RelaxedIdbCfgBuilder::new()
             .vfs_name("relaxed-db-cipher")
@@ -178,63 +178,57 @@ async unsafe fn test_opfs_sah_vfs_cipher(cipher: &str) {
     assert_eq!(ret, SQLITE_OK);
 }
 
-macro_rules! test_sah_cipher {
-    ($cipher:literal) => {
-        paste::paste! {
-            #[wasm_bindgen_test]
-            async fn [<test_opfs_sah_vfs_cipher_$cipher>]() {
-                unsafe {
-                    test_opfs_sah_vfs_cipher($cipher).await;
-                }
+macro_rules! sah_sqlite3_mc {
+    ($name:ident, $cipher:literal) => {
+        #[wasm_bindgen_test::wasm_bindgen_test]
+        async fn $name() {
+            unsafe {
+                test_opfs_sah_vfs_cipher($cipher).await;
             }
         }
     };
 }
 
-macro_rules! test_relaxed_db_cipher {
-    ($cipher:literal) => {
-        paste::paste! {
-            #[cfg(feature = "relaxed-idb")]
-            #[wasm_bindgen_test]
-            async fn [<test_relaxed_db_vfs_cipher_$cipher>]() {
-                unsafe {
-                    test_relaxed_db_vfs_cipher($cipher).await;
-                }
+macro_rules! relaxed_idb_sqlite3_mc {
+    ($name:ident, $cipher:literal) => {
+        #[cfg(feature = "relaxed-idb")]
+        #[wasm_bindgen_test]
+        async fn $name() {
+            unsafe {
+                test_relaxed_idb_vfs_cipher($cipher).await;
             }
         }
     };
 }
 
-macro_rules! test_mem_cipher {
-    ($cipher:literal) => {
-        paste::paste! {
-            #[wasm_bindgen_test]
-            fn [<test_memvfs_cipher_$cipher>]() {
-                unsafe {
-                    test_memvfs_cipher($cipher);
-                }
+macro_rules! mem_sqlite3_mc {
+    ($name:ident, $cipher:literal) => {
+        #[wasm_bindgen_test]
+        fn $name() {
+            unsafe {
+                test_memvfs_cipher($cipher);
             }
         }
     };
 }
 
-test_sah_cipher!("aes128cbc");
-test_sah_cipher!("aes256cbc");
-test_sah_cipher!("chacha20");
-test_sah_cipher!("sqlcipher");
-test_sah_cipher!("rc4");
-test_sah_cipher!("ascon128");
+sah_sqlite3_mc!(test_opfs_sah_vfs_cipher_aes128cbc, "aes128cbc");
+sah_sqlite3_mc!(test_opfs_sah_vfs_cipher_aes256cbc, "aes256cbc");
+sah_sqlite3_mc!(test_opfs_sah_vfs_cipher_chacha20, "chacha20");
+sah_sqlite3_mc!(test_opfs_sah_vfs_cipher_sqlcipher, "sqlcipher");
+sah_sqlite3_mc!(test_opfs_sah_vfs_cipher_rc4, "rc4");
+sah_sqlite3_mc!(test_opfs_sah_vfs_cipher_ascon128, "ascon128");
 
-test_relaxed_db_cipher!("aes128cbc");
-test_relaxed_db_cipher!("aes256cbc");
-test_relaxed_db_cipher!("chacha20");
-test_relaxed_db_cipher!("sqlcipher");
-test_relaxed_db_cipher!("rc4");
-test_relaxed_db_cipher!("ascon128");
+relaxed_idb_sqlite3_mc!(test_relaxed_idb_vfs_cipher_aes128cbc, "aes128cbc");
+relaxed_idb_sqlite3_mc!(test_relaxed_idb_vfs_cipher_aes256cbc, "aes256cbc");
+relaxed_idb_sqlite3_mc!(test_relaxed_idb_vfs_cipher_chacha20, "chacha20");
+relaxed_idb_sqlite3_mc!(test_relaxed_idb_vfs_cipher_sqlcipher, "sqlcipher");
+relaxed_idb_sqlite3_mc!(test_relaxed_idb_vfs_cipher_rc4, "rc4");
+relaxed_idb_sqlite3_mc!(test_relaxed_idb_vfs_cipher_ascon128, "ascon128");
 
-test_mem_cipher!("aes128cbc");
-test_mem_cipher!("aes256cbc");
-test_mem_cipher!("chacha20");
-test_mem_cipher!("sqlcipher");
-test_mem_cipher!("rc4");
-test_mem_cipher!("ascon128");
+mem_sqlite3_mc!(test_memvfs_cipher_aes128cbc, "aes128cbc");
+mem_sqlite3_mc!(test_memvfs_cipher_aes256cbc, "aes256cbc");
+mem_sqlite3_mc!(test_memvfs_cipher_chacha20, "chacha20");
+mem_sqlite3_mc!(test_memvfs_cipher_sqlcipher, "sqlcipher");
+mem_sqlite3_mc!(test_memvfs_cipher_rc4, "rc4");
+mem_sqlite3_mc!(test_memvfs_cipher_ascon128, "ascon128");

@@ -2,12 +2,12 @@
 
 use crate::libsqlite3::*;
 
-use fragile::Fragile;
 use js_sys::{Date, Math, Number};
-use parking_lot::Mutex;
+use once_cell::unsync::Lazy;
 use std::{
+    cell::RefCell,
     ffi::{CStr, CString},
-    ops::{Deref, DerefMut},
+    ops::Deref,
 };
 
 /// Return error code if expr is true.
@@ -71,40 +71,39 @@ macro_rules! unused {
     };
 }
 
+pub(crate) struct ThreadLocalWrapper<T>(pub(crate) T);
+
+#[cfg(not(target_feature = "atomics"))]
+unsafe impl<T> Sync for ThreadLocalWrapper<T> {}
+
+#[cfg(not(target_feature = "atomics"))]
+unsafe impl<T> Send for ThreadLocalWrapper<T> {}
+
+/// Wrapper around [`Lazy`] adding `Send + Sync` when `atomics` is not enabled.
+pub struct LazyCell<T, F = fn() -> T>(ThreadLocalWrapper<Lazy<T, F>>);
+
+impl<T, F> LazyCell<T, F> {
+    pub const fn new(init: F) -> LazyCell<T, F> {
+        Self(ThreadLocalWrapper(Lazy::new(init)))
+    }
+}
+
+impl<T, F: FnOnce() -> T> LazyCell<T, F> {
+    pub fn force(this: &Self) -> &T {
+        &this.0 .0
+    }
+}
+
+impl<T> Deref for LazyCell<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        ::once_cell::unsync::Lazy::force(&self.0 .0)
+    }
+}
+
 /// The header of the SQLite file is used to determine whether the imported file is legal.
 pub const SQLITE3_HEADER: &str = "SQLite format 3";
-
-/// A [`FragileConfirmed<T>`] wraps a non sendable `T` to be safely send to other threads.
-///
-/// Once the value has been wrapped it can be sent to other threads but access
-/// to the value on those threads will fail.
-pub struct FragileConfirmed<T> {
-    fragile: Fragile<T>,
-}
-
-unsafe impl<T> Send for FragileConfirmed<T> {}
-unsafe impl<T> Sync for FragileConfirmed<T> {}
-
-impl<T> FragileConfirmed<T> {
-    pub fn new(t: T) -> Self {
-        FragileConfirmed {
-            fragile: Fragile::new(t),
-        }
-    }
-}
-
-impl<T> Deref for FragileConfirmed<T> {
-    type Target = T;
-    fn deref(&self) -> &Self::Target {
-        self.fragile.get()
-    }
-}
-
-impl<T> DerefMut for FragileConfirmed<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.fragile.get_mut()
-    }
-}
 
 /// get random name if zFileName is null and other cases
 pub fn random_name() -> String {
@@ -372,14 +371,14 @@ pub type VfsResult<T> = Result<T, VfsError>;
 /// Wrapper for `pAppData`
 pub struct VfsAppData<T> {
     data: T,
-    last_err: Mutex<Option<(i32, String)>>,
+    last_err: RefCell<Option<(i32, String)>>,
 }
 
 impl<T> VfsAppData<T> {
     pub fn new(t: T) -> Self {
         VfsAppData {
             data: t,
-            last_err: Mutex::new(None),
+            last_err: RefCell::new(None),
         }
     }
 
@@ -397,13 +396,13 @@ impl<T> VfsAppData<T> {
 
     /// Pop vfs last errcode and errmsg
     pub fn pop_err(&self) -> Option<(i32, String)> {
-        self.last_err.lock().take()
+        self.last_err.borrow_mut().take()
     }
 
     /// Store errcode and errmsg
     pub fn store_err(&self, err: VfsError) -> i32 {
         let VfsError { code, message } = err;
-        self.last_err.lock().replace((code, message));
+        self.last_err.borrow_mut().replace((code, message));
         code
     }
 }
