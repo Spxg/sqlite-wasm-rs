@@ -47,7 +47,6 @@ sqlite3mc = ["bundled"]
 relaxed-idb = ["indexed_db_futures"]
 
 [dev-dependencies]
-paste = "1.0.15"
 wasm-bindgen-test = "0.3.50"
 web-time = "1.1.0"
 
