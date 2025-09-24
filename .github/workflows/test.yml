@@ -156,3 +156,4 @@ jobs:
         rustup toolchain install 1.78.0
         rustup default 1.78.0
         wasm-pack test --chrome --headless --features relaxed-idb
+        wasm-pack test --chrome --headless --features relaxed-idb,sqlite3mc
