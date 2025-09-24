@@ -1,6 +1,6 @@
 [package]
 name = "sqlite-wasm-rs"
-version = "0.4.3"
+version = "0.4.4"
 edition = "2021"
 authors = ["Spxg <unsafe@outlook.es>"]
 readme = "README.md"
@@ -47,7 +47,7 @@ sqlite3mc = ["bundled"]
 relaxed-idb = ["indexed_db_futures"]
 
 [dev-dependencies]
-wasm-bindgen-test = "0.3.50"
+wasm-bindgen-test = "0.3.54"
 web-time = "1.1.0"
 
 [build-dependencies]
