@@ -788,6 +788,10 @@ pub struct RelaxedIdbUtil {
     pool: &'static VfsAppData<RelaxedIdb>,
 }
 
+unsafe impl Send for RelaxedIdbUtil {}
+
+unsafe impl Sync for RelaxedIdbUtil {}
+
 impl RelaxedIdbUtil {
     /// Preload the db.
     ///

@@ -148,6 +148,10 @@ pub enum MemVfsError {
 /// MemVfs management tools exposed to clients.
 pub struct MemVfsUtil(&'static VfsAppData<MemAppData>);
 
+unsafe impl Send for MemVfsUtil {}
+
+unsafe impl Sync for MemVfsUtil {}
+
 impl Default for MemVfsUtil {
     fn default() -> Self {
         MemVfsUtil::new()

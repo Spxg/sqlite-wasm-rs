@@ -681,6 +681,10 @@ pub struct OpfsSAHPoolUtil {
     pool: &'static VfsAppData<SyncAccessHandleAppData>,
 }
 
+unsafe impl Send for OpfsSAHPoolUtil {}
+
+unsafe impl Sync for OpfsSAHPoolUtil {}
+
 impl OpfsSAHPoolUtil {
     /// Returns the number of files currently contained in the SAH pool.
     pub fn get_capacity(&self) -> u32 {
