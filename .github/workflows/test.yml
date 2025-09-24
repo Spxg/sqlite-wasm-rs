@@ -136,23 +136,24 @@ jobs:
         rustup toolchain install nightly
         rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
         RUSTFLAGS='-C target-feature=+atomics,+bulk-memory' rustup run nightly wasm-pack test --chrome --headless --features relaxed-idb -Z build-std=panic_abort,std
-  # temp
-  # test_msrv:
-  #   strategy:
-  #     matrix:
-  #       os: [ubuntu-latest]
-  #   runs-on: ${{ matrix.os }}
-  #   steps:
-  #   - uses: actions/checkout@v4
-  #   - name: Install wasm-pack
-  #     run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-  #   - name: Setup emscripten
-  #     uses: ./.github/actions/setup-emscripten
-  #     with:
-  #       version: '3.1.55'
-  #   - name: Test MSRV
-  #     run: |
-  #       cd sqlite-wasm-rs
-  #       rustup toolchain install 1.78.0
-  #       rustup default 1.78.0
-  #       WASM_BINDGEN_TEST_TIMEOUT=60 wasm-pack test --chrome --headless --features relaxed-idb
+
+  test_msrv:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install wasm-pack
+      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+    - name: Setup emscripten
+      uses: ./.github/actions/setup-emscripten
+      with:
+        version: '3.1.52'
+    - name: Test MSRV
+      run: |
+        cd sqlite-wasm-rs
+        rustup toolchain install 1.78.0
+        rustup default 1.78.0
+        wasm-pack test --chrome --headless --features relaxed-idb
+        wasm-pack test --chrome --headless --features relaxed-idb,sqlite3mc
