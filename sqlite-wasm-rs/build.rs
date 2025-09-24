@@ -220,6 +220,8 @@ fn bindgen(output: &str) {
 
 #[cfg(all(feature = "bundled", not(feature = "precompiled")))]
 fn compile(output: &str) {
+    use std::collections::HashSet;
+
     #[cfg(not(feature = "sqlite3mc"))]
     const SQLITE3_SOURCE: &str = "sqlite3/sqlite3.c";
     #[cfg(feature = "sqlite3mc")]
@@ -239,7 +241,11 @@ or use the precompiled binaries via the `default-features = false` and `precompi
     #[cfg(feature = "sqlite3mc")]
     cc.flags(SQLITE3_MC_FEATURED);
 
-    let target_features = std::env::var("CARGO_CFG_TARGET_FEATURE").unwrap();
+    let target_features = std::env::var("CARGO_CFG_TARGET_FEATURE").unwrap_or_default();
+    let target_features = target_features
+        .split(',')
+        .map(str::trim)
+        .collect::<HashSet<_>>();
 
     if !cfg!(feature = "custom-libc") {
         cc.flag("-include").flag("shim/wasm-shim.h");

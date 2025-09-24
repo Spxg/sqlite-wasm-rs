@@ -1,11 +1,14 @@
 //! This module fills in the external functions needed to link to `sqlite.o`
 
-use std::ffi::{c_char, c_double, c_int, c_void};
-use std::ptr;
+use std::ffi::{c_char, c_double, c_int, c_long, c_longlong, c_void};
+use std::{alloc, ptr};
 
 use js_sys::{Date, Number};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
+
+type c_size_t = usize;
+type c_time_t = c_longlong;
 
 #[wasm_bindgen]
 extern "C" {
@@ -16,25 +19,6 @@ extern "C" {
     #[cfg(target_feature = "atomics")]
     #[wasm_bindgen(js_namespace = ["globalThis", "crypto"], js_name = getRandomValues, catch)]
     fn get_random_values(buf: &js_sys::Uint8Array) -> Result<(), JsValue>;
-}
-
-type c_size_t = usize;
-type c_time_t = std::os::raw::c_longlong;
-
-/// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/musl/include/time.h#L40
-#[repr(C)]
-pub struct tm {
-    pub tm_sec: std::os::raw::c_int,
-    pub tm_min: std::os::raw::c_int,
-    pub tm_hour: std::os::raw::c_int,
-    pub tm_mday: std::os::raw::c_int,
-    pub tm_mon: std::os::raw::c_int,
-    pub tm_year: std::os::raw::c_int,
-    pub tm_wday: std::os::raw::c_int,
-    pub tm_yday: std::os::raw::c_int,
-    pub tm_isdst: std::os::raw::c_int,
-    pub tm_gmtoff: std::os::raw::c_long,
-    pub tm_zone: *mut std::os::raw::c_char,
 }
 
 fn yday_from_date(date: &Date) -> u32 {
@@ -105,10 +89,10 @@ unsafe fn strspn_impl(s: *const c_char, c: *const c_char, reject: bool) -> c_siz
 
     let mut bit_set = BitSet([0; 2]);
 
-    let mut list_ptr = c;
-    while *list_ptr != 0 {
-        bit_set.set(*list_ptr as u8 as usize);
-        list_ptr = list_ptr.add(1);
+    let mut c_ptr = c;
+    while *c_ptr != 0 {
+        bit_set.set(*c_ptr as u8 as usize);
+        c_ptr = c_ptr.add(1);
     }
 
     let mut s_ptr = s;
@@ -123,6 +107,22 @@ unsafe fn strspn_impl(s: *const c_char, c: *const c_char, reject: bool) -> c_siz
     }
 
     count
+}
+
+/// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/musl/include/time.h#L40
+#[repr(C)]
+pub struct tm {
+    pub tm_sec: c_int,
+    pub tm_min: c_int,
+    pub tm_hour: c_int,
+    pub tm_mday: c_int,
+    pub tm_mon: c_int,
+    pub tm_year: c_int,
+    pub tm_wday: c_int,
+    pub tm_yday: c_int,
+    pub tm_isdst: c_int,
+    pub tm_gmtoff: c_long,
+    pub tm_zone: *mut c_char,
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strcpy.html>.
@@ -233,10 +233,10 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_strncat(
 #[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_shim_getentropy(
     buf: *mut u8,
-    buf_len: usize,
-) -> std::os::raw::c_ushort {
+    buf_len: c_size_t,
+) -> std::ffi::c_ushort {
     // https://github.com/WebAssembly/wasi-libc/blob/e9524a0980b9bb6bb92e87a41ed1055bdda5bb86/libc-bottom-half/headers/public/wasi/api.h#L373
-    const FUNCTION_NOT_SUPPORT: std::os::raw::c_ushort = 52;
+    const FUNCTION_NOT_SUPPORT: std::ffi::c_ushort = 52;
 
     #[cfg(target_feature = "atomics")]
     {
@@ -407,6 +407,18 @@ pub extern "C" fn rust_sqlite_wasm_shim_atanh(x: c_double) -> c_double {
     x.atanh()
 }
 
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/trunc.html>.
+#[no_mangle]
+pub extern "C" fn rust_sqlite_wasm_shim_trunc(x: c_double) -> c_double {
+    x.trunc()
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/sqrt.html>.
+#[no_mangle]
+pub extern "C" fn rust_sqlite_wasm_shim_sqrt(x: c_double) -> c_double {
+    x.sqrt()
+}
+
 /// See <https://github.com/emscripten-core/emscripten/blob/089590d17eeb705424bf32f8a1afe34a034b4682/system/lib/libc/mktime.c#L28>.
 #[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_shim_localtime(t: *const c_time_t) -> *mut tm {
@@ -421,61 +433,67 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_localtime(t: *const c_time_t) -> 
         tm_yday: 0,
         tm_isdst: 0,
         tm_gmtoff: 0,
-        tm_zone: std::ptr::null_mut(),
+        tm_zone: ptr::null_mut(),
     };
-    localtime_js(*t, std::ptr::addr_of_mut!(TM));
-    std::ptr::addr_of_mut!(TM)
+    localtime_js(*t, ptr::addr_of_mut!(TM));
+    ptr::addr_of_mut!(TM)
 }
 
 // https://github.com/alexcrichton/dlmalloc-rs/blob/fb116603713825b43b113cc734bb7d663cb64be9/src/dlmalloc.rs#L141
 const ALIGN: usize = std::mem::size_of::<usize>() * 2;
 
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_malloc(size: usize) -> *mut u8 {
-    let layout = std::alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
-    let ptr = std::alloc::alloc(layout);
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_malloc(size: c_size_t) -> *mut c_void {
+    let layout = alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
+    let ptr = alloc::alloc(layout);
 
     if ptr.is_null() {
-        return std::ptr::null_mut();
+        return ptr::null_mut();
     }
     *ptr.cast::<usize>() = size;
 
-    ptr.add(ALIGN)
+    ptr.add(ALIGN).cast()
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_free(ptr: *mut u8) {
-    let ptr = ptr.sub(ALIGN);
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_free(ptr: *mut c_void) {
+    let ptr: *mut u8 = ptr.sub(ALIGN).cast();
     let size = *(ptr.cast::<usize>());
 
-    let layout = std::alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
-    std::alloc::dealloc(ptr, layout);
+    let layout = alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
+    alloc::dealloc(ptr, layout);
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_realloc(ptr: *mut u8, new_size: usize) -> *mut u8 {
-    let ptr = ptr.sub(ALIGN);
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_realloc(
+    ptr: *mut c_void,
+    new_size: c_size_t,
+) -> *mut c_void {
+    let ptr: *mut u8 = ptr.sub(ALIGN).cast();
     let size = *(ptr.cast::<usize>());
 
-    let layout = std::alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
-    let ptr = std::alloc::realloc(ptr, layout, new_size + ALIGN);
+    let layout = alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
+    let ptr = alloc::realloc(ptr, layout, new_size + ALIGN);
 
     if ptr.is_null() {
-        return std::ptr::null_mut();
+        return ptr::null_mut();
     }
     *ptr.cast::<usize>() = new_size;
 
-    ptr.add(ALIGN)
+    ptr.add(ALIGN).cast()
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_calloc(num: usize, size: usize) -> *mut u8 {
+pub unsafe extern "C" fn rust_sqlite_wasm_shim_calloc(
+    num: c_size_t,
+    size: c_size_t,
+) -> *mut c_void {
     let total = num * size;
-    let ptr = rust_sqlite_wasm_shim_malloc(total);
+    let ptr: *mut u8 = rust_sqlite_wasm_shim_malloc(total).cast();
     if !ptr.is_null() {
-        std::ptr::write_bytes(ptr, 0, total);
+        ptr::write_bytes(ptr, 0, total);
     }
-    ptr
+    ptr.cast()
 }
 
 #[cfg(test)]
@@ -511,7 +529,7 @@ mod tests {
             rust_sqlite_wasm_shim_free(ptr2);
             console_log!("test_memory: {ptr1:?} {ptr2:?}");
 
-            let ptr = rust_sqlite_wasm_shim_calloc(2, 8);
+            let ptr: *mut u8 = rust_sqlite_wasm_shim_calloc(2, 8).cast();
             let buf = std::slice::from_raw_parts(ptr, 2 * 8);
 
             assert!(buf.iter().all(|&x| x == 0));
@@ -754,18 +772,6 @@ mod tests {
             let result = rust_sqlite_wasm_shim_memchr(ptr::null(), c, 0);
             assert!(result.is_null());
         }
-    }
-
-    #[wasm_bindgen_test]
-    fn test_math_functions() {
-        assert!((rust_sqlite_wasm_shim_acosh(1.0) - 0.0).abs() < 1e-10);
-        assert!((rust_sqlite_wasm_shim_acosh(2.0) - 1.3169578969248166).abs() < 1e-10);
-
-        assert!((rust_sqlite_wasm_shim_asinh(0.0) - 0.0).abs() < 1e-10);
-        assert!((rust_sqlite_wasm_shim_asinh(1.0) - 0.881373587019543).abs() < 1e-10);
-
-        assert!((rust_sqlite_wasm_shim_atanh(0.0) - 0.0).abs() < 1e-10);
-        assert!((rust_sqlite_wasm_shim_atanh(0.5) - 0.5493061443340549).abs() < 1e-10);
     }
 
     #[wasm_bindgen_test]

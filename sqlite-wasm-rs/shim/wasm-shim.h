@@ -37,9 +37,13 @@ void *rust_sqlite_wasm_shim_memchr(const void *src, int c, size_t n);
 #define acosh rust_sqlite_wasm_shim_acosh
 #define asinh rust_sqlite_wasm_shim_asinh
 #define atanh rust_sqlite_wasm_shim_atanh
+#define trunc rust_sqlite_wasm_shim_trunc
+#define sqrt rust_sqlite_wasm_shim_sqrt
 double rust_sqlite_wasm_shim_acosh(double x);
 double rust_sqlite_wasm_shim_asinh(double x);
 double rust_sqlite_wasm_shim_atanh(double x);
+double rust_sqlite_wasm_shim_trunc(double x);
+double rust_sqlite_wasm_shim_sqrt(double x);
 
 #define localtime rust_sqlite_wasm_shim_localtime
 struct tm *rust_sqlite_wasm_shim_localtime(const time_t *t);
