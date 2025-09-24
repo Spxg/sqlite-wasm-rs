@@ -1,13 +1,13 @@
 //! Memory VFS, used as the default VFS
 
 use crate::libsqlite3::*;
+use crate::utils::LazyCell;
 use crate::vfs::utils::{
     check_import_db, ImportDbError, MemChunksFile, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile,
     VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
 };
 
-use once_cell::sync::OnceCell;
-use parking_lot::RwLock;
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 type Result<T> = std::result::Result<T, MemVfsError>;
@@ -59,25 +59,27 @@ impl VfsFile for MemFile {
     }
 }
 
-type MemAppData = RwLock<HashMap<String, MemFile>>;
+type MemAppData = RefCell<HashMap<String, MemFile>>;
 
 struct MemStore;
 
 impl VfsStore<MemFile, MemAppData> for MemStore {
     fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32) -> VfsResult<()> {
         let app_data = unsafe { Self::app_data(vfs) };
-        app_data.write().insert(file.into(), MemFile::new(flags));
+        app_data
+            .borrow_mut()
+            .insert(file.into(), MemFile::new(flags));
         Ok(())
     }
 
     fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<bool> {
         let app_data = unsafe { Self::app_data(vfs) };
-        Ok(app_data.read().contains_key(file))
+        Ok(app_data.borrow().contains_key(file))
     }
 
     fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<()> {
         let app_data = unsafe { Self::app_data(vfs) };
-        if app_data.write().remove(file).is_none() {
+        if app_data.borrow_mut().remove(file).is_none() {
             return Err(VfsError::new(
                 SQLITE_IOERR_DELETE,
                 format!("{file} not found"),
@@ -92,7 +94,7 @@ impl VfsStore<MemFile, MemAppData> for MemStore {
     ) -> VfsResult<i32> {
         let name = unsafe { vfs_file.name() };
         let app_data = unsafe { Self::app_data(vfs_file.vfs) };
-        match app_data.read().get(name) {
+        match app_data.borrow().get(name) {
             Some(file) => f(file),
             None => Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
         }
@@ -104,7 +106,7 @@ impl VfsStore<MemFile, MemAppData> for MemStore {
     ) -> VfsResult<i32> {
         let name = unsafe { vfs_file.name() };
         let app_data = unsafe { Self::app_data(vfs_file.vfs) };
-        match app_data.write().get_mut(name) {
+        match app_data.borrow_mut().get_mut(name) {
             Some(file) => f(file),
             None => Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
         }
@@ -127,10 +129,12 @@ impl SQLiteVfs<MemIoMethods> for MemVfs {
     const VERSION: ::std::os::raw::c_int = 1;
 }
 
-static APP_DATA: OnceCell<&'static VfsAppData<MemAppData>> = OnceCell::new();
+#[cfg_attr(target_feature = "atomics", thread_local)]
+static APP_DATA: LazyCell<&'static VfsAppData<MemAppData>> =
+    LazyCell::new(|| unsafe { &*VfsAppData::new(MemAppData::default()).leak() });
 
 fn app_data() -> &'static VfsAppData<MemAppData> {
-    APP_DATA.get_or_init(|| unsafe { &*VfsAppData::new(MemAppData::default()).leak() })
+    &APP_DATA
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -171,7 +175,7 @@ impl MemVfsUtil {
             )));
         }
 
-        self.0.write().insert(filename.into(), {
+        self.0.borrow_mut().insert(filename.into(), {
             let mut file = MemFile::Main(MemChunksFile::new(page_size));
             file.write(bytes, 0).unwrap();
             if clear_wal {
@@ -207,7 +211,7 @@ impl MemVfsUtil {
 
     /// Export the database.
     pub fn export_db(&self, filename: &str) -> Result<Vec<u8>> {
-        let name2file = self.0.read();
+        let name2file = self.0.borrow();
 
         if let Some(file) = name2file.get(filename) {
             let file_size = file.size().unwrap();
@@ -223,27 +227,27 @@ impl MemVfsUtil {
 
     /// Delete the specified database, please make sure that the database is closed.
     pub fn delete_db(&self, filename: &str) {
-        self.0.write().remove(filename);
+        self.0.borrow_mut().remove(filename);
     }
 
     /// Delete all database, please make sure that all database is closed.
     pub fn clear_all(&self) {
-        std::mem::take(&mut *self.0.write());
+        std::mem::take(&mut *self.0.borrow_mut());
     }
 
     /// Does the database exists.
     pub fn exists(&self, filename: &str) -> bool {
-        self.0.read().contains_key(filename)
+        self.0.borrow().contains_key(filename)
     }
 
     /// List all files.
     pub fn list(&self) -> Vec<String> {
-        self.0.read().keys().cloned().collect()
+        self.0.borrow().keys().cloned().collect()
     }
 
     /// Number of files.
     pub fn count(&self) -> usize {
-        self.0.read().len()
+        self.0.borrow().len()
     }
 }
 

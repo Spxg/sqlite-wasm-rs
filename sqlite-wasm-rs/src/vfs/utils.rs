@@ -4,8 +4,8 @@ use crate::libsqlite3::*;
 
 use js_sys::{Date, Math, Number};
 use once_cell::unsync::Lazy;
-use parking_lot::Mutex;
 use std::{
+    cell::RefCell,
     ffi::{CStr, CString},
     ops::Deref,
 };
@@ -371,14 +371,14 @@ pub type VfsResult<T> = Result<T, VfsError>;
 /// Wrapper for `pAppData`
 pub struct VfsAppData<T> {
     data: T,
-    last_err: Mutex<Option<(i32, String)>>,
+    last_err: RefCell<Option<(i32, String)>>,
 }
 
 impl<T> VfsAppData<T> {
     pub fn new(t: T) -> Self {
         VfsAppData {
             data: t,
-            last_err: Mutex::new(None),
+            last_err: RefCell::new(None),
         }
     }
 
@@ -396,13 +396,13 @@ impl<T> VfsAppData<T> {
 
     /// Pop vfs last errcode and errmsg
     pub fn pop_err(&self) -> Option<(i32, String)> {
-        self.last_err.lock().take()
+        self.last_err.borrow_mut().take()
     }
 
     /// Store errcode and errmsg
     pub fn store_err(&self, err: VfsError) -> i32 {
         let VfsError { code, message } = err;
-        self.last_err.lock().replace((code, message));
+        self.last_err.borrow_mut().replace((code, message));
         code
     }
 }
