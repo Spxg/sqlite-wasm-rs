@@ -1,4 +1,8 @@
 #![doc = include_str!("../README.md")]
+#![cfg_attr(
+    target_feature = "atomics",
+    feature(thread_local, stdarch_wasm_atomic_wait)
+)]
 
 #[rustfmt::skip]
 #[allow(non_upper_case_globals)]

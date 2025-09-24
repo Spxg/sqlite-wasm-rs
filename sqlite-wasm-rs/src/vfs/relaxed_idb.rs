@@ -1,9 +1,9 @@
 //! relaxed-idb vfs implementation
 
 use crate::vfs::utils::{
-    check_db_and_page_size, check_import_db, register_vfs, FragileConfirmed, ImportDbError,
-    MemChunksFile, RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData,
-    VfsError, VfsFile, VfsResult, VfsStore,
+    check_db_and_page_size, check_import_db, register_vfs, ImportDbError, LazyCell, MemChunksFile,
+    RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile,
+    VfsResult, VfsStore,
 };
 use crate::{bail, check_option, check_result, libsqlite3::*};
 
@@ -11,7 +11,6 @@ use indexed_db_futures::database::Database;
 use indexed_db_futures::prelude::*;
 use indexed_db_futures::transaction::TransactionMode;
 use js_sys::{Number, Object, Reflect, Uint8Array};
-use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use std::collections::{hash_map, HashSet};
 use std::future::Future;
@@ -103,7 +102,7 @@ impl IdbFile {
 struct IdbPageFile {
     file_size: usize,
     block_size: usize,
-    blocks: HashMap<usize, FragileConfirmed<Uint8Array>>,
+    blocks: HashMap<usize, Uint8Array>,
     tx_blocks: HashSet<usize>,
     sync_notified: bool,
 }
@@ -126,20 +125,15 @@ impl VfsFile for IdbPageFile {
         let page_size = buf.len();
 
         for fill in (self.file_size..offset).step_by(page_size) {
-            self.blocks.insert(
-                fill,
-                FragileConfirmed::new(Uint8Array::new_with_length(page_size as u32)),
-            );
+            self.blocks
+                .insert(fill, Uint8Array::new_with_length(page_size as u32));
             self.tx_blocks.insert(fill);
         }
 
         if let Some(buffer) = self.blocks.get_mut(&offset) {
             buffer.copy_from(buf);
         } else {
-            self.blocks.insert(
-                offset,
-                FragileConfirmed::new(Uint8Array::new_from_slice(buf)),
-            );
+            self.blocks.insert(offset, Uint8Array::new_from_slice(buf));
         }
 
         self.tx_blocks.insert(offset);
@@ -241,13 +235,13 @@ async fn preload_db_impl(
                     unreachable!();
                 };
                 db.file_size += db.block_size;
-                db.blocks.insert(offset, FragileConfirmed::new(data));
+                db.blocks.insert(offset, data);
             }
             hash_map::Entry::Vacant(vacant_entry) => {
                 vacant_entry.insert(IdbFile::Main(IdbPageFile {
                     file_size: data.length() as _,
                     block_size: data.length() as _,
-                    blocks: HashMap::from([(offset, FragileConfirmed::new(data))]),
+                    blocks: HashMap::from([(offset, data)]),
                     tx_blocks: HashSet::new(),
                     sync_notified: false,
                 }));
@@ -279,7 +273,7 @@ async fn preload_db_impl(
 }
 
 struct RelaxedIdb {
-    idb: FragileConfirmed<Database>,
+    idb: Database,
     name2file: RwLock<HashMap<String, IdbFile>>,
     tx: UnboundedSender<IdbCommit>,
 }
@@ -302,7 +296,7 @@ impl RelaxedIdb {
 
         let name2file = preload_db_impl(&indexed_db, &options.preload).await?;
         Ok(RelaxedIdb {
-            idb: FragileConfirmed::new(indexed_db),
+            idb: indexed_db,
             name2file: RwLock::new(name2file),
             tx,
         })
@@ -364,15 +358,10 @@ impl RelaxedIdb {
             )));
         }
 
-        let mut blocks: HashMap<usize, FragileConfirmed<Uint8Array>> = bytes
+        let mut blocks: HashMap<usize, Uint8Array> = bytes
             .chunks(page_size)
             .enumerate()
-            .map(|(idx, buffer)| {
-                (
-                    idx * page_size,
-                    FragileConfirmed::new(Uint8Array::new_from_slice(buffer)),
-                )
-            })
+            .map(|(idx, buffer)| (idx * page_size, Uint8Array::new_from_slice(buffer)))
             .collect();
 
         // forced to write back to legacy mode
@@ -519,12 +508,13 @@ impl RelaxedIdb {
     }
 }
 
-static ONCE_JS_VALUE: Lazy<FragileConfirmed<(JsValue, JsValue, JsValue)>> = Lazy::new(|| {
-    FragileConfirmed::new((
+#[cfg_attr(target_feature = "atomics", thread_local)]
+static ONCE_JS_VALUE: LazyCell<(JsValue, JsValue, JsValue)> = LazyCell::new(|| {
+    (
         JsValue::from("path"),
         JsValue::from("offset"),
         JsValue::from("data"),
-    ))
+    )
 });
 
 fn get_block(value: JsValue) -> (String, usize, Uint8Array) {
@@ -863,8 +853,9 @@ impl RelaxedIdbUtil {
 /// Register `relaxed-idb` vfs and return a utility object which can be used
 /// to perform basic administration of the file pool
 pub async fn install(options: &RelaxedIdbCfg, default_vfs: bool) -> Result<RelaxedIdbUtil> {
-    static NAME2VFS: Lazy<tokio::sync::Mutex<HashMap<String, &'static VfsAppData<RelaxedIdb>>>> =
-        Lazy::new(|| tokio::sync::Mutex::new(HashMap::new()));
+    #[cfg_attr(target_feature = "atomics", thread_local)]
+    static NAME2VFS: LazyCell<tokio::sync::Mutex<HashMap<String, &'static VfsAppData<RelaxedIdb>>>> =
+        LazyCell::new(|| tokio::sync::Mutex::new(HashMap::new()));
 
     let vfs_name = &options.vfs_name;
 
