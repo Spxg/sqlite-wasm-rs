@@ -5,7 +5,6 @@
 ## Usage
 
 ```sh
-cargo build --target wasm32-unknown-unknown --release
-wasm-bindgen ../../target/wasm32-unknown-unknown/release/nodejs.wasm --out-dir pkg --nodejs
+wasm-pack build --target nodejs
 node pkg/nodejs.js
 ```
