@@ -1,4 +1,28 @@
 //! Memory VFS, used as the default VFS
+//!
+//! ```rust
+//! use sqlite_wasm_rs as ffi;
+//!
+//! fn open_db() {
+//!     // open with memory vfs
+//!     let mut db = std::ptr::null_mut();
+//!     let ret = unsafe {
+//!         ffi::sqlite3_open_v2(
+//!             c"mem.db".as_ptr().cast(),
+//!             &mut db as *mut _,
+//!             ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
+//!             std::ptr::null()
+//!         )
+//!     };
+//!     assert_eq!(ffi::SQLITE_OK, ret);
+//! }
+//! ```
+//!
+//! Data is stored in memory, this is the default vfs, and reading
+//! and writing are very fast, after all, in memory.
+//!
+//! Refresh the page and data will be lost, and you also need to
+//! pay attention to the memory size limit of the browser page.
 
 use crate::libsqlite3::*;
 use crate::utils::LazyCell;

@@ -68,11 +68,27 @@ async fn open_db() {
 
 The following vfs have been implemented:
 
-* [`memory`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-rs/src/vfs/memory.rs): as the default vfs, no additional conditions are required, store the database in memory.
-* [`sahpool`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-rs/src/vfs/sahpool.rs): ported from sqlite-wasm, store the database in opfs.
-* [`relaxed-idb`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-rs/src/vfs/relaxed_idb.rs): store the database in blocks in indexed db.
+* [`memory`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/src/vfs/memory.rs): as the default vfs, no additional conditions are required, store the database in memory.
+* [`sahpool`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/src/vfs/sahpool.rs): ported from sqlite-wasm, store the database in opfs.
+* [`relaxed-idb`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/src/vfs/relaxed_idb.rs): store the database in blocks in indexed db.
 
-Go to [`here`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-rs/src/vfs/README.md) to check it out.
+Go to [`here`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/src/vfs/README.md) to check it out.
+
+### VFS Comparison
+
+||MemoryVFS|SyncAccessHandlePoolVFS|RelaxedIdbVFS|
+|-|-|-|-|
+|Storage|RAM|OPFS|IndexedDB|
+|Contexts|All|Dedicated Worker|All|
+|Multiple connections|:x:|:x:|:x:|
+|Full durability|✅|✅|:x:|
+|Relaxed durability|:x:|:x:|✅|
+|Multi-database transactions|✅|✅|✅|
+|No COOP/COEP requirements|✅|✅|✅|
+
+### How to implement a VFS
+
+Here is an example showing how to use `sqlite-wasm-rs` to implement a simple in-memory VFS, see [`implement-a-vfs`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/examples/implement-a-vfs) example.
 
 ## About multithreading
 
@@ -96,7 +112,7 @@ About security:
 
 We provide the ability to customize "libc", cargo provides a [`links`](https://doc.rust-lang.org/cargo/reference/manifest.html#the-links-field) field that can be used to specify which library to link to.
 
-We created a new [`sqlite-wasm-libc`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/sqlite-wasm-libc) library with no implementation and only a `links = "libc"` configuration, and then with the help of [overriding build scripts](https://doc.rust-lang.org/cargo/reference/build-scripts.html#overriding-build-scripts), you can overriding its configuration in your crate and link sqlite to your custom libc.
+We created a new [`sqlite-wasm-libc`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/crates/sqlite-wasm-libc) library with no implementation and only a `links = "libc"` configuration, and then with the help of [overriding build scripts](https://doc.rust-lang.org/cargo/reference/build-scripts.html#overriding-build-scripts), you can overriding its configuration in your crate and link sqlite to your custom libc.
 
 More see [`custom-libc`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/examples/custom-libc) example.
 
