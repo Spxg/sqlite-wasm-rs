@@ -35,14 +35,12 @@
 //! plugin to browse files.
 
 use crate::libsqlite3::*;
-use crate::utils::LazyCell;
 use crate::vfs::utils::{
-    check_import_db, random_name, register_vfs, ImportDbError, RegisterVfsError, SQLiteIoMethods,
-    SQLiteVfs, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
+    check_import_db, random_name, register_vfs, registered_vfs, ImportDbError, RegisterVfsError,
+    SQLiteIoMethods, SQLiteVfs, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
 };
 
 use js_sys::{Array, DataView, IteratorNext, Map, Reflect, Set, Uint8Array};
-use std::collections::HashMap;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
@@ -793,31 +791,23 @@ impl OpfsSAHPoolUtil {
 /// Register `opfs-sahpool` vfs and return a utility object which can be used
 /// to perform basic administration of the file pool
 pub async fn install(options: &OpfsSAHPoolCfg, default_vfs: bool) -> Result<OpfsSAHPoolUtil> {
-    #[cfg_attr(target_feature = "atomics", thread_local)]
-    static NAME2VFS: LazyCell<
-        tokio::sync::Mutex<HashMap<String, &'static VfsAppData<SyncAccessHandleAppData>>>,
-    > = LazyCell::new(|| tokio::sync::Mutex::new(HashMap::new()));
+    static REGISTER_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _guard = REGISTER_GUARD.lock().await;
 
-    let mut name2vfs = NAME2VFS.lock().await;
-
-    let vfs_name = &options.vfs_name;
-    let pool = if let Some(pool) = name2vfs.get(vfs_name) {
-        pool
-    } else {
-        let pool = OpfsSAHPool::new(options).await?;
-        let vfs = register_vfs::<SyncAccessHandleIoMethods, SyncAccessHandleVfs>(
-            vfs_name,
-            pool,
-            default_vfs,
-        )?;
-        let pool = unsafe { SyncAccessHandleStore::app_data(vfs) };
-        name2vfs.insert(vfs_name.clone(), pool);
-        pool
+    let vfs = match registered_vfs(&options.vfs_name) {
+        Ok(vfs) => vfs,
+        Err(RegisterVfsError::VfsNotRegistered) => {
+            register_vfs::<SyncAccessHandleIoMethods, SyncAccessHandleVfs>(
+                &options.vfs_name,
+                OpfsSAHPool::new(options).await?,
+                default_vfs,
+            )?
+        }
+        Err(vfs_error) => return Err(OpfsSAHError::Vfs(vfs_error)),
     };
+    let pool = unsafe { SyncAccessHandleStore::app_data(vfs) };
 
-    let util = OpfsSAHPoolUtil { pool };
-
-    Ok(util)
+    Ok(OpfsSAHPoolUtil { pool })
 }
 
 #[cfg(test)]

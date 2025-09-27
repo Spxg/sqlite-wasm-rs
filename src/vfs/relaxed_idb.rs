@@ -45,9 +45,9 @@
 //! It is recommended to use it in SharedWorker.
 
 use crate::vfs::utils::{
-    check_db_and_page_size, check_import_db, register_vfs, ImportDbError, LazyCell, MemChunksFile,
-    RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile,
-    VfsResult, VfsStore,
+    check_db_and_page_size, check_import_db, register_vfs, registered_vfs, ImportDbError, LazyCell,
+    MemChunksFile, RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData,
+    VfsError, VfsFile, VfsResult, VfsStore,
 };
 use crate::{bail, check_option, check_result, libsqlite3::*};
 use std::cell::RefCell;
@@ -901,25 +901,25 @@ impl RelaxedIdbUtil {
 /// Register `relaxed-idb` vfs and return a utility object which can be used
 /// to perform basic administration of the file pool
 pub async fn install(options: &RelaxedIdbCfg, default_vfs: bool) -> Result<RelaxedIdbUtil> {
-    #[cfg_attr(target_feature = "atomics", thread_local)]
-    static NAME2VFS: LazyCell<
-        tokio::sync::Mutex<HashMap<String, &'static VfsAppData<RelaxedIdb>>>,
-    > = LazyCell::new(|| tokio::sync::Mutex::new(HashMap::new()));
+    static REGISTER_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _guard = REGISTER_GUARD.lock().await;
 
-    let vfs_name = &options.vfs_name;
+    let pool = match registered_vfs(&options.vfs_name) {
+        Ok(vfs) => unsafe { RelaxedIdbStore::app_data(vfs) },
+        Err(RegisterVfsError::VfsNotRegistered) => {
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            let pool = RelaxedIdb::new(options, tx).await?;
+            let vfs = register_vfs::<RelaxedIdbIoMethods, RelaxedIdbVfs>(
+                &options.vfs_name,
+                pool,
+                default_vfs,
+            )?;
 
-    let mut name2vfs = NAME2VFS.lock().await;
-    let pool = if let Some(pool) = name2vfs.get(vfs_name) {
-        pool
-    } else {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let pool = RelaxedIdb::new(options, tx).await?;
-        let vfs = register_vfs::<RelaxedIdbIoMethods, RelaxedIdbVfs>(vfs_name, pool, default_vfs)?;
-        let app_data = unsafe { RelaxedIdbStore::app_data(vfs) };
-
-        name2vfs.insert(vfs_name.into(), app_data);
-        wasm_bindgen_futures::spawn_local(app_data.commit_loop(rx));
-        app_data
+            let app_data = unsafe { RelaxedIdbStore::app_data(vfs) };
+            wasm_bindgen_futures::spawn_local(app_data.commit_loop(rx));
+            app_data
+        }
+        Err(vfs_error) => return Err(RelaxedIdbError::Vfs(vfs_error)),
     };
 
     Ok(RelaxedIdbUtil { pool })
