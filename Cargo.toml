@@ -61,9 +61,9 @@ targets = ["wasm32-unknown-unknown"]
 
 [workspace]
 resolver = "2"
+exclude = ["examples/custom-libc"]
 members = [
   "crates/sqlite-wasm-libc",
-  "examples/custom-libc",
   "examples/implement-a-vfs",
   "examples/nodejs"
 ]
