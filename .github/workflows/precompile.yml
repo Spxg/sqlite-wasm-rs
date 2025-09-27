@@ -14,6 +14,7 @@ jobs:
     - name: Precompile library
     - name: Setup emscripten
       uses: ./.github/actions/setup-emscripten
+    - name: Build
       run: |
         rustup toolchain install 1.78.0
         rustup default 1.78.0
