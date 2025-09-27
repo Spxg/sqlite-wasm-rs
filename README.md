@@ -72,8 +72,6 @@ The following vfs have been implemented:
 * [`sahpool`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/src/vfs/sahpool.rs): ported from sqlite-wasm, store the database in opfs.
 * [`relaxed-idb`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/src/vfs/relaxed_idb.rs): store the database in blocks in indexed db.
 
-Go to [`here`](https://github.com/Spxg/sqlite-wasm-rs/tree/master/src/vfs/README.md) to check it out.
-
 ### VFS Comparison
 
 ||MemoryVFS|SyncAccessHandlePoolVFS|RelaxedIdbVFS|
