@@ -6,4 +6,4 @@
 ### Changed
 
 * Removed unnecessary `thread_local` used.
-  [#113](https://github.com/wasm-bindgen/wasm-bindgen/pull/113)
+  [#113](https://github.com/Spxg/sqlite-wasm-rs/pull/113)
