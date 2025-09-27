@@ -7,5 +7,7 @@ pub mod relaxed_idb;
 
 #[no_mangle]
 pub unsafe extern "C" fn sqlite3_os_init() -> std::ffi::c_int {
-    memory::install()
+    use crate::libsqlite3::SQLITE_OK;
+    memory::install();
+    SQLITE_OK
 }

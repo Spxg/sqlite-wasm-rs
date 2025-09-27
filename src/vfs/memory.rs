@@ -25,7 +25,6 @@
 //! pay attention to the memory size limit of the browser page.
 
 use crate::libsqlite3::*;
-use crate::utils::LazyCell;
 use crate::vfs::utils::{
     check_import_db, ImportDbError, MemChunksFile, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile,
     VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
@@ -36,7 +35,7 @@ use std::collections::HashMap;
 
 type Result<T> = std::result::Result<T, MemVfsError>;
 
-enum MemFile {
+pub(crate) enum MemFile {
     Main(MemChunksFile),
     Temp(MemChunksFile),
 }
@@ -153,14 +152,6 @@ impl SQLiteVfs<MemIoMethods> for MemVfs {
     const VERSION: ::std::os::raw::c_int = 1;
 }
 
-#[cfg_attr(target_feature = "atomics", thread_local)]
-static APP_DATA: LazyCell<&'static VfsAppData<MemAppData>> =
-    LazyCell::new(|| unsafe { &*VfsAppData::new(MemAppData::default()).leak() });
-
-fn app_data() -> &'static VfsAppData<MemAppData> {
-    &APP_DATA
-}
-
 #[derive(thiserror::Error, Debug)]
 pub enum MemVfsError {
     #[error(transparent)]
@@ -185,7 +176,7 @@ impl Default for MemVfsUtil {
 impl MemVfsUtil {
     /// Get management tool
     pub fn new() -> Self {
-        MemVfsUtil(app_data())
+        MemVfsUtil(unsafe { install() })
     }
 }
 
@@ -279,13 +270,26 @@ impl MemVfsUtil {
     }
 }
 
-pub(crate) fn install() -> ::std::os::raw::c_int {
-    let app_data = app_data();
-    let vfs = Box::leak(Box::new(MemVfs::vfs(
-        c"memvfs".as_ptr().cast(),
-        app_data as *const _ as *mut _,
-    )));
-    unsafe { sqlite3_vfs_register(vfs, 1) }
+pub(crate) unsafe fn install() -> &'static VfsAppData<MemAppData> {
+    let vfs_name = c"memvfs";
+    let vfs = sqlite3_vfs_find(vfs_name.as_ptr());
+
+    let vfs = if vfs.is_null() {
+        let vfs = Box::leak(Box::new(MemVfs::vfs(
+            vfs_name.as_ptr(),
+            VfsAppData::new(MemAppData::default()).leak(),
+        )));
+        assert_eq!(
+            sqlite3_vfs_register(vfs, 1),
+            SQLITE_OK,
+            "failed to register memvfs"
+        );
+        vfs as *mut sqlite3_vfs
+    } else {
+        vfs
+    };
+
+    MemStore::app_data(vfs)
 }
 
 #[cfg(test)]
