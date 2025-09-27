@@ -25,7 +25,7 @@ macro_rules! bail {
     };
 }
 
-/// Unpack Option<T>.
+/// Unpack `Option<T>`.
 ///
 /// If it is None, return an error code.
 ///
@@ -44,7 +44,7 @@ macro_rules! check_option {
     };
 }
 
-/// Unpack Ok<T>.
+/// Unpack `Ok<T>`.
 ///
 /// If it is Err, return an error code.
 ///
@@ -840,7 +840,7 @@ pub mod x_methods_shim {
         SQLITE_OK
     }
 
-    /// https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L951
+    /// <https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L951>
     pub unsafe extern "C" fn xRandomness(
         _pVfs: *mut sqlite3_vfs,
         nByte: ::std::os::raw::c_int,
@@ -852,7 +852,7 @@ pub mod x_methods_shim {
         nByte
     }
 
-    /// https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L870
+    /// <https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L870>
     pub unsafe extern "C" fn xCurrentTime(
         _pVfs: *mut sqlite3_vfs,
         pTimeOut: *mut f64,
@@ -861,7 +861,7 @@ pub mod x_methods_shim {
         SQLITE_OK
     }
 
-    /// https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L877
+    /// <https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L877>
     pub unsafe extern "C" fn xCurrentTimeInt64(
         _pVfs: *mut sqlite3_vfs,
         pOut: *mut sqlite3_int64,

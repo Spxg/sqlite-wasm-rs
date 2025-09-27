@@ -12,13 +12,9 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Precompile library
+    - name: Setup emscripten
+      uses: ./.github/actions/setup-emscripten
       run: |
-        git clone https://github.com/emscripten-core/emsdk.git
-        cd emsdk
-        ./emsdk install latest
-        ./emsdk activate latest
-        source ./emsdk_env.sh
-        cd ../sqlite-wasm-rs
         rustup toolchain install 1.78.0
         rustup default 1.78.0
         rustup target add wasm32-unknown-unknown

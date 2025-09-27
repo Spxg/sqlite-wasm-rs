@@ -1,4 +1,48 @@
 //! relaxed-idb vfs implementation
+//! **The `relaxed-idb` feature is required, and it is not recommended to use in a production environment.**
+//!
+//! ```rust
+//! use sqlite_wasm_rs::{
+//!     self as ffi,
+//!     relaxed_idb_vfs::{install as install_idb_vfs, RelaxedIdbCfg},
+//! };
+//!
+//! async fn open_db() {
+//!     // install relaxed-idb persistent vfs and set as default vfs
+//!     install_idb_vfs(&RelaxedIdbCfg::default(), true)
+//!         .await
+//!         .unwrap();
+//!
+//!     // open with relaxed-idb vfs
+//!     let mut db = std::ptr::null_mut();
+//!     let ret = unsafe {
+//!         ffi::sqlite3_open_v2(
+//!             c"relaxed-idb.db".as_ptr().cast(),
+//!             &mut db as *mut _,
+//!             ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
+//!             std::ptr::null()
+//!         )
+//!     };
+//!     assert_eq!(ffi::SQLITE_OK, ret);
+//! }
+//! ```
+//!
+//! Inspired by wa-sqlite's [`IDBMirrorVFS`](https://github.com/rhashimoto/wa-sqlite/blob/master/src/examples/IDBMirrorVFS.js),
+//! this is an VFS used in a synchronization context.
+//!
+//! The principle is to preload the db into memory before xOpen, and then all operations are synchronous.
+//! When sqlite calls sync, it asynchronously writes the changed blocks to the indexed db through the indexed transaction.
+//! The difference from IDBMirrorVFS is that `RelaxedIdbVFS` does only support pragma `synchronous=off`.
+//!
+//! As for performance, since both reading and writing are done in memory, the performance is very good.
+//! However, we need to pay attention to the performance of preload the database, because the database is divided
+//! into multiple blocks and stored in the indexed db, and it takes some time to read all of them into memory.
+//! After my test, when page_size is 64k, the loading speed is the fastest.
+//!
+//! As with MemoryVFS, you also need to pay attention to the memory size limit of the browser page.
+//!
+//! It is particularly important to note that using it on multiple pages may cause DB corruption.
+//! It is recommended to use it in SharedWorker.
 
 use crate::vfs::utils::{
     check_db_and_page_size, check_import_db, register_vfs, ImportDbError, LazyCell, MemChunksFile,

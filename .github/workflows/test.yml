@@ -20,7 +20,6 @@ jobs:
       uses: ./.github/actions/setup-emscripten
     - name: Test bundled
       run: |
-        cd sqlite-wasm-rs
         wasm-pack test --chrome --headless --features relaxed-idb
     - name: Test custom-libc
       if: matrix.os != 'windows-latest'
@@ -41,7 +40,6 @@ jobs:
       uses: ./.github/actions/setup-emscripten
     - name: Test bundled sqlite3mc
       run: |
-        cd sqlite-wasm-rs
         wasm-pack test --chrome --headless --features relaxed-idb,sqlite3mc
 
   test_diesel:
@@ -57,7 +55,7 @@ jobs:
         rustup target add wasm32-unknown-unknown
         cargo install wasm-bindgen-cli
         printf "[patch.crates-io]\n" >> Cargo.toml
-        printf "sqlite-wasm-rs = { path = \"../sqlite-wasm-rs\" }\n" >> Cargo.toml
+        printf "sqlite-wasm-rs = { path = \"..\" }\n" >> Cargo.toml
         WASM_BINDGEN_TEST_TIMEOUT=120 cargo xtask run-tests --wasm sqlite
 
   test_rusqlite:
@@ -73,7 +71,7 @@ jobs:
         git clone https://github.com/Spxg/rusqlite.git
         cd rusqlite
         printf "[patch.crates-io]\n" >> Cargo.toml
-        printf "sqlite-wasm-rs = { path = \"../sqlite-wasm-rs\" }\n" >> Cargo.toml
+        printf "sqlite-wasm-rs = { path = \"..\" }\n" >> Cargo.toml
         WASM_BINDGEN_TEST_TIMEOUT=60 wasm-pack test --chrome --headless --features modern-base
 
   test_clippy:
@@ -82,7 +80,6 @@ jobs:
     - uses: actions/checkout@v4
     - name: Check clippy
       run: |
-        cd sqlite-wasm-rs
         cargo clippy --no-default-features --features precompiled,relaxed-idb -- -D warnings
 
   test_implement_a_vfs:
@@ -116,7 +113,6 @@ jobs:
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - name: Test
       run: |
-        cd sqlite-wasm-rs
         wasm-pack test --chrome --headless --no-default-features --features precompiled,relaxed-idb
 
   test_atomics:
@@ -132,7 +128,6 @@ jobs:
       uses: ./.github/actions/setup-emscripten
     - name: Test
       run: |
-        cd sqlite-wasm-rs
         rustup toolchain install nightly
         rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
         RUSTFLAGS='-C target-feature=+atomics,+bulk-memory' rustup run nightly wasm-pack test --chrome --headless --features relaxed-idb -Z build-std=panic_abort,std
@@ -152,7 +147,6 @@ jobs:
         version: '3.1.52'
     - name: Test MSRV
       run: |
-        cd sqlite-wasm-rs
         rustup toolchain install 1.78.0
         rustup default 1.78.0
         wasm-pack test --chrome --headless --features relaxed-idb
