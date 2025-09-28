@@ -323,28 +323,15 @@ impl SQLiteVfsFile {
 pub enum RegisterVfsError {
     #[error("An error occurred converting the given vfs name to a CStr")]
     ToCStr,
-    #[error("Vfs has already been registered")]
-    VfsAlreadyRegistered,
-    #[error("Vfs is not registered")]
-    VfsNotRegistered,
     #[error("An error occurred while registering vfs with sqlite")]
     RegisterVfs,
 }
 
 /// Check whether vfs is registered and get vfs pointer
-pub fn registered_vfs(vfs_name: &str) -> Result<*mut sqlite3_vfs, RegisterVfsError> {
+pub fn registered_vfs(vfs_name: &str) -> Result<Option<*mut sqlite3_vfs>, RegisterVfsError> {
     let name = CString::new(vfs_name).map_err(|_| RegisterVfsError::ToCStr)?;
-    let name_ptr = name.into_raw();
-    let vfs = unsafe {
-        let vfs = sqlite3_vfs_find(name_ptr);
-        drop(CString::from_raw(name_ptr));
-        vfs
-    };
-    if vfs.is_null() {
-        Err(RegisterVfsError::VfsNotRegistered)
-    } else {
-        Ok(vfs)
-    }
+    let vfs = unsafe { sqlite3_vfs_find(name.as_ptr()) };
+    Ok((!vfs.is_null()).then_some(vfs))
 }
 
 /// Register vfs general method
@@ -356,15 +343,7 @@ pub fn register_vfs<IO: SQLiteIoMethods, V: SQLiteVfs<IO>>(
     let name = CString::new(vfs_name).map_err(|_| RegisterVfsError::ToCStr)?;
     let name_ptr = name.into_raw();
 
-    unsafe {
-        if !sqlite3_vfs_find(name_ptr).is_null() {
-            drop(CString::from_raw(name_ptr));
-            return Err(RegisterVfsError::VfsAlreadyRegistered);
-        }
-    }
-
     let app_data = VfsAppData::new(app_data).leak();
-
     let vfs = Box::leak(Box::new(V::vfs(name_ptr, app_data.cast())));
     let ret = unsafe { sqlite3_vfs_register(vfs, i32::from(default_vfs)) };
 
