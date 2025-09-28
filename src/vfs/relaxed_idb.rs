@@ -901,6 +901,9 @@ impl RelaxedIdbUtil {
 
 /// Register `relaxed-idb` vfs and return a utility object which can be used
 /// to perform basic administration of the file pool
+///
+/// If the vfs corresponding to `options.vfs_name` has been registered,
+/// only return a utility object.
 pub async fn install(options: &RelaxedIdbCfg, default_vfs: bool) -> Result<RelaxedIdbUtil> {
     static REGISTER_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _guard = REGISTER_GUARD.lock().await;
