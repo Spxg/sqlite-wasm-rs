@@ -794,17 +794,16 @@ pub async fn install(options: &OpfsSAHPoolCfg, default_vfs: bool) -> Result<Opfs
     static REGISTER_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _guard = REGISTER_GUARD.lock().await;
 
-    let vfs = match registered_vfs(&options.vfs_name) {
-        Ok(vfs) => vfs,
-        Err(RegisterVfsError::VfsNotRegistered) => {
-            register_vfs::<SyncAccessHandleIoMethods, SyncAccessHandleVfs>(
-                &options.vfs_name,
-                OpfsSAHPool::new(options).await?,
-                default_vfs,
-            )?
-        }
-        Err(vfs_error) => return Err(OpfsSAHError::Vfs(vfs_error)),
+    let vfs = if let Some(vfs) = registered_vfs(&options.vfs_name)? {
+        vfs
+    } else {
+        register_vfs::<SyncAccessHandleIoMethods, SyncAccessHandleVfs>(
+            &options.vfs_name,
+            OpfsSAHPool::new(options).await?,
+            default_vfs,
+        )?
     };
+
     let pool = unsafe { SyncAccessHandleStore::app_data(vfs) };
 
     Ok(OpfsSAHPoolUtil { pool })

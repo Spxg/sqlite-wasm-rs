@@ -1,4 +1,5 @@
 //! relaxed-idb vfs implementation
+//!
 //! **The `relaxed-idb` feature is required, and it is not recommended to use in a production environment.**
 //!
 //! ```rust
@@ -904,22 +905,20 @@ pub async fn install(options: &RelaxedIdbCfg, default_vfs: bool) -> Result<Relax
     static REGISTER_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _guard = REGISTER_GUARD.lock().await;
 
-    let pool = match registered_vfs(&options.vfs_name) {
-        Ok(vfs) => unsafe { RelaxedIdbStore::app_data(vfs) },
-        Err(RegisterVfsError::VfsNotRegistered) => {
-            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-            let pool = RelaxedIdb::new(options, tx).await?;
-            let vfs = register_vfs::<RelaxedIdbIoMethods, RelaxedIdbVfs>(
-                &options.vfs_name,
-                pool,
-                default_vfs,
-            )?;
+    let pool = if let Some(vfs) = registered_vfs(&options.vfs_name)? {
+        unsafe { RelaxedIdbStore::app_data(vfs) }
+    } else {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let pool = RelaxedIdb::new(options, tx).await?;
+        let vfs = register_vfs::<RelaxedIdbIoMethods, RelaxedIdbVfs>(
+            &options.vfs_name,
+            pool,
+            default_vfs,
+        )?;
 
-            let app_data = unsafe { RelaxedIdbStore::app_data(vfs) };
-            wasm_bindgen_futures::spawn_local(app_data.commit_loop(rx));
-            app_data
-        }
-        Err(vfs_error) => return Err(RelaxedIdbError::Vfs(vfs_error)),
+        let app_data = unsafe { RelaxedIdbStore::app_data(vfs) };
+        wasm_bindgen_futures::spawn_local(app_data.commit_loop(rx));
+        app_data
     };
 
     Ok(RelaxedIdbUtil { pool })
