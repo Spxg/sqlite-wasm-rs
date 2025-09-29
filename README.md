@@ -1,5 +1,3 @@
-# SQLite Wasm Rust
-
 [![Crates.io](https://img.shields.io/crates/v/sqlite-wasm-rs.svg)](https://crates.io/crates/sqlite-wasm-rs)
 
 Provide sqlite solution for `wasm32-unknown-unknown` target.
@@ -93,11 +91,11 @@ Here is an example showing how to use `sqlite-wasm-rs` to implement a simple in-
 This library is not thread-safe:
 
 * `JsValue` is not cross-threaded, see <https://github.com/rustwasm/wasm-bindgen/pull/955> for details.
-* sqlite is compiled with `-DSQLITE_THREADSAFE=0`
+* sqlite is compiled with `-DSQLITE_THREADSAFE=0`.
 
 ## Precompiled libsqlite3.a
 
-Since `wasm32-unknown-unknown` does not have sysroot, emscripten is used here for compilation, otherwise we need to copy a bunch of c headers required for sqlite3 compilation. If sqlite3 is compiled at compile time, the emscripten toolchain is required, and we cannot assume that all users have it installed. (Believe me, because rust mainly supports the `wasm32-unknown-unknown` target, most people do not have the emscripten toolchain). Considering that wasm is cross-platform, vendor compilation products are acceptable.
+Since `wasm32-unknown-unknown` does not have sysroot, emscripten is used here for compilation, otherwise we need to copy a bunch of c headers required for sqlite3 compilation. If bundled feature is enabled, the emscripten toolchain is required, and we cannot assume that all users have it installed. (Believe me, because rust mainly supports the `wasm32-unknown-unknown` target, most people do not have the emscripten toolchain). Considering that wasm is cross-platform, vendor compilation products are acceptable.
 
 About security:
 
@@ -126,11 +124,6 @@ export CFLAGS_wasm32_unknown_emscripten="-mno-reference-types"
 ```
 
 used to disable `reference-types` of the C library.
-
-## Nice Try
-
-* [`diesel`](https://github.com/diesel-rs/diesel): A safe, extensible ORM and Query Builder for Rust.
-* [`sqlight`](https://github.com/Spxg/sqlight): A SQLite Playground that runs completely locally.
 
 ## Related Project
 

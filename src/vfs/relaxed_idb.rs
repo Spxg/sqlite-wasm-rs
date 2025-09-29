@@ -796,7 +796,7 @@ impl RelaxedIdbCfgBuilder {
         self
     }
 
-    /// Build `RelaxedIdbCfg`
+    /// Build `RelaxedIdbCfg`.
     pub fn build(self) -> RelaxedIdbCfg {
         self.0
     }
@@ -828,7 +828,7 @@ impl Default for RelaxedIdbCfg {
     }
 }
 
-/// RelaxedIdb management tools exposed to clients.
+/// RelaxedIdbVfs management tool.
 pub struct RelaxedIdbUtil {
     pool: &'static VfsAppData<RelaxedIdb>,
 }
@@ -873,12 +873,12 @@ impl RelaxedIdbUtil {
         self.pool.export_db(filename)
     }
 
-    /// Delete the specified database, please make sure that the database is closed.
+    /// Delete the specified database, make sure that the database is closed.
     pub fn delete_db(&self, filename: &str) -> Result<WaitCommit> {
         self.pool.delete_db(filename)
     }
 
-    /// Delete all database, please make sure that all database is closed.
+    /// Delete all database, make sure that all database is closed.
     pub fn clear_all(&self) -> Result<WaitCommit> {
         self.pool.clear_all()
     }
@@ -899,11 +899,11 @@ impl RelaxedIdbUtil {
     }
 }
 
-/// Register `relaxed-idb` vfs and return a utility object which can be used
-/// to perform basic administration of the file pool
+/// Register `relaxed-idb` vfs and return a management tool which can be used
+/// to perform basic administration of the file pool.
 ///
 /// If the vfs corresponding to `options.vfs_name` has been registered,
-/// only return a utility object.
+/// only return a management tool without register.
 pub async fn install(options: &RelaxedIdbCfg, default_vfs: bool) -> Result<RelaxedIdbUtil> {
     static REGISTER_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _guard = REGISTER_GUARD.lock().await;
