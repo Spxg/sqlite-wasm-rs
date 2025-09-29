@@ -620,7 +620,7 @@ impl OpfsSAHPoolCfgBuilder {
         self
     }
 
-    /// Build OpfsSAHPoolCfg
+    /// Build `OpfsSAHPoolCfg`.
     pub fn build(self) -> OpfsSAHPoolCfg {
         self.0
     }
@@ -636,7 +636,7 @@ impl Default for OpfsSAHPoolCfgBuilder {
 pub struct OpfsSAHPoolCfg {
     /// The SQLite VFS name under which this pool's VFS is registered.
     pub vfs_name: String,
-    /// Specifies the OPFS directory name in which to store metadata for the `vfs_name`
+    /// Specifies the OPFS directory name in which to store metadata for the `vfs_name`.
     pub directory: String,
     /// If truthy, contents and filename mapping are removed from each SAH
     /// as it is acquired during initalization of the VFS, leaving the VFS's
@@ -701,10 +701,7 @@ impl OpfsSAHError {
     }
 }
 
-/// A OpfsSAHPoolUtil instance is exposed to clients in order to
-/// manipulate an OpfsSAHPool object without directly exposing that
-/// object and allowing for some semantic changes compared to that
-/// class.
+/// SAHPoolVfs management tool.
 pub struct OpfsSAHPoolUtil {
     pool: &'static VfsAppData<SyncAccessHandleAppData>,
 }
@@ -760,12 +757,12 @@ impl OpfsSAHPoolUtil {
         self.pool.export_db(filename)
     }
 
-    /// Delete the specified database, please make sure that the database is closed.
+    /// Delete the specified database, make sure that the database is closed.
     pub fn delete_db(&self, filename: &str) -> Result<bool> {
         self.pool.delete_file(filename)
     }
 
-    /// Delete all database, please make sure that all database is closed.
+    /// Delete all database, make sure that all database is closed.
     pub async fn clear_all(&self) -> Result<()> {
         self.pool.release_access_handles();
         self.pool.acquire_access_handles(true).await?;
@@ -788,11 +785,11 @@ impl OpfsSAHPoolUtil {
     }
 }
 
-/// Register `opfs-sahpool` vfs and return a utility object which can be used
-/// to perform basic administration of the file pool
+/// Register `opfs-sahpool` vfs and return a management tool which can be used
+/// to perform basic administration of the file pool.
 ///
 /// If the vfs corresponding to `options.vfs_name` has been registered,
-/// only return a utility object.
+/// only return a management tool without register.
 pub async fn install(options: &OpfsSAHPoolCfg, default_vfs: bool) -> Result<OpfsSAHPoolUtil> {
     static REGISTER_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _guard = REGISTER_GUARD.lock().await;

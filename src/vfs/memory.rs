@@ -160,7 +160,7 @@ pub enum MemVfsError {
     Generic(String),
 }
 
-/// MemVfs management tools exposed to clients.
+/// MemVfs management tool.
 pub struct MemVfsUtil(&'static VfsAppData<MemAppData>);
 
 unsafe impl Send for MemVfsUtil {}
@@ -244,12 +244,12 @@ impl MemVfsUtil {
         }
     }
 
-    /// Delete the specified database, please make sure that the database is closed.
+    /// Delete the specified database, make sure that the database is closed.
     pub fn delete_db(&self, filename: &str) {
         self.0.borrow_mut().remove(filename);
     }
 
-    /// Delete all database, please make sure that all database is closed.
+    /// Delete all database, make sure that all database is closed.
     pub fn clear_all(&self) {
         std::mem::take(&mut *self.0.borrow_mut());
     }
