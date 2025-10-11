@@ -292,6 +292,20 @@ pub(crate) unsafe fn install() -> &'static VfsAppData<MemAppData> {
     MemStore::app_data(vfs)
 }
 
+pub(crate) unsafe fn uninstall() {
+    let vfs_name = c"memvfs";
+    let vfs = sqlite3_vfs_find(vfs_name.as_ptr());
+
+    if !vfs.is_null() {
+        assert_eq!(
+            sqlite3_vfs_unregister(vfs),
+            SQLITE_OK,
+            "failed to unregister memvfs"
+        );
+        drop(Box::from_raw(vfs));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{

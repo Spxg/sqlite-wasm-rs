@@ -11,3 +11,10 @@ pub unsafe extern "C" fn sqlite3_os_init() -> std::ffi::c_int {
     memory::install();
     SQLITE_OK
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn sqlite3_os_end() -> std::ffi::c_int {
+    use crate::libsqlite3::SQLITE_OK;
+    memory::uninstall();
+    SQLITE_OK
+}
