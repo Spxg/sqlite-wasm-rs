@@ -302,7 +302,9 @@ pub(crate) unsafe fn uninstall() {
             SQLITE_OK,
             "failed to unregister memvfs"
         );
-        drop(VfsAppData::<MemAppData>::from_raw((*vfs).pAppData as *mut _));
+        drop(VfsAppData::<MemAppData>::from_raw(
+            (*vfs).pAppData as *mut _,
+        ));
         drop(Box::from_raw(vfs));
     }
 }
@@ -310,7 +312,10 @@ pub(crate) unsafe fn uninstall() {
 #[cfg(test)]
 mod tests {
     use crate::{
-        SQLITE_OK, mem_vfs::{MemAppData, MemFile, MemStore}, sqlite3_initialize, sqlite3_shutdown, utils::{VfsAppData, test_suite::test_vfs_store}
+        mem_vfs::{MemAppData, MemFile, MemStore},
+        sqlite3_initialize, sqlite3_shutdown,
+        utils::{test_suite::test_vfs_store, VfsAppData},
+        SQLITE_OK,
     };
     use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -323,16 +328,8 @@ mod tests {
     #[wasm_bindgen_test]
     fn test_initialize_shutdown() {
         unsafe {
-            assert_eq!(
-                sqlite3_initialize(),
-                SQLITE_OK,
-                "failed to initialize"
-            );
-            assert_eq!(
-                sqlite3_shutdown(),
-                SQLITE_OK,
-                "failed to shutdown"
-            );
+            assert_eq!(sqlite3_initialize(), SQLITE_OK, "failed to initialize");
+            assert_eq!(sqlite3_shutdown(), SQLITE_OK, "failed to shutdown");
         }
     }
 }
