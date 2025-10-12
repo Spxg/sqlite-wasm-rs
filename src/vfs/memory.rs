@@ -303,6 +303,7 @@ pub(crate) unsafe fn uninstall() {
             "failed to unregister memvfs"
         );
         drop(Box::from_raw(vfs));
+        drop(VfsAppData::<MemAppData>::from_raw((*vfs).pAppData as *mut _));
     }
 }
 
