@@ -3,6 +3,11 @@
 
 ## Unreleased
 
+### Added
+
+* Added `sqlite3_os_end` C interface.
+  [#117](https://github.com/Spxg/sqlite-wasm-rs/pull/117)
+
 --------------------------------------------------------------------------------
 
 ## [0.4.5](https://github.com/Spxg/sqlite-wasm-rs/compare/0.4.4...0.4.5)
