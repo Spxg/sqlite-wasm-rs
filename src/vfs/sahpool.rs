@@ -34,6 +34,7 @@
 //! [`opfs-explorer`](https://chromewebstore.google.com/detail/opfs-explorer/acndjpgkpaclldomagafnognkcgjignd)
 //! plugin to browse files.
 
+use std::cell::Cell;
 use crate::libsqlite3::*;
 use crate::vfs::utils::{
     check_import_db, random_name, register_vfs, registered_vfs, ImportDbError, RegisterVfsError,
@@ -91,6 +92,7 @@ struct OpfsSAHPool {
     map_filename_to_sah: Map,
     /// Maps SAHs to their opaque file names
     map_sah_to_opaque_name: Map,
+    vfs: Cell<*mut sqlite3_vfs>,
 }
 
 impl OpfsSAHPool {
@@ -146,6 +148,7 @@ impl OpfsSAHPool {
             map_filename_to_sah: Map::new(),
             available_sah: Set::default(),
             map_sah_to_opaque_name: Map::new(),
+            vfs: Cell::new(std::ptr::null_mut()),
         };
 
         pool.acquire_access_handles(clear_files).await?;
@@ -363,6 +366,71 @@ impl OpfsSAHPool {
             .ok()
             .filter(|x| !x.done())
             .map(|x| x.value().into())
+    }
+
+    // "Pauses" this VFS by unregistering it from SQLite and
+    // relinquishing all open SAHs, leaving the associated files
+    // intact. If this object is already paused, this is a
+    // no-op. Returns this object.
+    //
+    // This function throws if SQLite has any opened file handles
+    // hosted by this VFS, as the alternative would be to invoke
+    // Undefined Behavior by closing file handles out from under the
+    // library. Similarly, automatically closing any database handles
+    // opened by this VFS would invoke Undefined Behavior in
+    // downstream code which is holding those pointers.
+    //
+    // If this function throws due to open file handles then it has
+    // no side effects. If the OPFS API throws while closing handles
+    // then the VFS is left in an undefined state.
+    fn pause_vfs(&self, force: bool) -> Result<()> {
+        if !force && self.get_file_count() != 0 {
+            return Err(OpfsSAHError::Generic(
+                "Cannot pause: files may be in use".to_string()
+            ));
+        }
+
+        if self.get_capacity() > 0 {
+            let vfs = self.vfs.get();
+            if !vfs.is_null() {
+                unsafe {
+                    sqlite3_vfs_unregister(vfs);
+                }
+            }
+            self.release_access_handles();
+        }
+
+        Ok(())
+    }
+
+    // Returns true if this pool is currently paused else false.
+    fn is_paused(&self) -> bool {
+        self.get_capacity() == 0
+    }
+
+    // "Unpauses" this VFS, reacquiring all SAH's and (if successful)
+    // re-registering it with SQLite. This is a no-op if the VFS is
+    // not currently paused.
+    //
+    // The returned Promise resolves to this object. See
+    // acquire_access_handles() for how it behaves if it throws due to
+    // SAH acquisition failure.
+    async fn unpause_vfs(&self) -> Result<()> {
+        if !self.is_paused() {
+            return Ok(())
+        }
+
+        self.acquire_access_handles(false).await?;
+
+        let vfs = self.vfs.get();
+        if vfs.is_null() {
+            return Err(OpfsSAHError::Generic("VFS pointer is null. Did you forget to install?".to_string()));
+        }
+
+        match unsafe { sqlite3_vfs_register(vfs, 0) } {
+            SQLITE_OK => Ok(()),
+            error_code => Err(OpfsSAHError::Generic(format!("Failed to register VFS (SQLite error code: {error_code}")))
+        }
     }
 
     fn export_db(&self, filename: &str) -> Result<Vec<u8>> {
@@ -783,6 +851,18 @@ impl OpfsSAHPoolUtil {
     pub fn count(&self) -> u32 {
         self.pool.get_file_count()
     }
+
+    pub fn pause_vfs(&self, force: bool) -> Result<()> {
+        self.pool.pause_vfs(force)
+    }
+
+    pub async fn unpause_vfs(&self) -> Result<()> {
+        self.pool.unpause_vfs().await
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.pool.is_paused()
+    }
 }
 
 /// Register `opfs-sahpool` vfs and return a management tool which can be used
@@ -794,17 +874,19 @@ pub async fn install(options: &OpfsSAHPoolCfg, default_vfs: bool) -> Result<Opfs
     static REGISTER_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _guard = REGISTER_GUARD.lock().await;
 
-    let vfs = if let Some(vfs) = registered_vfs(&options.vfs_name)? {
-        vfs
-    } else {
-        register_vfs::<SyncAccessHandleIoMethods, SyncAccessHandleVfs>(
-            &options.vfs_name,
-            OpfsSAHPool::new(options).await?,
-            default_vfs,
-        )?
+    let vfs = match registered_vfs(&options.vfs_name)? {
+        Some(vfs) => vfs,
+        None => {
+            register_vfs::<SyncAccessHandleIoMethods, SyncAccessHandleVfs>(
+                &options.vfs_name,
+                OpfsSAHPool::new(options).await?,
+                default_vfs,
+            )?
+        }
     };
 
     let pool = unsafe { SyncAccessHandleStore::app_data(vfs) };
+    pool.vfs.set(vfs);
 
     Ok(OpfsSAHPoolUtil { pool })
 }
