@@ -34,12 +34,12 @@
 //! [`opfs-explorer`](https://chromewebstore.google.com/detail/opfs-explorer/acndjpgkpaclldomagafnognkcgjignd)
 //! plugin to browse files.
 
-use std::cell::Cell;
 use crate::libsqlite3::*;
 use crate::vfs::utils::{
     check_import_db, random_name, register_vfs, registered_vfs, ImportDbError, RegisterVfsError,
     SQLiteIoMethods, SQLiteVfs, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
 };
+use std::cell::Cell;
 
 use js_sys::{Array, DataView, IteratorNext, Map, Reflect, Set, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
@@ -386,7 +386,7 @@ impl OpfsSAHPool {
     fn pause_vfs(&self, force: bool) -> Result<()> {
         if !force && self.get_file_count() != 0 {
             return Err(OpfsSAHError::Generic(
-                "Cannot pause: files may be in use".to_string()
+                "Cannot pause: files may be in use".to_string(),
             ));
         }
 
@@ -417,19 +417,23 @@ impl OpfsSAHPool {
     // SAH acquisition failure.
     async fn unpause_vfs(&self) -> Result<()> {
         if !self.is_paused() {
-            return Ok(())
+            return Ok(());
         }
 
         self.acquire_access_handles(false).await?;
 
         let vfs = self.vfs.get();
         if vfs.is_null() {
-            return Err(OpfsSAHError::Generic("VFS pointer is null. Did you forget to install?".to_string()));
+            return Err(OpfsSAHError::Generic(
+                "VFS pointer is null. Did you forget to install?".to_string(),
+            ));
         }
 
         match unsafe { sqlite3_vfs_register(vfs, 0) } {
             SQLITE_OK => Ok(()),
-            error_code => Err(OpfsSAHError::Generic(format!("Failed to register VFS (SQLite error code: {error_code}")))
+            error_code => Err(OpfsSAHError::Generic(format!(
+                "Failed to register VFS (SQLite error code: {error_code}"
+            ))),
         }
     }
 
@@ -876,13 +880,11 @@ pub async fn install(options: &OpfsSAHPoolCfg, default_vfs: bool) -> Result<Opfs
 
     let vfs = match registered_vfs(&options.vfs_name)? {
         Some(vfs) => vfs,
-        None => {
-            register_vfs::<SyncAccessHandleIoMethods, SyncAccessHandleVfs>(
-                &options.vfs_name,
-                OpfsSAHPool::new(options).await?,
-                default_vfs,
-            )?
-        }
+        None => register_vfs::<SyncAccessHandleIoMethods, SyncAccessHandleVfs>(
+            &options.vfs_name,
+            OpfsSAHPool::new(options).await?,
+            default_vfs,
+        )?,
     };
 
     let pool = unsafe { SyncAccessHandleStore::app_data(vfs) };
