@@ -41,6 +41,7 @@ use crate::vfs::utils::{
 };
 use std::cell::Cell;
 
+use crate::utils::SQLiteVfsFile;
 use js_sys::{Array, DataView, IteratorNext, Map, Reflect, Set, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
@@ -92,7 +93,10 @@ struct OpfsSAHPool {
     map_filename_to_sah: Map,
     /// Maps SAHs to their opaque file names
     map_sah_to_opaque_name: Map,
-    vfs: Cell<*mut sqlite3_vfs>,
+    is_paused: Cell<bool>,
+    open_files: Set,
+    /// Sqlite3 VFS and makeDflt argument
+    vfs: Cell<(*mut sqlite3_vfs, bool)>,
 }
 
 impl OpfsSAHPool {
@@ -148,7 +152,9 @@ impl OpfsSAHPool {
             map_filename_to_sah: Map::new(),
             available_sah: Set::default(),
             map_sah_to_opaque_name: Map::new(),
-            vfs: Cell::new(std::ptr::null_mut()),
+            is_paused: Cell::new(false),
+            open_files: Set::default(),
+            vfs: Cell::new((std::ptr::null_mut(), false)),
         };
 
         pool.acquire_access_handles(clear_files).await?;
@@ -276,6 +282,7 @@ impl OpfsSAHPool {
                 .fill(0, filename.len() as u32, HEADER_MAX_FILENAME_SIZE as u32);
             self.map_filename_to_sah.set(&JsValue::from(filename), sah);
             self.available_sah.delete(sah);
+            self.open_files.add(&JsValue::from(filename));
         } else {
             self.header_buffer
                 .fill(0, 0, HEADER_MAX_FILENAME_SIZE as u32);
@@ -368,23 +375,27 @@ impl OpfsSAHPool {
             .map(|x| x.value().into())
     }
 
-    // "Pauses" this VFS by unregistering it from SQLite and
-    // relinquishing all open SAHs, leaving the associated files
-    // intact. If this object is already paused, this is a
-    // no-op. Returns this object.
-    //
-    // This function throws if SQLite has any opened file handles
-    // hosted by this VFS, as the alternative would be to invoke
-    // Undefined Behavior by closing file handles out from under the
-    // library. Similarly, automatically closing any database handles
-    // opened by this VFS would invoke Undefined Behavior in
-    // downstream code which is holding those pointers.
-    //
-    // If this function throws due to open file handles then it has
-    // no side effects. If the OPFS API throws while closing handles
-    // then the VFS is left in an undefined state.
-    fn pause_vfs(&self, force: bool) -> Result<()> {
-        if !force && self.get_file_count() != 0 {
+    /// "Pauses" this VFS by unregistering it from SQLite and
+    /// relinquishing all open SAHs, leaving the associated files
+    /// intact. If this instance is already paused, this is a
+    /// no-op. Returns a Result.
+    ///
+    /// This method returns an error if SQLite has any opened file handles
+    /// hosted by this VFS, as the alternative would be to invoke
+    /// Undefined Behavior by closing file handles out from under the
+    /// library. Similarly, automatically closing any database handles
+    /// opened by this VFS would invoke Undefined Behavior in
+    /// downstream code which is holding those pointers.
+    ///
+    /// If this method returns and error due to open file handles then it has
+    /// no side effects. If the OPFS API returns an error while closing handles
+    /// then the VFS is left in an undefined state.
+    fn pause_vfs(&self) -> Result<()> {
+        if self.is_paused.get() {
+            return Ok(());
+        }
+
+        if self.open_files.size() > 0 {
             return Err(OpfsSAHError::Generic(
                 "Cannot pause: files may be in use".to_string(),
             ));
@@ -392,49 +403,53 @@ impl OpfsSAHPool {
 
         if self.get_capacity() > 0 {
             let vfs = self.vfs.get();
-            if !vfs.is_null() {
+            if !vfs.0.is_null() {
                 unsafe {
-                    sqlite3_vfs_unregister(vfs);
+                    sqlite3_vfs_unregister(vfs.0);
                 }
             }
             self.release_access_handles();
         }
 
+        self.is_paused.set(true);
+
         Ok(())
     }
 
-    // Returns true if this pool is currently paused else false.
-    fn is_paused(&self) -> bool {
-        self.get_capacity() == 0
-    }
-
-    // "Unpauses" this VFS, reacquiring all SAH's and (if successful)
-    // re-registering it with SQLite. This is a no-op if the VFS is
-    // not currently paused.
-    //
-    // The returned Promise resolves to this object. See
-    // acquire_access_handles() for how it behaves if it throws due to
-    // SAH acquisition failure.
+    /// "Unpauses" this VFS, reacquiring all SAH's and (if successful)
+    /// re-registering it with SQLite. This is a no-op if the VFS is
+    /// not currently paused.
+    ///
+    /// The returned Future resolves to a Result. See
+    /// acquire_access_handles() for how it behaves if it returns an error due to
+    /// SAH acquisition failure.
     async fn unpause_vfs(&self) -> Result<()> {
-        if !self.is_paused() {
+        if !self.is_paused.get() {
             return Ok(());
         }
 
         self.acquire_access_handles(false).await?;
 
         let vfs = self.vfs.get();
-        if vfs.is_null() {
+        if vfs.0.is_null() {
             return Err(OpfsSAHError::Generic(
                 "VFS pointer is null. Did you forget to install?".to_string(),
             ));
         }
 
-        match unsafe { sqlite3_vfs_register(vfs, 0) } {
-            SQLITE_OK => Ok(()),
+        match unsafe { sqlite3_vfs_register(vfs.0, i32::from(vfs.1)) } {
+            SQLITE_OK => {
+                self.is_paused.set(false);
+                Ok(())
+            }
             error_code => Err(OpfsSAHError::Generic(format!(
                 "Failed to register VFS (SQLite error code: {error_code}"
             ))),
         }
+    }
+
+    fn close_file(&self, file: &mut str) {
+        self.open_files.delete(&JsValue::from(&*file));
     }
 
     fn export_db(&self, filename: &str) -> Result<Vec<u8>> {
@@ -647,6 +662,23 @@ impl SQLiteIoMethods for SyncAccessHandleIoMethods {
     ) -> ::std::os::raw::c_int {
         SQLITE_IOCAP_UNDELETABLE_WHEN_OPEN
     }
+
+    unsafe extern "C" fn xClose(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
+        let vfs_file = SQLiteVfsFile::from_file(pFile);
+        let app_data = Self::Store::app_data(vfs_file.vfs);
+
+        app_data.close_file(vfs_file.name());
+
+        if vfs_file.flags & SQLITE_OPEN_DELETEONCLOSE != 0 {
+            if let Err(err) = Self::Store::delete_file(vfs_file.vfs, vfs_file.name()) {
+                return app_data.store_err(err);
+            }
+        }
+
+        drop(Box::from_raw(vfs_file.name()));
+
+        SQLITE_OK
+    }
 }
 
 struct SyncAccessHandleVfs;
@@ -856,8 +888,8 @@ impl OpfsSAHPoolUtil {
         self.pool.get_file_count()
     }
 
-    pub fn pause_vfs(&self, force: bool) -> Result<()> {
-        self.pool.pause_vfs(force)
+    pub fn pause_vfs(&self) -> Result<()> {
+        self.pool.pause_vfs()
     }
 
     pub async fn unpause_vfs(&self) -> Result<()> {
@@ -865,7 +897,7 @@ impl OpfsSAHPoolUtil {
     }
 
     pub fn is_paused(&self) -> bool {
-        self.pool.is_paused()
+        self.pool.is_paused.get()
     }
 }
 
@@ -888,7 +920,7 @@ pub async fn install(options: &OpfsSAHPoolCfg, default_vfs: bool) -> Result<Opfs
     };
 
     let pool = unsafe { SyncAccessHandleStore::app_data(vfs) };
-    pool.vfs.set(vfs);
+    pool.vfs.set((vfs, default_vfs));
 
     Ok(OpfsSAHPoolUtil { pool })
 }
