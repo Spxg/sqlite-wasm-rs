@@ -142,7 +142,7 @@ async fn test_opfs_sah_vfs_pause() {
             c"test-vfs-pause".as_ptr().cast(),
         )
     };
-    asset_eq!(SQLITE_OK, ret);
+    assert_eq!(SQLITE_OK, ret);
 
     prepare_simple_db(db);
 
@@ -151,7 +151,7 @@ async fn test_opfs_sah_vfs_pause() {
     assert!(!util.is_paused());
 
     util.pause_vfs().unwrap();
-    asset!(util.is_paused());
+    assert!(util.is_paused());
 
     let mut db2 = std::ptr::null_mut();
     let ret = unsafe {
