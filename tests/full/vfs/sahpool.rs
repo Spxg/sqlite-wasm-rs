@@ -146,12 +146,15 @@ async fn test_opfs_sah_vfs_pause() {
 
     prepare_simple_db(db);
 
+    util.pause_vfs().unwrap_err();
+
     unsafe { sqlite3_close(db) };
 
     assert!(!util.is_paused());
 
     util.pause_vfs().unwrap();
     assert!(util.is_paused());
+    util.pause_vfs().unwrap();
 
     let mut db2 = std::ptr::null_mut();
     let ret = unsafe {
@@ -166,6 +169,7 @@ async fn test_opfs_sah_vfs_pause() {
 
     util.unpause_vfs().await.unwrap();
     assert!(!util.is_paused());
+    util.unpause_vfs().await.unwrap();
 
     let mut db3 = std::ptr::null_mut();
     let ret = unsafe {

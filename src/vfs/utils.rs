@@ -505,6 +505,16 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
         flags: ::std::os::raw::c_int,
         pOutFlags: *mut ::std::os::raw::c_int,
     ) -> ::std::os::raw::c_int {
+        Self::xOpenImpl(pVfs, zName, pFile, flags, pOutFlags)
+    }
+
+    unsafe extern "C" fn xOpenImpl(
+        pVfs: *mut sqlite3_vfs,
+        zName: sqlite3_filename,
+        pFile: *mut sqlite3_file,
+        flags: ::std::os::raw::c_int,
+        pOutFlags: *mut ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int {
         let app_data = IO::Store::app_data(pVfs);
 
         let name = if zName.is_null() {
@@ -657,6 +667,10 @@ pub trait SQLiteIoMethods {
     };
 
     unsafe extern "C" fn xClose(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
+        Self::xCloseImpl(pFile)
+    }
+
+    unsafe extern "C" fn xCloseImpl(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
         let vfs_file = SQLiteVfsFile::from_file(pFile);
         let app_data = Self::Store::app_data(vfs_file.vfs);
 
