@@ -3,6 +3,11 @@
 
 ## Unreleased
 
+### Added
+
+* Added comment about incorrect implementation of `Send` + `Sync`.
+  [#125](https://github.com/Spxg/sqlite-wasm-rs/pull/125)
+
 ### Changed
 
 * Reduced the use of `JsValue` in opfs-sahpool VFS.

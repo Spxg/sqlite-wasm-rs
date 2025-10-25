@@ -166,8 +166,10 @@ pub enum MemVfsError {
 /// MemVfs management tool.
 pub struct MemVfsUtil(&'static VfsAppData<MemAppData>);
 
+/// Because it was previously implemented with `Send` + `Sync` by mistake,
+/// it is temporarily retained for compatibility reasons and will be
+/// removed in the next major version update.
 unsafe impl Send for MemVfsUtil {}
-
 unsafe impl Sync for MemVfsUtil {}
 
 impl Default for MemVfsUtil {

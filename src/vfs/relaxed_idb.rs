@@ -833,8 +833,10 @@ pub struct RelaxedIdbUtil {
     pool: &'static VfsAppData<RelaxedIdb>,
 }
 
+/// Because it was previously implemented with `Send` + `Sync` by mistake,
+/// it is temporarily retained for compatibility reasons and will be
+/// removed in the next major version update.
 unsafe impl Send for RelaxedIdbUtil {}
-
 unsafe impl Sync for RelaxedIdbUtil {}
 
 impl RelaxedIdbUtil {

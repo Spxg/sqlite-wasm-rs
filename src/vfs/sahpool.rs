@@ -815,8 +815,10 @@ pub struct OpfsSAHPoolUtil {
     pool: &'static VfsAppData<SyncAccessHandleAppData>,
 }
 
+/// Because it was previously implemented with `Send` + `Sync` by mistake,
+/// it is temporarily retained for compatibility reasons and will be 
+/// removed in the next major version update.
 unsafe impl Send for OpfsSAHPoolUtil {}
-
 unsafe impl Sync for OpfsSAHPoolUtil {}
 
 impl OpfsSAHPoolUtil {
