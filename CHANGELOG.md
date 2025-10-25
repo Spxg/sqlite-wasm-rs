@@ -3,6 +3,11 @@
 
 ## Unreleased
 
+### Changed
+
+* Reduced the use of `JsValue` in opfs-sahpool VFS.
+  [#124](https://github.com/Spxg/sqlite-wasm-rs/pull/124)
+
 --------------------------------------------------------------------------------
 
 ## [0.4.6](https://github.com/Spxg/sqlite-wasm-rs/compare/0.4.5...0.4.6)
