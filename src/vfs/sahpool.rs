@@ -233,9 +233,11 @@ impl OpfsSAHPool {
             return Ok(None);
         }
 
-        let name_length = Array::from(&self.header_buffer)
+        let name_length = self
+            .header_buffer
+            .to_vec()
             .iter()
-            .position(|x| x.as_f64().unwrap() as u8 == 0)
+            .position(|&x| x == 0)
             .unwrap_or_default();
         if name_length == 0 {
             sah.truncate_with_u32(HEADER_OFFSET_DATA as u32)
