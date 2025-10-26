@@ -434,10 +434,10 @@ impl RelaxedIdb {
     fn export_db(&self, name: &str) -> Result<Vec<u8>> {
         let name2file = self.name2file.borrow();
 
-        if let Some(file) = name2file.get(name) {
-            if let IdbFile::Main(file) = file {
+        match name2file.get(name) {
+            Some(IdbFile::Main(file)) => {
                 let file_size = file.file_size;
-                let mut ret = vec![0; file.file_size];
+                let mut ret = vec![0; file_size];
                 for (&offset, buffer) in &file.blocks {
                     if offset >= file_size {
                         continue;
@@ -445,15 +445,13 @@ impl RelaxedIdb {
                     buffer.copy_to(&mut ret[offset..offset + file.block_size]);
                 }
                 Ok(ret)
-            } else {
-                Err(RelaxedIdbError::Generic(
-                    "Does not support dumping temporary files".into(),
-                ))
             }
-        } else {
-            Err(RelaxedIdbError::Generic(
+            Some(IdbFile::Temp(_)) => Err(RelaxedIdbError::Generic(
+                "Does not support dumping temporary files".into(),
+            )),
+            None => Err(RelaxedIdbError::Generic(
                 "The file to be exported does not exist".into(),
-            ))
+            )),
         }
     }
 
