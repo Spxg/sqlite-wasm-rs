@@ -1,4 +1,4 @@
-//! Memory VFS, used as the default VFS
+//! memory vfs, used as the default VFS
 //!
 //! ```rust
 //! use sqlite_wasm_rs as ffi;

@@ -5,15 +5,15 @@
 const FULL_FEATURED: [&str; 24] = [
     "-DSQLITE_OS_OTHER",
     "-DSQLITE_USE_URI",
-    // wasm is single-threaded
+    // SQLite is configured for a single-threaded environment, as WebAssembly is single-threaded by default.
     "-DSQLITE_THREADSAFE=0",
     "-DSQLITE_TEMP_STORE=2",
     "-DSQLITE_DEFAULT_CACHE_SIZE=-16384",
     "-DSQLITE_DEFAULT_PAGE_SIZE=8192",
     "-DSQLITE_OMIT_DEPRECATED",
-    // there is no dlopen on this platform.
+    // Disable extension loading, as dynamic linking (dlopen) is not supported in WASM.
     "-DSQLITE_OMIT_LOAD_EXTENSION",
-    // single-threaded, single connection is enough
+    // In a single-threaded context, a shared cache is unnecessary.
     "-DSQLITE_OMIT_SHARED_CACHE",
     "-DSQLITE_ENABLE_UNLOCK_NOTIFY",
     "-DSQLITE_ENABLE_API_ARMOR",
@@ -176,10 +176,10 @@ fn bindgen(output: &str) {
     ) -> ::std::os::raw::c_int;
 }"#,
         )
-        // there is no dlopen on this platform.
+        // Block functions related to dynamic library loading, which is not available.
         .blocklist_function("sqlite3_load_extension")
         .blocklist_function("sqlite3_enable_load_extension")
-        // DSQLITE_OMIT_DEPRECATED
+        // Block deprecated functions that are omitted from the build via the DSQLITE_OMIT_DEPRECATED flag.
         .blocklist_function("sqlite3_profile")
         .blocklist_function("sqlite3_trace")
         .blocklist_function(".*16.*")
@@ -204,6 +204,7 @@ fn bindgen(output: &str) {
         .blocklist_item("__.*");
 
     bindings = bindings
+        // Workaround for bindgen issue #1941, ensuring symbols are public.
         // https://github.com/rust-lang/rust-bindgen/issues/1941
         .clang_arg("-fvisibility=default");
 

@@ -529,6 +529,7 @@ impl RelaxedIdb {
         }
         store.delete(key_range(file, file_size)).build()?;
 
+        // The `RefMut` from `name2file` is explicitly dropped here to avoid holding the borrow across an `.await` point.
         drop(name2file);
 
         transaction.commit().await?;
@@ -728,7 +729,7 @@ impl SQLiteVfs<RelaxedIdbIoMethods> for RelaxedIdbVfs {
     const VERSION: ::std::os::raw::c_int = 1;
 }
 
-/// Waiting for commit result
+/// A future that resolves when a pending IndexedDB commit operation is complete.
 pub struct WaitCommit(tokio::sync::oneshot::Receiver<Result<()>>);
 
 impl Future for WaitCommit {

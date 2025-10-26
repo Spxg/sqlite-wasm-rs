@@ -76,23 +76,22 @@ struct SyncAccessFile {
 }
 
 struct OpfsSAHPool {
-    /// Directory handle to the subdir of vfs root which holds
-    /// the randomly-named "opaque" files. This subdir exists in the
-    /// hope that we can eventually support client-created files in
+    /// Directory handle to the `.opaque` subdirectory within the VFS root.
+    /// This directory holds the actual files, which have randomly-generated names.
     dh_opaque: FileSystemDirectoryHandle,
-    /// Buffer used by [sg]et_associated_filename()
+    /// A reusable buffer for reading and writing file headers.
     header_buffer: Uint8Array,
-    /// DataView for self.header_buffer
+    /// A `DataView` for accessing the binary data in `header_buffer`.
     header_buffer_view: DataView,
-    /// Set of currently-unused SAHs
+    /// A pool of available `SyncAccessHandle`s that are not currently associated with a database file.
     available_files: RefCell<Vec<SyncAccessFile>>,
-    /// Maps client-side file names to SAHs
+    /// Maps the user-facing database filenames to their underlying `SyncAccessFile`.
     map_filename_to_file: RefCell<HashMap<String, SyncAccessFile>>,
-    /// Check if VFS is paused
+    /// A flag to indicate whether the VFS is currently paused.
     is_paused: Cell<bool>,
-    /// Open files
+    /// A set of filenames for all currently open database connections.
     open_files: RefCell<HashSet<String>>,
-    /// Sqlite3 VFS and makeDflt argument
+    /// A tuple holding the raw pointer to the `sqlite3_vfs` struct and whether it was registered as the default.
     vfs: Cell<(*mut sqlite3_vfs, bool)>,
 }
 
@@ -198,7 +197,7 @@ impl OpfsSAHPool {
         let available_length = available_files.len();
         let max_reduce = available_length.min(n as usize);
         let files = available_files.split_off(available_length - max_reduce);
-        // drop here
+        // The `RefMut` from `name2file` is explicitly dropped here to avoid holding the borrow across an `.await` point.
         drop(available_files);
 
         for file in files {
@@ -653,7 +652,7 @@ impl SQLiteIoMethods for SyncAccessHandleIoMethods {
 
     unsafe extern "C" fn xClose(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
         let vfs_file = SQLiteVfsFile::from_file(pFile);
-        // `Clone` before `Drop`
+        // The VFS file handle will be dropped, so we must clone the filename to use it after the drop.
         let file = vfs_file.name().to_string();
         let app_data = SyncAccessHandleStore::app_data(vfs_file.vfs);
         let ret = Self::xCloseImpl(pFile);
@@ -682,7 +681,7 @@ impl SQLiteVfs<SyncAccessHandleIoMethods> for SyncAccessHandleVfs {
         if ret == SQLITE_OK {
             let app_data = SyncAccessHandleStore::app_data(pVfs);
 
-            // pFile has been allocated
+            // At this point, SQLite has allocated the pFile structure for us.
             let vfs_file = SQLiteVfsFile::from_file(pFile);
             app_data
                 .open_files
