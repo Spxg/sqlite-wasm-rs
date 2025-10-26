@@ -1,4 +1,4 @@
-//! Some tools for implementing VFS
+//! Low-level utilities, traits, and macros for implementing custom SQLite Virtual File Systems (VFS).
 
 use crate::libsqlite3::*;
 
@@ -10,7 +10,7 @@ use std::{
     ops::Deref,
 };
 
-/// Return error code if expr is true.
+/// A macro to return a specific SQLite error code if a condition is true.
 ///
 /// The default error code is SQLITE_ERROR.
 #[macro_export]
@@ -25,9 +25,7 @@ macro_rules! bail {
     };
 }
 
-/// Unpack `Option<T>`.
-///
-/// If it is None, return an error code.
+/// A macro to safely unwrap an `Option<T>`, returning a SQLite error code on `None`.
 ///
 /// The default error code is SQLITE_ERROR.
 #[macro_export]
@@ -44,9 +42,7 @@ macro_rules! check_option {
     };
 }
 
-/// Unpack `Ok<T>`.
-///
-/// If it is Err, return an error code.
+/// A macro to safely unwrap a `Result<T, E>`, returning a SQLite error code on `Err`.
 ///
 /// The default err code is SQLITE_ERROR.
 #[macro_export]
@@ -63,7 +59,7 @@ macro_rules! check_result {
     };
 }
 
-/// Mark unused parameter
+/// A macro to explicitly mark a parameter as unused, suppressing compiler warnings.
 #[macro_export]
 macro_rules! unused {
     ($ex:expr) => {
@@ -79,7 +75,9 @@ unsafe impl<T> Sync for ThreadLocalWrapper<T> {}
 #[cfg(not(target_feature = "atomics"))]
 unsafe impl<T> Send for ThreadLocalWrapper<T> {}
 
-/// Wrapper around [`Lazy`] adding `Send + Sync` when `atomics` is not enabled.
+/// A wrapper around [`once_cell::unsync::Lazy`] that provides `Send` and `Sync`
+/// trait implementations when the `atomics` target feature is not enabled,
+/// allowing for thread-local static initialization.
 pub struct LazyCell<T, F = fn() -> T>(ThreadLocalWrapper<Lazy<T, F>>);
 
 impl<T, F> LazyCell<T, F> {
@@ -105,13 +103,13 @@ impl<T> Deref for LazyCell<T> {
 /// The header of the SQLite file is used to determine whether the imported file is legal.
 pub const SQLITE3_HEADER: &str = "SQLite format 3";
 
-/// get random name if zFileName is null and other cases
+/// Generates a random, temporary filename, typically used when SQLite requests a file with a NULL name.
 pub fn random_name() -> String {
     let random = Number::from(Math::random()).to_string(36).unwrap();
     random.slice(2, random.length()).as_string().unwrap()
 }
 
-/// Chunks storage in memory, used for temporary file
+/// An in-memory file implementation that stores data in fixed-size chunks. Suitable for temporary files.
 pub struct MemChunksFile {
     chunks: Vec<Vec<u8>>,
     chunk_size: Option<usize>,
@@ -125,7 +123,7 @@ impl Default for MemChunksFile {
 }
 
 impl MemChunksFile {
-    /// New with chunk size
+    /// Creates a new `MemChunksFile` with a specified chunk size.
     pub fn new(chunk_size: usize) -> Self {
         assert!(chunk_size != 0, "chunk size can't be zero");
         MemChunksFile {
@@ -135,7 +133,7 @@ impl MemChunksFile {
         }
     }
 
-    /// The chunk size is determined when writing for the first time.
+    /// Creates a `MemChunksFile` where the chunk size is determined by the size of the first write operation.
     ///
     /// This is often used for the main DB file implementation.
     pub fn waiting_for_write() -> Self {
@@ -268,7 +266,7 @@ impl VfsFile for MemChunksFile {
     }
 }
 
-/// The actual pFile type in Vfs.
+/// The core file-handle structure for a custom VFS, designed to be compatible with SQLite's C interface.
 ///
 /// `szOsFile` must be set to the size of `SQLiteVfsFile`.
 #[repr(C)]
@@ -312,13 +310,13 @@ impl SQLiteVfsFile {
         ))
     }
 
-    /// Convert a `&'static SQLiteVfsFile` pointer to `*mut sqlite3_file` pointer.
+    /// Converts a reference to this VFS file structure into a raw `*mut sqlite3_file` pointer that can be passed to SQLite.
     pub fn sqlite3_file(&'static self) -> *mut sqlite3_file {
         self as *const SQLiteVfsFile as *mut sqlite3_file
     }
 }
 
-/// Possible errors when registering Vfs
+/// Represents errors that can occur during the VFS registration process.
 #[derive(thiserror::Error, Debug)]
 pub enum RegisterVfsError {
     #[error("An error occurred converting the given vfs name to a CStr")]
@@ -327,14 +325,14 @@ pub enum RegisterVfsError {
     RegisterVfs,
 }
 
-/// Check whether vfs is registered and get vfs pointer
+/// Checks if a VFS with the given name is already registered with SQLite and returns a pointer to it if found.
 pub fn registered_vfs(vfs_name: &str) -> Result<Option<*mut sqlite3_vfs>, RegisterVfsError> {
     let name = CString::new(vfs_name).map_err(|_| RegisterVfsError::ToCStr)?;
     let vfs = unsafe { sqlite3_vfs_find(name.as_ptr()) };
     Ok((!vfs.is_null()).then_some(vfs))
 }
 
-/// Register vfs general method
+/// A generic function to register a custom VFS implementation with SQLite.
 pub fn register_vfs<IO: SQLiteIoMethods, V: SQLiteVfs<IO>>(
     vfs_name: &str,
     app_data: IO::AppData,
@@ -359,7 +357,7 @@ pub fn register_vfs<IO: SQLiteIoMethods, V: SQLiteVfs<IO>>(
     Ok(vfs as *mut sqlite3_vfs)
 }
 
-/// Used to log and retrieve Vfs errors
+/// A container for VFS-specific errors, holding both an error code and a descriptive message.
 #[derive(Debug)]
 pub struct VfsError {
     code: i32,
@@ -372,10 +370,11 @@ impl VfsError {
     }
 }
 
-/// Wrapper for `Result`
+/// A specialized `Result` type for VFS operations.
 pub type VfsResult<T> = Result<T, VfsError>;
 
-/// Wrapper for `pAppData`
+/// A wrapper for the `pAppData` pointer in `sqlite3_vfs`, providing a safe way
+/// to manage VFS-specific application data and error states.
 pub struct VfsAppData<T> {
     data: T,
     last_err: RefCell<Option<(i32, String)>>,
@@ -401,12 +400,12 @@ impl<T> VfsAppData<T> {
         *Box::from_raw(t)
     }
 
-    /// Pop vfs last errcode and errmsg
+    /// Retrieves and clears the last error recorded for the VFS.
     pub fn pop_err(&self) -> Option<(i32, String)> {
         self.last_err.borrow_mut().take()
     }
 
-    /// Store errcode and errmsg
+    /// Stores an error code and message for the VFS, to be retrieved later by `xGetLastError`.
     pub fn store_err(&self, err: VfsError) -> i32 {
         let VfsError { code, message } = err;
         self.last_err.borrow_mut().replace((code, message));
@@ -423,7 +422,7 @@ impl<T> Deref for VfsAppData<T> {
     }
 }
 
-/// Some basic capabilities of file
+/// A trait defining the basic I/O capabilities required for a VFS file implementation.
 pub trait VfsFile {
     /// Abstraction of `xRead`, returns true for `SQLITE_OK` and false for `SQLITE_IOERR_SHORT_READ`
     fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<bool>;
@@ -462,7 +461,7 @@ pub trait VfsStore<File, AppData> {
     ) -> VfsResult<i32>;
 }
 
-/// Abstraction of SQLite vfs
+/// A trait that abstracts the `sqlite3_vfs` struct, allowing for a more idiomatic Rust implementation.
 #[allow(clippy::missing_safety_doc)]
 pub trait SQLiteVfs<IO: SQLiteIoMethods> {
     const VERSION: ::std::os::raw::c_int;
@@ -635,7 +634,7 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
     }
 }
 
-/// Abstraction of SQLite vfs's io methods
+/// A trait that abstracts the `sqlite3_io_methods` struct, allowing for a more idiomatic Rust implementation.
 #[allow(clippy::missing_safety_doc)]
 pub trait SQLiteIoMethods {
     type File: VfsFile;
@@ -837,7 +836,7 @@ pub trait SQLiteIoMethods {
     }
 }
 
-/// Some x methods simulated using JS
+/// A module containing shims for VFS methods that are implemented using JavaScript interoperability.
 #[allow(clippy::missing_safety_doc)]
 pub mod x_methods_shim {
     use super::*;

@@ -17,29 +17,30 @@ mod libsqlite3;
 #[allow(non_snake_case)]
 mod shim;
 
-/// vfs implementation
+/// Virtual File System implementations for different browser storage backends.
 #[allow(non_upper_case_globals)]
 #[allow(non_camel_case_types)]
 #[allow(non_snake_case)]
 mod vfs;
 
-// sqlite3 bindings
+/// Raw C-style bindings to the underlying `libsqlite3` library.
 pub use libsqlite3::*;
 
-// mem vfs implementation
+/// In-memory VFS implementation.
 pub use vfs::memory as mem_vfs;
 
-// opfs sync access handle vfs implementation
+/// Origin Private File System (OPFS) VFS implementation using `SyncAccessHandle`.
 pub use vfs::sahpool as sahpool_vfs;
 
-// relaxed idb vfs implementation
+/// IndexedDB VFS implementation with relaxed durability guarantees.
 #[cfg(feature = "relaxed-idb")]
 pub use vfs::relaxed_idb as relaxed_idb_vfs;
 
-// some tools for implementing VFS
+/// Utility functions and types to help with creating custom VFS implementations.
 pub use vfs::utils;
 
-// `pub use` to avoid optimization
+/// Re-export of `sqlite-wasm-libc` to ensure it's linked when the `custom-libc`
+/// feature is enabled. This prevents the compiler from optimizing it away.
 #[cfg(feature = "custom-libc")]
 pub use sqlite_wasm_libc;
 
