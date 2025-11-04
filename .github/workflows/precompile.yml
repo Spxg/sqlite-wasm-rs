@@ -20,8 +20,7 @@ jobs:
         rustup target add wasm32-unknown-unknown
         export CARGO_PROFILE_RELEASE_OPT_LEVEL="z"
         SQLITE_WASM_RS_UPDATE_PREBUILD=1 cargo build --target wasm32-unknown-unknown --features bundled,buildtime-bindgen --release
-        SQLITE_WASM_RS_UPDATE_PREBUILD=1 cargo build --target wasm32-unknown-unknown --features sqlite3mc,buildtime-bindgen --release
-        rm -rf ../emsdk
+        rm -rf emsdk
 
     - name: Set commit message
       id: commit_message_step
