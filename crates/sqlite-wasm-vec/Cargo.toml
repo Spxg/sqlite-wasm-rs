@@ -1,0 +1,14 @@
+[package]
+name = "sqlite-wasm-vec"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+[build-dependencies]
+cc = "1.2.44"
+
+[dev-dependencies]
+sqlite-wasm-rs = { path = "../../" }
+wasm-bindgen-test = "0.3.55"
+

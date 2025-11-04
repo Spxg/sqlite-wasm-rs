@@ -168,3 +168,19 @@ jobs:
         cd examples/nodejs
         wasm-pack build --target nodejs
         node pkg/nodejs.js
+
+  test_sqlite_wasm_vec:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install wasm-pack
+      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+    - name: Setup emscripten
+      uses: ./.github/actions/setup-emscripten
+    - name: Test
+      run: |
+        cd crates/sqlite-wasm-vec
+        wasm-pack test --chrome --headless
