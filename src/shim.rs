@@ -128,7 +128,7 @@ pub struct tm {
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strcpy.html>.
 #[cfg(feature = "sqlite3mc")]
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_strcpy(
+pub unsafe extern "C" fn rust_sqlite_wasm_rs_strcpy(
     dest: *mut c_char,
     src: *const c_char,
 ) -> *mut c_char {
@@ -146,7 +146,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_strcpy(
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strncpy.html>.
 #[cfg(feature = "sqlite3mc")]
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_strncpy(
+pub unsafe extern "C" fn rust_sqlite_wasm_rs_strncpy(
     dest: *mut c_char,
     src: *const c_char,
     n: usize,
@@ -177,7 +177,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_strncpy(
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strcat.html>.
 #[cfg(feature = "sqlite3mc")]
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_strcat(
+pub unsafe extern "C" fn rust_sqlite_wasm_rs_strcat(
     dest: *mut c_char,
     src: *const c_char,
 ) -> *mut c_char {
@@ -200,7 +200,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_strcat(
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strncat.html>.
 #[cfg(feature = "sqlite3mc")]
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_strncat(
+pub unsafe extern "C" fn rust_sqlite_wasm_rs_strncat(
     dest: *mut c_char,
     src: *const c_char,
     n: usize,
@@ -231,7 +231,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_strncat(
 /// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/include/wasi/api.h#L2652
 #[cfg(feature = "sqlite3mc")]
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_getentropy(
+pub unsafe extern "C" fn rust_sqlite_wasm_rs_getentropy(
     buf: *mut u8,
     buf_len: c_size_t,
 ) -> std::ffi::c_ushort {
@@ -257,14 +257,14 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_getentropy(
 
 #[cfg(feature = "sqlite3mc")]
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_abort() {
+pub unsafe extern "C" fn rust_sqlite_wasm_rs_abort() {
     std::process::abort();
 }
 
 // https://github.com/emscripten-core/emscripten/blob/089590d17eeb705424bf32f8a1afe34a034b4682/system/lib/libc/musl/src/errno/__errno_location.c#L10
 #[cfg(feature = "sqlite3mc")]
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_errno_location() -> *mut c_int {
+pub unsafe extern "C" fn rust_sqlite_wasm_rs_errno_location() -> *mut c_int {
     thread_local! {
         static ERROR_STORAGE: std::cell::UnsafeCell<i32> = std::cell::UnsafeCell::new(0);
     }
@@ -273,10 +273,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_errno_location() -> *mut c_int {
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strcmp.html>.
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_strcmp(
-    s1: *const c_char,
-    s2: *const c_char,
-) -> c_int {
+pub unsafe extern "C" fn rust_sqlite_wasm_rs_strcmp(s1: *const c_char, s2: *const c_char) -> c_int {
     let mut i = 0;
     loop {
         let c1 = *s1.add(i);
@@ -292,7 +289,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_strcmp(
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strncmp.html>.
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_strncmp(
+pub unsafe extern "C" fn rust_sqlite_wasm_rs_strncmp(
     s1: *const c_char,
     s2: *const c_char,
     n: c_size_t,
@@ -310,7 +307,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_strncmp(
 
 // See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strcspn.html>.
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_strcspn(
+pub unsafe extern "C" fn rust_sqlite_wasm_rs_strcspn(
     s: *const c_char,
     reject: *const c_char,
 ) -> c_size_t {
@@ -319,7 +316,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_strcspn(
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strspn.html>.
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_strspn(
+pub unsafe extern "C" fn rust_sqlite_wasm_rs_strspn(
     s: *const c_char,
     accept: *const c_char,
 ) -> usize {
@@ -328,10 +325,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_strspn(
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strrchr.html>.
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_strrchr(
-    s: *const c_char,
-    c: c_int,
-) -> *const c_char {
+pub unsafe extern "C" fn rust_sqlite_wasm_rs_strrchr(s: *const c_char, c: c_int) -> *const c_char {
     let c = c as u8 as c_char;
     let mut ptr = s;
     let mut last = ptr::null();
@@ -352,7 +346,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_strrchr(
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strchr.html>.
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_strchr(s: *const c_char, c: c_int) -> *const c_char {
+pub unsafe extern "C" fn rust_sqlite_wasm_rs_strchr(s: *const c_char, c: c_int) -> *const c_char {
     let ch = c as u8 as c_char;
     let mut ptr = s;
 
@@ -372,7 +366,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_strchr(s: *const c_char, c: c_int
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/memchr.html>.
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_memchr(
+pub unsafe extern "C" fn rust_sqlite_wasm_rs_memchr(
     s: *const c_void,
     c: c_int,
     n: c_size_t,
@@ -391,37 +385,37 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_memchr(
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/acosh.html>.
 #[no_mangle]
-pub extern "C" fn rust_sqlite_wasm_shim_acosh(x: c_double) -> c_double {
+pub extern "C" fn rust_sqlite_wasm_rs_acosh(x: c_double) -> c_double {
     x.acosh()
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/asinh.html>.
 #[no_mangle]
-pub extern "C" fn rust_sqlite_wasm_shim_asinh(x: c_double) -> c_double {
+pub extern "C" fn rust_sqlite_wasm_rs_asinh(x: c_double) -> c_double {
     x.asinh()
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/atanh.html>.
 #[no_mangle]
-pub extern "C" fn rust_sqlite_wasm_shim_atanh(x: c_double) -> c_double {
+pub extern "C" fn rust_sqlite_wasm_rs_atanh(x: c_double) -> c_double {
     x.atanh()
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/trunc.html>.
 #[no_mangle]
-pub extern "C" fn rust_sqlite_wasm_shim_trunc(x: c_double) -> c_double {
+pub extern "C" fn rust_sqlite_wasm_rs_trunc(x: c_double) -> c_double {
     x.trunc()
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/sqrt.html>.
 #[no_mangle]
-pub extern "C" fn rust_sqlite_wasm_shim_sqrt(x: c_double) -> c_double {
+pub extern "C" fn rust_sqlite_wasm_rs_sqrt(x: c_double) -> c_double {
     x.sqrt()
 }
 
 /// See <https://github.com/emscripten-core/emscripten/blob/089590d17eeb705424bf32f8a1afe34a034b4682/system/lib/libc/mktime.c#L28>.
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_localtime(t: *const c_time_t) -> *mut tm {
+pub unsafe extern "C" fn rust_sqlite_wasm_rs_localtime(t: *const c_time_t) -> *mut tm {
     static mut TM: tm = tm {
         tm_sec: 0,
         tm_min: 0,
@@ -443,7 +437,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_localtime(t: *const c_time_t) -> 
 const ALIGN: usize = std::mem::size_of::<usize>() * 2;
 
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_malloc(size: c_size_t) -> *mut c_void {
+pub unsafe extern "C" fn rust_sqlite_wasm_rs_malloc(size: c_size_t) -> *mut c_void {
     let layout = alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
     let ptr = alloc::alloc(layout);
 
@@ -456,7 +450,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_malloc(size: c_size_t) -> *mut c_
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_free(ptr: *mut c_void) {
+pub unsafe extern "C" fn rust_sqlite_wasm_rs_free(ptr: *mut c_void) {
     let ptr: *mut u8 = ptr.sub(ALIGN).cast();
     let size = *(ptr.cast::<usize>());
 
@@ -465,7 +459,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_free(ptr: *mut c_void) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_realloc(
+pub unsafe extern "C" fn rust_sqlite_wasm_rs_realloc(
     ptr: *mut c_void,
     new_size: c_size_t,
 ) -> *mut c_void {
@@ -484,12 +478,9 @@ pub unsafe extern "C" fn rust_sqlite_wasm_shim_realloc(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rust_sqlite_wasm_shim_calloc(
-    num: c_size_t,
-    size: c_size_t,
-) -> *mut c_void {
+pub unsafe extern "C" fn rust_sqlite_wasm_rs_calloc(num: c_size_t, size: c_size_t) -> *mut c_void {
     let total = num * size;
-    let ptr: *mut u8 = rust_sqlite_wasm_shim_malloc(total).cast();
+    let ptr: *mut u8 = rust_sqlite_wasm_rs_malloc(total).cast();
     if !ptr.is_null() {
         ptr::write_bytes(ptr, 0, total);
     }
@@ -513,7 +504,7 @@ mod tests {
     #[wasm_bindgen_test]
     fn test_random_get() {
         let mut buf = [0u8; 10];
-        unsafe { rust_sqlite_wasm_shim_getentropy(buf.as_mut_ptr(), buf.len()) };
+        unsafe { rust_sqlite_wasm_rs_getentropy(buf.as_mut_ptr(), buf.len()) };
         console_log!("test_random_get: {buf:?}");
     }
 
@@ -524,12 +515,12 @@ mod tests {
     #[wasm_bindgen_test]
     fn test_memory() {
         unsafe {
-            let ptr1 = rust_sqlite_wasm_shim_malloc(10);
-            let ptr2 = rust_sqlite_wasm_shim_realloc(ptr1, 100);
-            rust_sqlite_wasm_shim_free(ptr2);
+            let ptr1 = rust_sqlite_wasm_rs_malloc(10);
+            let ptr2 = rust_sqlite_wasm_rs_realloc(ptr1, 100);
+            rust_sqlite_wasm_rs_free(ptr2);
             console_log!("test_memory: {ptr1:?} {ptr2:?}");
 
-            let ptr: *mut u8 = rust_sqlite_wasm_shim_calloc(2, 8).cast();
+            let ptr: *mut u8 = rust_sqlite_wasm_rs_calloc(2, 8).cast();
             let buf = std::slice::from_raw_parts(ptr, 2 * 8);
 
             assert!(buf.iter().all(|&x| x == 0));
@@ -599,190 +590,177 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
-    fn test_rust_sqlite_wasm_shim_strcmp() {
+    fn test_rust_sqlite_wasm_rs_strcmp() {
         unsafe {
             let s1 = to_cstring("hello");
             let s2 = to_cstring("hello");
-            assert_eq!(rust_sqlite_wasm_shim_strcmp(s1.as_ptr(), s2.as_ptr()), 0);
+            assert_eq!(rust_sqlite_wasm_rs_strcmp(s1.as_ptr(), s2.as_ptr()), 0);
 
             let s1 = to_cstring("apple");
             let s2 = to_cstring("banana");
-            assert!(rust_sqlite_wasm_shim_strcmp(s1.as_ptr(), s2.as_ptr()) < 0);
+            assert!(rust_sqlite_wasm_rs_strcmp(s1.as_ptr(), s2.as_ptr()) < 0);
 
             let s1 = to_cstring("zebra");
             let s2 = to_cstring("apple");
-            assert!(rust_sqlite_wasm_shim_strcmp(s1.as_ptr(), s2.as_ptr()) > 0);
+            assert!(rust_sqlite_wasm_rs_strcmp(s1.as_ptr(), s2.as_ptr()) > 0);
 
             let s1 = to_cstring("");
             let s2 = to_cstring("");
-            assert_eq!(rust_sqlite_wasm_shim_strcmp(s1.as_ptr(), s2.as_ptr()), 0);
+            assert_eq!(rust_sqlite_wasm_rs_strcmp(s1.as_ptr(), s2.as_ptr()), 0);
 
             let s1 = to_cstring("");
             let s2 = to_cstring("test");
-            assert!(rust_sqlite_wasm_shim_strcmp(s1.as_ptr(), s2.as_ptr()) < 0);
+            assert!(rust_sqlite_wasm_rs_strcmp(s1.as_ptr(), s2.as_ptr()) < 0);
         }
     }
 
     #[wasm_bindgen_test]
-    fn test_rust_sqlite_wasm_shim_strncmp() {
+    fn test_rust_sqlite_wasm_rs_strncmp() {
         unsafe {
             let s1 = to_cstring("hello");
             let s2 = to_cstring("hello");
-            assert_eq!(
-                rust_sqlite_wasm_shim_strncmp(s1.as_ptr(), s2.as_ptr(), 5),
-                0
-            );
+            assert_eq!(rust_sqlite_wasm_rs_strncmp(s1.as_ptr(), s2.as_ptr(), 5), 0);
 
             let s1 = to_cstring("hello world");
             let s2 = to_cstring("hello there");
-            assert_eq!(
-                rust_sqlite_wasm_shim_strncmp(s1.as_ptr(), s2.as_ptr(), 5),
-                0
-            );
+            assert_eq!(rust_sqlite_wasm_rs_strncmp(s1.as_ptr(), s2.as_ptr(), 5), 0);
 
             let s1 = to_cstring("apple");
             let s2 = to_cstring("banana");
-            assert!(rust_sqlite_wasm_shim_strncmp(s1.as_ptr(), s2.as_ptr(), 3) < 0);
+            assert!(rust_sqlite_wasm_rs_strncmp(s1.as_ptr(), s2.as_ptr(), 3) < 0);
 
             let s1 = to_cstring("abc");
             let s2 = to_cstring("def");
-            assert_eq!(
-                rust_sqlite_wasm_shim_strncmp(s1.as_ptr(), s2.as_ptr(), 0),
-                0
-            );
+            assert_eq!(rust_sqlite_wasm_rs_strncmp(s1.as_ptr(), s2.as_ptr(), 0), 0);
 
             let s1 = to_cstring("hi");
             let s2 = to_cstring("hi");
-            assert_eq!(
-                rust_sqlite_wasm_shim_strncmp(s1.as_ptr(), s2.as_ptr(), 10),
-                0
-            );
+            assert_eq!(rust_sqlite_wasm_rs_strncmp(s1.as_ptr(), s2.as_ptr(), 10), 0);
         }
     }
 
     #[wasm_bindgen_test]
-    fn test_rust_sqlite_wasm_shim_strchr() {
+    fn test_rust_sqlite_wasm_rs_strchr() {
         unsafe {
             let s = to_cstring("hello world");
 
-            let result = rust_sqlite_wasm_shim_strchr(s.as_ptr(), b'e' as c_int);
+            let result = rust_sqlite_wasm_rs_strchr(s.as_ptr(), b'e' as c_int);
             assert!(!result.is_null());
             assert_eq!(*result, b'e' as c_char);
 
-            let result = rust_sqlite_wasm_shim_strchr(s.as_ptr(), b'x' as c_int);
+            let result = rust_sqlite_wasm_rs_strchr(s.as_ptr(), b'x' as c_int);
             assert!(result.is_null());
 
-            let result = rust_sqlite_wasm_shim_strchr(s.as_ptr(), 0);
+            let result = rust_sqlite_wasm_rs_strchr(s.as_ptr(), 0);
             assert!(!result.is_null());
             assert_eq!(*result, 0);
 
-            let result = rust_sqlite_wasm_shim_strchr(s.as_ptr(), b'h' as c_int);
+            let result = rust_sqlite_wasm_rs_strchr(s.as_ptr(), b'h' as c_int);
             assert!(!result.is_null());
             assert_eq!(*result, b'h' as c_char);
         }
     }
 
     #[wasm_bindgen_test]
-    fn test_rust_sqlite_wasm_shim_strrchr() {
+    fn test_rust_sqlite_wasm_rs_strrchr() {
         unsafe {
             let s = to_cstring("hello world");
 
-            let result = rust_sqlite_wasm_shim_strrchr(s.as_ptr(), b'l' as c_int);
+            let result = rust_sqlite_wasm_rs_strrchr(s.as_ptr(), b'l' as c_int);
             assert!(!result.is_null());
             assert_eq!(*result, b'l' as c_char);
 
-            let first_l = rust_sqlite_wasm_shim_strchr(s.as_ptr(), b'l' as c_int);
-            let last_l = rust_sqlite_wasm_shim_strrchr(s.as_ptr(), b'l' as c_int);
+            let first_l = rust_sqlite_wasm_rs_strchr(s.as_ptr(), b'l' as c_int);
+            let last_l = rust_sqlite_wasm_rs_strrchr(s.as_ptr(), b'l' as c_int);
             assert!(last_l as usize > first_l as usize);
 
-            let result = rust_sqlite_wasm_shim_strrchr(s.as_ptr(), b'x' as c_int);
+            let result = rust_sqlite_wasm_rs_strrchr(s.as_ptr(), b'x' as c_int);
             assert!(result.is_null());
 
-            let result = rust_sqlite_wasm_shim_strrchr(s.as_ptr(), 0);
+            let result = rust_sqlite_wasm_rs_strrchr(s.as_ptr(), 0);
             assert!(!result.is_null());
             assert_eq!(*result, 0);
         }
     }
 
     #[wasm_bindgen_test]
-    fn test_rust_sqlite_wasm_shim_strcspn() {
+    fn test_rust_sqlite_wasm_rs_strcspn() {
         unsafe {
             let s = to_cstring("hello world");
             let reject = to_cstring("aeiou");
 
-            let result = rust_sqlite_wasm_shim_strcspn(s.as_ptr(), reject.as_ptr());
+            let result = rust_sqlite_wasm_rs_strcspn(s.as_ptr(), reject.as_ptr());
             assert_eq!(result, 1);
 
             let reject2 = to_cstring("xyz");
-            let result = rust_sqlite_wasm_shim_strcspn(s.as_ptr(), reject2.as_ptr());
+            let result = rust_sqlite_wasm_rs_strcspn(s.as_ptr(), reject2.as_ptr());
             assert_eq!(result, 11);
 
             let reject3 = to_cstring("h");
-            let result = rust_sqlite_wasm_shim_strcspn(s.as_ptr(), reject3.as_ptr());
+            let result = rust_sqlite_wasm_rs_strcspn(s.as_ptr(), reject3.as_ptr());
             assert_eq!(result, 0);
 
             let empty = to_cstring("");
-            let result = rust_sqlite_wasm_shim_strcspn(empty.as_ptr(), reject.as_ptr());
+            let result = rust_sqlite_wasm_rs_strcspn(empty.as_ptr(), reject.as_ptr());
             assert_eq!(result, 0);
         }
     }
 
     #[wasm_bindgen_test]
-    fn test_rust_sqlite_wasm_shim_strspn() {
+    fn test_rust_sqlite_wasm_rs_strspn() {
         unsafe {
             let s = to_cstring("hello world");
             let accept = to_cstring("helo");
 
-            let result = rust_sqlite_wasm_shim_strspn(s.as_ptr(), accept.as_ptr());
+            let result = rust_sqlite_wasm_rs_strspn(s.as_ptr(), accept.as_ptr());
             assert_eq!(result, 5);
 
             let accept2 = to_cstring("xyz");
-            let result = rust_sqlite_wasm_shim_strspn(s.as_ptr(), accept2.as_ptr());
+            let result = rust_sqlite_wasm_rs_strspn(s.as_ptr(), accept2.as_ptr());
             assert_eq!(result, 0);
 
             let accept3 = to_cstring("helo wrd");
-            let result = rust_sqlite_wasm_shim_strspn(s.as_ptr(), accept3.as_ptr());
+            let result = rust_sqlite_wasm_rs_strspn(s.as_ptr(), accept3.as_ptr());
             assert_eq!(result, 11);
 
             let empty = to_cstring("");
-            let result = rust_sqlite_wasm_shim_strspn(empty.as_ptr(), accept.as_ptr());
+            let result = rust_sqlite_wasm_rs_strspn(empty.as_ptr(), accept.as_ptr());
             assert_eq!(result, 0);
         }
     }
 
     #[wasm_bindgen_test]
-    fn test_rust_sqlite_wasm_shim_memchr() {
+    fn test_rust_sqlite_wasm_rs_memchr() {
         unsafe {
             let data = b"hello world";
             let c = b'o' as c_int;
 
-            let result = rust_sqlite_wasm_shim_memchr(data.as_ptr() as *const c_void, c, 11);
+            let result = rust_sqlite_wasm_rs_memchr(data.as_ptr() as *const c_void, c, 11);
             assert!(!result.is_null());
             let found_char = *(result as *const u8);
             assert_eq!(found_char, b'o');
 
             let result =
-                rust_sqlite_wasm_shim_memchr(data.as_ptr() as *const c_void, b'x' as c_int, 11);
+                rust_sqlite_wasm_rs_memchr(data.as_ptr() as *const c_void, b'x' as c_int, 11);
             assert!(result.is_null());
 
             let result =
-                rust_sqlite_wasm_shim_memchr(data.as_ptr() as *const c_void, b'o' as c_int, 4);
+                rust_sqlite_wasm_rs_memchr(data.as_ptr() as *const c_void, b'o' as c_int, 4);
             assert!(result.is_null());
 
-            let result = rust_sqlite_wasm_shim_memchr(ptr::null(), c, 0);
+            let result = rust_sqlite_wasm_rs_memchr(ptr::null(), c, 0);
             assert!(result.is_null());
         }
     }
 
     #[wasm_bindgen_test]
     #[cfg(feature = "sqlite3mc")]
-    fn test_rust_sqlite_wasm_shim_strcpy() {
+    fn test_rust_sqlite_wasm_rs_strcpy() {
         unsafe {
             let src = to_cstring("hello world");
             let mut dest = [0u8; 20];
 
-            let result =
-                rust_sqlite_wasm_shim_strcpy(dest.as_mut_ptr() as *mut c_char, src.as_ptr());
+            let result = rust_sqlite_wasm_rs_strcpy(dest.as_mut_ptr() as *mut c_char, src.as_ptr());
 
             assert_eq!(result as *const u8, dest.as_ptr());
 
@@ -791,7 +769,7 @@ mod tests {
 
             let empty_src = to_cstring("");
             let mut dest2 = [0u8; 10];
-            rust_sqlite_wasm_shim_strcpy(dest2.as_mut_ptr() as *mut c_char, empty_src.as_ptr());
+            rust_sqlite_wasm_rs_strcpy(dest2.as_mut_ptr() as *mut c_char, empty_src.as_ptr());
             let copied_empty = CStr::from_ptr(dest2.as_ptr() as *const c_char);
             assert_eq!(copied_empty.to_str().unwrap(), "");
         }
@@ -799,13 +777,13 @@ mod tests {
 
     #[cfg(feature = "sqlite3mc")]
     #[wasm_bindgen_test]
-    fn test_rust_sqlite_wasm_shim_strncpy() {
+    fn test_rust_sqlite_wasm_rs_strncpy() {
         unsafe {
             let src = to_cstring("hello");
             let mut dest = [0u8; 10];
 
             let result =
-                rust_sqlite_wasm_shim_strncpy(dest.as_mut_ptr() as *mut c_char, src.as_ptr(), 6);
+                rust_sqlite_wasm_rs_strncpy(dest.as_mut_ptr() as *mut c_char, src.as_ptr(), 6);
             assert_eq!(result as *const u8, dest.as_ptr());
 
             assert_eq!(dest[0], b'h');
@@ -816,29 +794,29 @@ mod tests {
             assert_eq!(dest[5], 0);
 
             let mut dest2 = [0u8; 10];
-            rust_sqlite_wasm_shim_strncpy(dest2.as_mut_ptr() as *mut c_char, src.as_ptr(), 3);
+            rust_sqlite_wasm_rs_strncpy(dest2.as_mut_ptr() as *mut c_char, src.as_ptr(), 3);
             assert_eq!(dest2[0], b'h');
             assert_eq!(dest2[1], b'e');
             assert_eq!(dest2[2], b'l');
             assert_eq!(dest2[3], 0);
 
             let mut dest3 = [0u8; 10];
-            rust_sqlite_wasm_shim_strncpy(dest3.as_mut_ptr() as *mut c_char, src.as_ptr(), 0);
+            rust_sqlite_wasm_rs_strncpy(dest3.as_mut_ptr() as *mut c_char, src.as_ptr(), 0);
         }
     }
 
     #[cfg(feature = "sqlite3mc")]
     #[wasm_bindgen_test]
-    fn test_rust_sqlite_wasm_shim_strcat() {
+    fn test_rust_sqlite_wasm_rs_strcat() {
         unsafe {
             let mut dest = [0u8; 20];
             let dest_ptr = dest.as_mut_ptr() as *mut c_char;
 
             let s1 = to_cstring("hello");
-            rust_sqlite_wasm_shim_strcpy(dest_ptr, s1.as_ptr());
+            rust_sqlite_wasm_rs_strcpy(dest_ptr, s1.as_ptr());
 
             let s2 = to_cstring(" world");
-            let result = rust_sqlite_wasm_shim_strcat(dest_ptr, s2.as_ptr());
+            let result = rust_sqlite_wasm_rs_strcat(dest_ptr, s2.as_ptr());
 
             assert_eq!(result as *const u8, dest.as_ptr());
 
@@ -849,7 +827,7 @@ mod tests {
             let dest2_ptr = dest2.as_mut_ptr() as *mut c_char;
             *dest2_ptr = 0;
 
-            rust_sqlite_wasm_shim_strcat(dest2_ptr, to_cstring("test").as_ptr());
+            rust_sqlite_wasm_rs_strcat(dest2_ptr, to_cstring("test").as_ptr());
             let final_str2 = CStr::from_ptr(dest2.as_ptr() as *const c_char);
             assert_eq!(final_str2.to_str().unwrap(), "test");
         }
@@ -857,16 +835,16 @@ mod tests {
 
     #[cfg(feature = "sqlite3mc")]
     #[wasm_bindgen_test]
-    fn test_rust_sqlite_wasm_shim_strncat() {
+    fn test_rust_sqlite_wasm_rs_strncat() {
         unsafe {
             let mut dest = [0u8; 20];
             let dest_ptr = dest.as_mut_ptr() as *mut c_char;
 
             let initial = to_cstring("hello");
-            rust_sqlite_wasm_shim_strcpy(dest_ptr, initial.as_ptr());
+            rust_sqlite_wasm_rs_strcpy(dest_ptr, initial.as_ptr());
 
             let to_append = to_cstring(" world");
-            let result = rust_sqlite_wasm_shim_strncat(dest_ptr, to_append.as_ptr(), 6);
+            let result = rust_sqlite_wasm_rs_strncat(dest_ptr, to_append.as_ptr(), 6);
 
             assert_eq!(result as *const u8, dest.as_ptr());
 
@@ -876,8 +854,8 @@ mod tests {
             let mut dest2 = [0u8; 20];
             let dest2_ptr = dest2.as_mut_ptr() as *mut c_char;
 
-            rust_sqlite_wasm_shim_strcpy(dest2_ptr, to_cstring("test").as_ptr());
-            rust_sqlite_wasm_shim_strncat(dest2_ptr, to_cstring(" string").into_raw(), 3);
+            rust_sqlite_wasm_rs_strcpy(dest2_ptr, to_cstring("test").as_ptr());
+            rust_sqlite_wasm_rs_strncat(dest2_ptr, to_cstring(" string").into_raw(), 3);
 
             let final_str2 = CStr::from_ptr(dest2.as_ptr() as *const c_char);
             assert_eq!(final_str2.to_str().unwrap(), "test st");
@@ -885,8 +863,8 @@ mod tests {
             let mut dest3 = [0u8; 20];
             let dest3_ptr = dest3.as_mut_ptr() as *mut c_char;
 
-            rust_sqlite_wasm_shim_strcpy(dest3_ptr, to_cstring("base").as_ptr());
-            rust_sqlite_wasm_shim_strncat(dest3_ptr, to_cstring(" appended").into_raw(), 0);
+            rust_sqlite_wasm_rs_strcpy(dest3_ptr, to_cstring("base").as_ptr());
+            rust_sqlite_wasm_rs_strncat(dest3_ptr, to_cstring(" appended").into_raw(), 0);
 
             let final_str3 = CStr::from_ptr(dest3.as_ptr() as *const c_char);
             assert_eq!(final_str3.to_str().unwrap(), "base");
@@ -894,8 +872,8 @@ mod tests {
             let mut dest4 = [0u8; 20];
             let dest4_ptr = dest4.as_mut_ptr() as *mut c_char;
 
-            rust_sqlite_wasm_shim_strcpy(dest4_ptr, to_cstring("hi").as_ptr());
-            rust_sqlite_wasm_shim_strncat(dest4_ptr, to_cstring(" there").into_raw(), 10);
+            rust_sqlite_wasm_rs_strcpy(dest4_ptr, to_cstring("hi").as_ptr());
+            rust_sqlite_wasm_rs_strncat(dest4_ptr, to_cstring(" there").into_raw(), 10);
 
             let final_str4 = CStr::from_ptr(dest4.as_ptr() as *const c_char);
             assert_eq!(final_str4.to_str().unwrap(), "hi there");
@@ -904,7 +882,7 @@ mod tests {
             let dest5_ptr = dest5.as_mut_ptr() as *mut c_char;
 
             *dest5_ptr = 0;
-            rust_sqlite_wasm_shim_strncat(dest5_ptr, to_cstring("hello").as_ptr(), 5);
+            rust_sqlite_wasm_rs_strncat(dest5_ptr, to_cstring("hello").as_ptr(), 5);
 
             let final_str5 = CStr::from_ptr(dest5.as_ptr() as *const c_char);
             assert_eq!(final_str5.to_str().unwrap(), "hello");
@@ -912,8 +890,8 @@ mod tests {
             let mut dest6 = [0u8; 20];
             let dest6_ptr = dest6.as_mut_ptr() as *mut c_char;
 
-            rust_sqlite_wasm_shim_strcpy(dest6_ptr, to_cstring("start").as_ptr());
-            rust_sqlite_wasm_shim_strncat(dest6_ptr, to_cstring("").as_ptr(), 5);
+            rust_sqlite_wasm_rs_strcpy(dest6_ptr, to_cstring("start").as_ptr());
+            rust_sqlite_wasm_rs_strncat(dest6_ptr, to_cstring("").as_ptr(), 5);
 
             let final_str6 = CStr::from_ptr(dest6.as_ptr() as *const c_char);
             assert_eq!(final_str6.to_str().unwrap(), "start");
@@ -921,8 +899,8 @@ mod tests {
             let mut dest7 = [0u8; 10];
             let dest7_ptr = dest7.as_mut_ptr() as *mut c_char;
 
-            rust_sqlite_wasm_shim_strcpy(dest7_ptr, to_cstring("12345").as_ptr());
-            rust_sqlite_wasm_shim_strncat(dest7_ptr, to_cstring("678").as_ptr(), 3);
+            rust_sqlite_wasm_rs_strcpy(dest7_ptr, to_cstring("12345").as_ptr());
+            rust_sqlite_wasm_rs_strncat(dest7_ptr, to_cstring("678").as_ptr(), 3);
 
             let final_str7 = CStr::from_ptr(dest7.as_ptr() as *const c_char);
             assert_eq!(final_str7.to_str().unwrap(), "12345678");
@@ -930,8 +908,8 @@ mod tests {
             let mut dest8 = [0u8; 30];
             let dest8_ptr = dest8.as_mut_ptr() as *mut c_char;
 
-            rust_sqlite_wasm_shim_strcpy(dest8_ptr, to_cstring("line1\n").as_ptr());
-            rust_sqlite_wasm_shim_strncat(dest8_ptr, to_cstring("line2\t").as_ptr(), 6);
+            rust_sqlite_wasm_rs_strcpy(dest8_ptr, to_cstring("line1\n").as_ptr());
+            rust_sqlite_wasm_rs_strncat(dest8_ptr, to_cstring("line2\t").as_ptr(), 6);
 
             let final_str8 = CStr::from_ptr(dest8.as_ptr() as *const c_char);
             assert_eq!(final_str8.to_str().unwrap(), "line1\nline2\t");
@@ -939,8 +917,8 @@ mod tests {
             let mut dest9 = [0u8; 15];
             let dest9_ptr = dest9.as_mut_ptr() as *mut c_char;
 
-            rust_sqlite_wasm_shim_strcpy(dest9_ptr, to_cstring("abc").as_ptr());
-            rust_sqlite_wasm_shim_strncat(dest9_ptr, to_cstring("def").as_ptr(), 2);
+            rust_sqlite_wasm_rs_strcpy(dest9_ptr, to_cstring("abc").as_ptr());
+            rust_sqlite_wasm_rs_strncat(dest9_ptr, to_cstring("def").as_ptr(), 2);
 
             assert_eq!(dest9[0], b'a');
             assert_eq!(dest9[1], b'b');
@@ -953,8 +931,8 @@ mod tests {
             let mut sql_buffer = [0u8; 50];
             let sql_buffer_ptr = sql_buffer.as_mut_ptr() as *mut c_char;
 
-            rust_sqlite_wasm_shim_strcpy(sql_buffer_ptr, to_cstring("SELECT ").as_ptr());
-            rust_sqlite_wasm_shim_strncat(
+            rust_sqlite_wasm_rs_strcpy(sql_buffer_ptr, to_cstring("SELECT ").as_ptr());
+            rust_sqlite_wasm_rs_strncat(
                 sql_buffer_ptr,
                 to_cstring("name, age FROM users").as_ptr(),
                 12,
