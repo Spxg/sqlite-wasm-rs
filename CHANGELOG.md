@@ -8,6 +8,9 @@
 * Added comment about incorrect implementation of `Send` + `Sync`.
   [#125](https://github.com/Spxg/sqlite-wasm-rs/pull/125)
 
+* Added `sqlite-vec` extension support.
+  [#126](https://github.com/Spxg/sqlite-wasm-rs/pull/126)
+
 ### Changed
 
 * Reduced the use of `JsValue` in opfs-sahpool VFS.

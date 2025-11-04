@@ -64,6 +64,7 @@ resolver = "2"
 exclude = ["examples/custom-libc"]
 members = [
   "crates/sqlite-wasm-libc",
+  "crates/sqlite-wasm-vec",
   "examples/implement-a-vfs",
   "examples/nodejs"
 ]
