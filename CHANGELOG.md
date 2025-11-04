@@ -9,7 +9,7 @@
   [#125](https://github.com/Spxg/sqlite-wasm-rs/pull/125)
 
 * Added `sqlite-vec` extension support.
-  [#126](https://github.com/Spxg/sqlite-wasm-rs/pull/126)
+  [#130](https://github.com/Spxg/sqlite-wasm-rs/pull/130)
 
 ### Changed
 
