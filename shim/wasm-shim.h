@@ -2,60 +2,90 @@
 #include <stdint.h>
 #include <time.h>
 
-#define malloc rust_sqlite_wasm_rs_malloc
-#define realloc rust_sqlite_wasm_rs_realloc
-#define free rust_sqlite_wasm_rs_free
-#define calloc rust_sqlite_wasm_rs_calloc
-void *rust_sqlite_wasm_rs_malloc(size_t size);
-void *rust_sqlite_wasm_rs_realloc(void *ptr, size_t size);
-void rust_sqlite_wasm_rs_free(void *ptr);
-void *rust_sqlite_wasm_rs_calloc(size_t num, size_t size);
+/* string */
+#define strcmp rust_sqlite_wasm_strcmp
+int rust_sqlite_wasm_strcmp(const char *l, const char *r);
+#define strcpy rust_sqlite_wasm_strcpy
+char *rust_sqlite_wasm_strcpy(char *dest, const char *src);
+#define strncpy rust_sqlite_wasm_strncpy
+char *rust_sqlite_wasm_strncpy(char *d, const char *s, size_t n);
+#define strcat rust_sqlite_wasm_strcat
+char *rust_sqlite_wasm_strcat(char *dest, const char *src);
+#define strncat rust_sqlite_wasm_strncat
+char *rust_sqlite_wasm_strncat(char *d, const char *s, size_t n);
+#define strcspn rust_sqlite_wasm_strcspn
+size_t rust_sqlite_wasm_strcspn(const char *s, const char *c);
+#define strspn rust_sqlite_wasm_strspn
+size_t rust_sqlite_wasm_strspn(const char *s, const char *c);
+#define strncmp rust_sqlite_wasm_strncmp
+int rust_sqlite_wasm_strncmp(const char *l, const char *r, size_t n);
+#define strrchr rust_sqlite_wasm_strrchr
+char *rust_sqlite_wasm_strrchr(const char *s, int c);
+#define strchr rust_sqlite_wasm_strchr
+char *rust_sqlite_wasm_strchr(const char *s, int c);
+#define memchr rust_sqlite_wasm_memchr
+void *rust_sqlite_wasm_memchr(const void *src, int c, size_t n);
 
-#define strcmp rust_sqlite_wasm_rs_strcmp
-#define strcpy rust_sqlite_wasm_rs_strcpy
-#define strncpy rust_sqlite_wasm_rs_strncpy
-#define strcat rust_sqlite_wasm_rs_strcat
-#define strncat rust_sqlite_wasm_rs_strncat
-#define strcspn rust_sqlite_wasm_rs_strcspn
-#define strspn rust_sqlite_wasm_rs_strspn
-#define strncmp rust_sqlite_wasm_rs_strncmp
-#define strrchr rust_sqlite_wasm_rs_strrchr
-#define strchr rust_sqlite_wasm_rs_strchr
-#define memchr rust_sqlite_wasm_rs_memchr
-int rust_sqlite_wasm_rs_strcmp(const char *l, const char *r);
-char *rust_sqlite_wasm_rs_strcpy(char *dest, const char *src);
-char *rust_sqlite_wasm_rs_strncpy(char *d, const char *s, size_t n);
-char *rust_sqlite_wasm_rs_strcat(char *dest, const char *src);
-char *rust_sqlite_wasm_rs_strncat(char *d, const char *s, size_t n);
-size_t rust_sqlite_wasm_rs_strcspn(const char *s, const char *c);
-size_t rust_sqlite_wasm_rs_strspn(const char *s, const char *c);
-int rust_sqlite_wasm_rs_strncmp(const char *l, const char *r, size_t n);
-char *rust_sqlite_wasm_rs_strrchr(const char *s, int c);
-char *rust_sqlite_wasm_rs_strchr(const char *s, int c);
-void *rust_sqlite_wasm_rs_memchr(const void *src, int c, size_t n);
+/* math */
+#define __fpclassifyl rust_sqlite_wasm_fpclassifyl
+int rust_sqlite_wasm_fpclassifyl(long double x);
+#define acosh rust_sqlite_wasm_acosh
+double rust_sqlite_wasm_acosh(double x);
+#define asinh rust_sqlite_wasm_asinh
+double rust_sqlite_wasm_asinh(double x);
+#define atanh rust_sqlite_wasm_atanh
+double rust_sqlite_wasm_atanh(double x);
+#define trunc rust_sqlite_wasm_trunc
+double rust_sqlite_wasm_trunc(double x);
+#define sqrt rust_sqlite_wasm_sqrt
+double rust_sqlite_wasm_sqrt(double x);
 
-#define acosh rust_sqlite_wasm_rs_acosh
-#define asinh rust_sqlite_wasm_rs_asinh
-#define atanh rust_sqlite_wasm_rs_atanh
-#define trunc rust_sqlite_wasm_rs_trunc
-#define sqrt rust_sqlite_wasm_rs_sqrt
-double rust_sqlite_wasm_rs_acosh(double x);
-double rust_sqlite_wasm_rs_asinh(double x);
-double rust_sqlite_wasm_rs_atanh(double x);
-double rust_sqlite_wasm_rs_trunc(double x);
-double rust_sqlite_wasm_rs_sqrt(double x);
+/* stdlib */
+#define atoi rust_sqlite_wasm_atoi
+int rust_sqlite_wasm_atoi(const char *s);
+#define strtol rust_sqlite_wasm_strtol
+long rust_sqlite_wasm_strtol(const char *s, char **p, int base);
+#define strtod rust_sqlite_wasm_strtod
+double rust_sqlite_wasm_strtod(const char *s, char **p);
+#define bsearch rust_sqlite_wasm_bsearch
+void *rust_sqlite_wasm_bsearch(const void *key, const void *base, size_t nel,
+                               size_t width,
+                               int (*cmp)(const void *, const void *));
+#define qsort rust_sqlite_wasm_qsort
+void rust_sqlite_wasm_qsort(void *base, size_t nel, size_t width,
+                            int (*cmp)(const void *, const void *));
 
-#define localtime rust_sqlite_wasm_rs_localtime
-struct tm *rust_sqlite_wasm_rs_localtime(const time_t *t);
+/* errno */
+#define __errno_location rust_sqlite_wasm_errno_location
+int *rust_sqlite_wasm_errno_location(void);
 
-#define abort rust_sqlite_wasm_rs_abort
-[[noreturn]] void rust_sqlite_wasm_rs_abort();
-
-#define getentropy rust_sqlite_wasm_rs_getentropy
-int rust_sqlite_wasm_rs_getentropy(void *buffer, size_t len);
-
-#define __errno_location rust_sqlite_wasm_rs_errno_location
-int *rust_sqlite_wasm_rs_errno_location(void);
-
+/* stdio */
 #define sprintf sprintf_
 int sprintf_(char *buffer, const char *format, ...);
+
+/* malloc */
+#define malloc rust_sqlite_wasm_malloc
+void *rust_sqlite_wasm_malloc(size_t size);
+#define realloc rust_sqlite_wasm_realloc
+void *rust_sqlite_wasm_realloc(void *ptr, size_t size);
+#define free rust_sqlite_wasm_free
+void rust_sqlite_wasm_free(void *ptr);
+#define calloc rust_sqlite_wasm_calloc
+void *rust_sqlite_wasm_calloc(size_t num, size_t size);
+
+/* time */
+#define localtime rust_sqlite_wasm_localtime
+struct tm *rust_sqlite_wasm_localtime(const time_t *t);
+
+
+/* misc */
+#define getentropy rust_sqlite_wasm_getentropy
+int rust_sqlite_wasm_getentropy(void *buffer, size_t len);
+
+/* exit */
+#define abort rust_sqlite_wasm_abort
+[[noreturn]] void rust_sqlite_wasm_abort();
+#define __assert_fail rust_sqlite_wasm_assert_fail
+[[noreturn]] void rust_sqlite_wasm_assert_fail(const char *expr,
+                                               const char *file, int line,
+                                               const char *func);

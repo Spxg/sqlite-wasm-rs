@@ -99,8 +99,10 @@ fn main() {
     bindgen(&output);
 
     if update_precompiled {
-        #[cfg(not(feature = "sqlite3mc"))]
-        std::fs::copy(format!("{output}/libsqlite3.a"), "sqlite3/libsqlite3.a").unwrap();
+        if !cfg!(feature = "sqlite3mc") {
+            std::fs::copy(format!("{output}/libsqlite3.a"), "sqlite3/libsqlite3.a").unwrap();
+            std::fs::copy(format!("{output}/libwasmuslibc.a"), "sqlite3/libwasmuslibc.a").unwrap();
+        }
 
         #[cfg(feature = "buildtime-bindgen")]
         {
@@ -223,6 +225,51 @@ fn bindgen(output: &str) {
 fn compile(output: &str) {
     use std::collections::HashSet;
 
+    const C_SYMBOL_PATH: [&str; 36] = [
+        // string
+        "string/memchr.c",
+        "string/memrchr.c",
+        "string/stpcpy.c",
+        "string/stpncpy.c",
+        "string/strcat.c",
+        "string/strchr.c",
+        "string/strchrnul.c",
+        "string/strcmp.c",
+        "string/strcpy.c",
+        "string/strcspn.c",
+        "string/strlen.c",
+        "string/strncat.c",
+        "string/strncmp.c",
+        "string/strncpy.c",
+        "string/strrchr.c",
+        "string/strspn.c",
+        // stdlib
+        "stdlib/atoi.c",
+        "stdlib/bsearch.c",
+        "stdlib/qsort.c",
+        "stdlib/qsort_nr.c",
+        "stdlib/strtod.c",
+        "stdlib/strtol.c",
+        // math
+        "math/__fpclassifyl.c",
+        "math/acosh.c",
+        "math/asinh.c",
+        "math/atanh.c",
+        "math/fmodl.c",
+        "math/scalbn.c",
+        "math/scalbnl.c",
+        "math/sqrt.c",
+        "math/trunc.c",
+        // errno
+        "errno/__errno_location.c",
+        // stdio
+        "stdio/__toread.c",
+        "stdio/__uflow.c",
+        // internal
+        "internal/floatscan.c",
+        "internal/shgetc.c",
+    ];
+
     #[cfg(not(feature = "sqlite3mc"))]
     const SQLITE3_SOURCE: &str = "sqlite3/sqlite3.c";
     #[cfg(feature = "sqlite3mc")]
@@ -248,15 +295,26 @@ or use the precompiled binaries via the `default-features = false` and `precompi
         .map(str::trim)
         .collect::<HashSet<_>>();
 
-    if !cfg!(feature = "custom-libc") {
-        cc.flag("-include").flag("shim/wasm-shim.h");
-    }
-
     if target_features.contains("atomics") {
         cc.flag("-pthread");
     }
 
+    if !cfg!(feature = "custom-libc") {
+        cc.flag("-include").flag("shim/wasm-shim.h");
+    }
+
     cc.out_dir(output).compile("sqlite3");
+
+    if !cfg!(feature = "custom-libc") {
+        cc::Build::new()
+            .warnings(false)
+            .target("wasm32-unknown-emscripten")
+            .files(C_SYMBOL_PATH.map(|x| format!("shim/musl/{x}")))
+            .flag("-include")
+            .flag("shim/wasm-shim.h")
+            .out_dir(output)
+            .compile("wasmuslibc");
+    }
 
     #[cfg(feature = "sqlite3mc")]
     cc::Build::new()
