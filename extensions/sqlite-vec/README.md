@@ -1,6 +1,6 @@
 [![Crates.io](https://img.shields.io/crates/v/sqlite-wasm-vec.svg)](https://crates.io/crates/sqlite-wasm-vec)
 
-`wasm32-unknown-unknown` bindings to the `sqlite-vec` extension.
+`wasm32-unknown-unknown` bindings to the [sqlite-vec](https://github.com/asg017/sqlite-vec) extension.
 
 ## Usage
 

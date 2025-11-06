@@ -16,9 +16,6 @@
 * Reduced the use of `JsValue` in opfs-sahpool VFS.
   [#124](https://github.com/Spxg/sqlite-wasm-rs/pull/124)
 
-* Rename `rust_sqlite_wasm_*` symbol to `rust_sqlite_wasm_rs_*`.
-  [#131](https://github.com/Spxg/sqlite-wasm-rs/pull/131)
-
 --------------------------------------------------------------------------------
 
 ## [0.4.6](https://github.com/Spxg/sqlite-wasm-rs/compare/0.4.5...0.4.6)
