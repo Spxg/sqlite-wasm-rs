@@ -1,6 +1,6 @@
 [![Crates.io](https://img.shields.io/crates/v/sqlite-wasm-rs.svg)](https://crates.io/crates/sqlite-wasm-rs)
 
-Provide sqlite solution for `wasm32-unknown-unknown` target.
+`wasm32-unknown-unknown` bindings to the libsqlite3 library.
 
 ## Usage
 
