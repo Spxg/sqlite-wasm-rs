@@ -1,4 +1,6 @@
-Provide sqlite-vec extension solution for `wasm32-unknown-unknown` target.
+[![Crates.io](https://img.shields.io/crates/v/sqlite-wasm-vec.svg)](https://crates.io/crates/sqlite-wasm-vec)
+
+`wasm32-unknown-unknown` bindings to the `sqlite-vec` extension.
 
 ## Usage
 

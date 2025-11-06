@@ -1,0 +1,22 @@
+[package]
+name = "sqlite-wasm-vec"
+version = "0.1.0"
+edition = "2021"
+authors = ["Spxg <unsafe@outlook.es>"]
+readme = "README.md"
+license = "MIT"
+repository = "https://github.com/Spxg/sqlite-wasm-rs"
+description = "`wasm32-unknown-unknown` bindings to the `sqlite-vec` extension."
+categories = ["development-tools::ffi", "wasm", "database"]
+keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "javascript", "sqlite-vec"]
+rust-version = "1.78.0"
+
+[dependencies]
+
+[build-dependencies]
+cc = "1.2.44"
+
+[dev-dependencies]
+sqlite-wasm-rs = { path = "../../" }
+wasm-bindgen-test = "0.3.55"
+

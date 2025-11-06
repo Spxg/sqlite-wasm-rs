@@ -182,5 +182,5 @@ jobs:
       uses: ./.github/actions/setup-emscripten
     - name: Test
       run: |
-        cd crates/sqlite-wasm-vec
+        cd extensions/sqlite-vec
         wasm-pack test --chrome --headless

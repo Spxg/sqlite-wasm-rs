@@ -6,7 +6,7 @@ authors = ["Spxg <unsafe@outlook.es>"]
 readme = "README.md"
 license = "MIT"
 repository = "https://github.com/Spxg/sqlite-wasm-rs"
-description = "Provide sqlite solution for wasm32-unknown-unknown target."
+description = "`wasm32-unknown-unknown` bindings to the libsqlite3 library."
 categories = ["development-tools::ffi", "wasm", "database"]
 keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "javascript"]
 rust-version = "1.78.0"
@@ -64,7 +64,7 @@ resolver = "2"
 exclude = ["examples/custom-libc"]
 members = [
   "crates/sqlite-wasm-libc",
-  "crates/sqlite-wasm-vec",
+  "extensions/sqlite-vec",
   "examples/implement-a-vfs",
   "examples/nodejs"
 ]
