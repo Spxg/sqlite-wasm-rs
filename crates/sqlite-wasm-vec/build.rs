@@ -4,7 +4,7 @@ fn main() {
 
     cc.file("vec/sqlite-vec.c")
         .flag("-include")
-        .flag("vec/shim.h")
+        .flag("vec/wasm-shim.h")
         .define("SQLITE_CORE", None)
         .compile("sqlite_vec0");
 }

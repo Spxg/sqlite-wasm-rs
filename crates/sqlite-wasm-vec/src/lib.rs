@@ -1,10 +1,5 @@
 #![doc = include_str!("../README.md")]
 
-#[allow(non_upper_case_globals)]
-#[allow(non_camel_case_types)]
-#[allow(non_snake_case)]
-mod shim;
-
 #[link(name = "sqlite_vec0")]
 extern "C" {
     pub fn sqlite3_vec_init();
@@ -12,6 +7,8 @@ extern "C" {
 
 #[cfg(test)]
 mod tests {
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
     use std::ffi::CStr;
 
     use crate::sqlite3_vec_init;
