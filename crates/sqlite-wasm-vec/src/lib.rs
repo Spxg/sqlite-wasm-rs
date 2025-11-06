@@ -7,6 +7,8 @@ extern "C" {
 
 #[cfg(test)]
 mod tests {
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
     use std::ffi::CStr;
 
     use crate::sqlite3_vec_init;
