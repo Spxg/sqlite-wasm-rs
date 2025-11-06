@@ -21,7 +21,7 @@ static long long scanexp(FILE *f, int pok)
 	int x;
 	long long y;
 	int neg = 0;
-	
+
 	c = shgetc(f);
 	if (c=='+' || c=='-') {
 		neg = (c=='-');

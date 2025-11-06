@@ -74,7 +74,8 @@ fn main() {
 
     println!("cargo::rerun-if-changed={ld_path}");
     println!("cargo:rustc-link-search=native={ld_path}");
-    println!("cargo:rustc-link-lib=static=sqlite3")
+    println!("cargo:rustc-link-lib=static=sqlite3");
+    println!("cargo:rustc-link-lib=static=wasmuslibc");
 }
 
 #[cfg(all(not(feature = "precompiled"), feature = "bundled"))]
@@ -99,9 +100,14 @@ fn main() {
     bindgen(&output);
 
     if update_precompiled {
-        if !cfg!(feature = "sqlite3mc") {
+        #[cfg(not(feature = "sqlite3mc"))]
+        {
             std::fs::copy(format!("{output}/libsqlite3.a"), "sqlite3/libsqlite3.a").unwrap();
-            std::fs::copy(format!("{output}/libwasmuslibc.a"), "sqlite3/libwasmuslibc.a").unwrap();
+            std::fs::copy(
+                format!("{output}/libwasmuslibc.a"),
+                "sqlite3/libwasmuslibc.a",
+            )
+            .unwrap();
         }
 
         #[cfg(feature = "buildtime-bindgen")]
@@ -225,6 +231,7 @@ fn bindgen(output: &str) {
 fn compile(output: &str) {
     use std::collections::HashSet;
 
+    #[cfg(not(feature = "custom-libc"))]
     const C_SYMBOL_PATH: [&str; 36] = [
         // string
         "string/memchr.c",
@@ -299,22 +306,20 @@ or use the precompiled binaries via the `default-features = false` and `precompi
         cc.flag("-pthread");
     }
 
-    if !cfg!(feature = "custom-libc") {
-        cc.flag("-include").flag("shim/wasm-shim.h");
-    }
+    #[cfg(not(feature = "custom-libc"))]
+    cc.flag("-include").flag("shim/wasm-shim.h");
 
     cc.out_dir(output).compile("sqlite3");
 
-    if !cfg!(feature = "custom-libc") {
-        cc::Build::new()
-            .warnings(false)
-            .target("wasm32-unknown-emscripten")
-            .files(C_SYMBOL_PATH.map(|x| format!("shim/musl/{x}")))
-            .flag("-include")
-            .flag("shim/wasm-shim.h")
-            .out_dir(output)
-            .compile("wasmuslibc");
-    }
+    #[cfg(not(feature = "custom-libc"))]
+    cc::Build::new()
+        .warnings(false)
+        .target("wasm32-unknown-emscripten")
+        .files(C_SYMBOL_PATH.map(|x| format!("shim/musl/{x}")))
+        .flag("-include")
+        .flag("shim/wasm-shim.h")
+        .out_dir(output)
+        .compile("wasmuslibc");
 
     #[cfg(feature = "sqlite3mc")]
     cc::Build::new()
