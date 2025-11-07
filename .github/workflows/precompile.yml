@@ -40,3 +40,4 @@ jobs:
       with:
         subject-path: |
           sqlite3/libsqlite3.a
+          sqlite3/libwasmuslibc.a
