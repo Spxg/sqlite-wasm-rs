@@ -110,12 +110,15 @@ pub unsafe extern "C" fn rust_sqlite_wasm_getentropy(
 
 #[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_assert_fail(
-    _expr: *const c_char,
-    _file: *const c_char,
-    _line: c_int,
-    _func: *const c_char,
+    expr: *const c_char,
+    file: *const c_char,
+    line: c_int,
+    func: *const c_char,
 ) {
-    std::process::abort();
+    let expr = std::ffi::CStr::from_ptr(expr).to_string_lossy();
+    let file = std::ffi::CStr::from_ptr(file).to_string_lossy();
+    let func = std::ffi::CStr::from_ptr(func).to_string_lossy();
+    panic!("{}", format!("Assertion failed: {expr} ({file}: {func}: {line})"));
 }
 
 #[no_mangle]
