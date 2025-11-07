@@ -118,7 +118,10 @@ pub unsafe extern "C" fn rust_sqlite_wasm_assert_fail(
     let expr = std::ffi::CStr::from_ptr(expr).to_string_lossy();
     let file = std::ffi::CStr::from_ptr(file).to_string_lossy();
     let func = std::ffi::CStr::from_ptr(func).to_string_lossy();
-    panic!("{}", format!("Assertion failed: {expr} ({file}: {func}: {line})"));
+    panic!(
+        "{}",
+        format!("Assertion failed: {expr} ({file}: {func}: {line})")
+    );
 }
 
 #[no_mangle]
