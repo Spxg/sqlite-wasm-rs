@@ -8,7 +8,7 @@ license = "MIT"
 repository = "https://github.com/Spxg/sqlite-wasm-rs"
 description = "`wasm32-unknown-unknown` bindings to the `sqlite-vec` extension."
 categories = ["development-tools::ffi", "wasm", "database"]
-keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "javascript", "sqlite-vec"]
+keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "sqlite-vec"]
 rust-version = "1.78.0"
 
 [dependencies]
