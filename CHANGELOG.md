@@ -5,6 +5,16 @@
 
 ### Added
 
+### Fixed
+
+### Changed
+
+--------------------------------------------------------------------------------
+
+## [0.4.7](https://github.com/Spxg/sqlite-wasm-rs/compare/0.4.6...0.4.7)
+
+### Added
+
 * Added comment about incorrect implementation of `Send` + `Sync`.
   [#125](https://github.com/Spxg/sqlite-wasm-rs/pull/125)
 
