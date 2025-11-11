@@ -10,6 +10,20 @@ description = "`wasm32-unknown-unknown` bindings to the libsqlite3 library."
 categories = ["development-tools::ffi", "wasm", "database"]
 keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "javascript"]
 rust-version = "1.78.0"
+include = [
+    'src/**/*.rs',
+    'build.rs',
+    'sqlite3/**/*.c',
+    'sqlite3/**/*.h',
+    'sqlite3/**/*.a',
+    'sqlite3mc/**/*.c',
+    'sqlite3mc/**/*.h',
+    'shim/**/*.h',
+    'shim/**/*.c',
+    'Cargo.toml',
+    '/README.md',
+    'LICENSE',
+]
 
 [dependencies]
 once_cell = "1.21.3"
