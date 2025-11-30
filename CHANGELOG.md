@@ -11,6 +11,15 @@
 
 --------------------------------------------------------------------------------
 
+## [0.4.8](https://github.com/Spxg/sqlite-wasm-rs/compare/0.4.7...0.4.8)
+
+### Changed
+
+* Bump SQLite Version to 3.51.1 and SQLite3MC Version to 2.2.6
+  [#124](https://github.com/Spxg/sqlite-wasm-rs/pull/145)
+
+--------------------------------------------------------------------------------
+
 ## [0.4.7](https://github.com/Spxg/sqlite-wasm-rs/compare/0.4.6...0.4.7)
 
 ### Added
