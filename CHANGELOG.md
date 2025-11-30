@@ -16,7 +16,7 @@
 ### Changed
 
 * Bump SQLite Version to 3.51.1 and SQLite3MC Version to 2.2.6
-  [#124](https://github.com/Spxg/sqlite-wasm-rs/pull/144)
+  [#124](https://github.com/Spxg/sqlite-wasm-rs/pull/145)
 
 --------------------------------------------------------------------------------
 
