@@ -21,6 +21,9 @@
 * Renamed `buildtime-bindgen` feature to `bindgen`.
   [#146](https://github.com/Spxg/sqlite-wasm-rs/pull/146)
 
+* Bump MSRV to 1.82.0.
+  [#148](https://github.com/Spxg/sqlite-wasm-rs/pull/148)
+
 --------------------------------------------------------------------------------
 
 ## [0.4.8](https://github.com/Spxg/sqlite-wasm-rs/compare/0.4.7...0.4.8)

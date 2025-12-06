@@ -10,7 +10,7 @@ repository = "https://github.com/Spxg/sqlite-wasm-rs"
 description = "`wasm32-unknown-unknown` bindings to the libsqlite3 library."
 categories = ["development-tools::ffi", "wasm", "database"]
 keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "javascript"]
-rust-version = "1.78.0"
+rust-version = "1.82.0"
 include = [
     'src/**/*.rs',
     'build.rs',
