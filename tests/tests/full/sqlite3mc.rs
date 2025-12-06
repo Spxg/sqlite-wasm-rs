@@ -72,8 +72,8 @@ unsafe fn test_memvfs_cipher(cipher: &str) {
 
 #[cfg(feature = "relaxed-idb")]
 async unsafe fn test_relaxed_idb_vfs_cipher(cipher: &str) {
-    let util = sqlite_wasm_rs::relaxed_idb_vfs::install(
-        &sqlite_wasm_rs::relaxed_idb_vfs::RelaxedIdbCfgBuilder::new()
+    let util = sqlite_wasm_vfs::relaxed_idb::install(
+        &sqlite_wasm_vfs::relaxed_idb::RelaxedIdbCfgBuilder::new()
             .vfs_name("relaxed-db-cipher")
             .clear_on_init(true)
             .build(),

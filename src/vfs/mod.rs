@@ -4,9 +4,6 @@ pub mod memory;
 pub mod sahpool;
 pub mod utils;
 
-#[cfg(feature = "relaxed-idb")]
-pub mod relaxed_idb;
-
 /// SQLite OS initialization entry point.
 ///
 /// This function is called by SQLite when it is initialized. It sets up the

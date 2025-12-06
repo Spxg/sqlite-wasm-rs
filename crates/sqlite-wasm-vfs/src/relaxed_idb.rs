@@ -3,9 +3,10 @@
 //! **The `relaxed-idb` feature is required, and it is not recommended to use in a production environment.**
 //!
 //! ```rust
-//! use sqlite_wasm_rs::{
-//!     self as ffi,
-//!     relaxed_idb_vfs::{install as install_idb_vfs, RelaxedIdbCfg},
+//! use sqlite_wasm_rs as ffi;
+//! use sqlite_wasm_vfs::relaxed_idb::{
+//!     install as install_idb_vfs,
+//!     RelaxedIdbCfg
 //! };
 //!
 //! async fn open_db() {
@@ -45,12 +46,16 @@
 //! It is particularly important to note that using it on multiple pages may cause DB corruption.
 //! It is recommended to use it in SharedWorker.
 
-use crate::vfs::utils::{
-    check_db_and_page_size, check_import_db, register_vfs, registered_vfs, ImportDbError, LazyCell,
+use sqlite_wasm_rs::utils::{
+    check_db_and_page_size, check_import_db, register_vfs, registered_vfs, ImportDbError,
     MemChunksFile, RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData,
     VfsError, VfsFile, VfsResult, VfsStore,
 };
-use crate::{bail, check_option, check_result, libsqlite3::*};
+use sqlite_wasm_rs::{
+    bail, check_option, check_result, sqlite3_file, sqlite3_vfs, SQLITE_ERROR,
+    SQLITE_FCNTL_COMMIT_PHASETWO, SQLITE_FCNTL_PRAGMA, SQLITE_FCNTL_SYNC, SQLITE_IOERR,
+    SQLITE_IOERR_DELETE, SQLITE_NOTFOUND, SQLITE_OK, SQLITE_OPEN_MAIN_DB,
+};
 use std::cell::RefCell;
 
 use indexed_db_futures::database::Database;
@@ -552,34 +557,25 @@ impl RelaxedIdb {
     }
 }
 
-#[cfg_attr(target_feature = "atomics", thread_local)]
-static ONCE_JS_VALUE: LazyCell<(JsValue, JsValue, JsValue)> = LazyCell::new(|| {
-    (
-        JsValue::from("path"),
-        JsValue::from("offset"),
-        JsValue::from("data"),
-    )
-});
-
 fn get_block(value: JsValue) -> (String, usize, Uint8Array) {
-    let path = Reflect::get(&value, &ONCE_JS_VALUE.0)
+    let path = Reflect::get(&value, &JsValue::from("path"))
         .unwrap()
         .as_string()
         .unwrap();
-    let offset = Reflect::get(&value, &ONCE_JS_VALUE.1)
+    let offset = Reflect::get(&value, &JsValue::from("offset"))
         .unwrap()
         .as_f64()
         .unwrap() as usize;
-    let data = Reflect::get(&value, &ONCE_JS_VALUE.2).unwrap();
+    let data = Reflect::get(&value, &JsValue::from("data")).unwrap();
 
     (path, offset, Uint8Array::from(data))
 }
 
 fn set_block(path: &JsValue, offset: usize, data: &Uint8Array) -> JsValue {
     let block = Object::new();
-    Reflect::set(&block, &ONCE_JS_VALUE.0, path).unwrap();
-    Reflect::set(&block, &ONCE_JS_VALUE.1, &JsValue::from(offset)).unwrap();
-    Reflect::set(&block, &ONCE_JS_VALUE.2, &JsValue::from(data)).unwrap();
+    Reflect::set(&block, &JsValue::from("path"), path).unwrap();
+    Reflect::set(&block, &JsValue::from("offset"), &JsValue::from(offset)).unwrap();
+    Reflect::set(&block, &JsValue::from("data"), &JsValue::from(data)).unwrap();
     block.into()
 }
 
@@ -924,10 +920,8 @@ pub async fn install(options: &RelaxedIdbCfg, default_vfs: bool) -> Result<Relax
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        utils::{test_suite::test_vfs_store, VfsAppData},
-        vfs::relaxed_idb::{IdbFile, RelaxedIdb, RelaxedIdbCfgBuilder, RelaxedIdbStore},
-    };
+    use super::{IdbFile, RelaxedIdb, RelaxedIdbCfgBuilder, RelaxedIdbStore};
+    use sqlite_wasm_rs::utils::{test_suite::test_vfs_store, VfsAppData};
     use wasm_bindgen_test::wasm_bindgen_test;
 
     #[wasm_bindgen_test]

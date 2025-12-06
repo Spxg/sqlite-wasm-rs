@@ -3,7 +3,6 @@
 use crate::libsqlite3::*;
 
 use js_sys::{Date, Math, Number};
-use once_cell::unsync::Lazy;
 use std::{
     cell::RefCell,
     ffi::{CStr, CString},
@@ -65,39 +64,6 @@ macro_rules! unused {
     ($ex:expr) => {
         let _ = $ex;
     };
-}
-
-pub(crate) struct ThreadLocalWrapper<T>(pub(crate) T);
-
-#[cfg(not(target_feature = "atomics"))]
-unsafe impl<T> Sync for ThreadLocalWrapper<T> {}
-
-#[cfg(not(target_feature = "atomics"))]
-unsafe impl<T> Send for ThreadLocalWrapper<T> {}
-
-/// A wrapper around [`once_cell::unsync::Lazy`] that provides `Send` and `Sync`
-/// trait implementations when the `atomics` target feature is not enabled,
-/// allowing for thread-local static initialization.
-pub struct LazyCell<T, F = fn() -> T>(ThreadLocalWrapper<Lazy<T, F>>);
-
-impl<T, F> LazyCell<T, F> {
-    pub const fn new(init: F) -> LazyCell<T, F> {
-        Self(ThreadLocalWrapper(Lazy::new(init)))
-    }
-}
-
-impl<T, F: FnOnce() -> T> LazyCell<T, F> {
-    pub fn force(this: &Self) -> &T {
-        &this.0 .0
-    }
-}
-
-impl<T> Deref for LazyCell<T> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        ::once_cell::unsync::Lazy::force(&self.0 .0)
-    }
 }
 
 /// The header of the SQLite file is used to determine whether the imported file is legal.
@@ -941,7 +907,7 @@ pub fn check_db_and_page_size(db_size: usize, page_size: usize) -> Result<(), Im
     Ok(())
 }
 
-#[cfg(test)]
+/// This is a testing utility for VFS, Don't use it in production code.
 pub mod test_suite {
     use super::{
         sqlite3_file, sqlite3_vfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult,
