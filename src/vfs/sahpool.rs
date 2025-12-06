@@ -109,7 +109,7 @@ impl OpfsSAHPool {
         let mut handle: FileSystemDirectoryHandle = JsFuture::from(
             js_sys::global()
                 .dyn_into::<WorkerGlobalScope>()
-                .map_err(|_| OpfsSAHError::NotSuported)?
+                .map_err(|_| OpfsSAHError::NotSupported)?
                 .navigator()
                 .storage()
                 .get_directory(),
@@ -776,7 +776,7 @@ pub enum OpfsSAHError {
     #[error(transparent)]
     ImportDb(#[from] ImportDbError),
     #[error("This vfs is only available in dedicated worker")]
-    NotSuported,
+    NotSupported,
     #[error("An error occurred while getting the directory handle")]
     GetDirHandle(JsValue),
     #[error("An error occurred while getting the file handle")]
