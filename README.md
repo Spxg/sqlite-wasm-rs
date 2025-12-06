@@ -97,16 +97,7 @@ More see [`use-prebuild-lib`](./examples/use-prebuild-lib) example.
 
 ## Minimum supported Rust version (MSRV)
 
-The minimal officially supported rustc version is 1.78.0.
-
-Compiling with Rust 1.78.0 to 1.82.0 requires:
-
-```shell
-export CFLAGS_wasm32_unknown_unknown="-mno-reference-types"
-export CFLAGS_wasm32_unknown_emscripten="-mno-reference-types"
-```
-
-used to disable `reference-types` of the C library.
+The minimal officially supported rustc version is 1.82.0.
 
 ## Extensions
 
