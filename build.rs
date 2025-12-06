@@ -243,7 +243,9 @@ fn compile() {
     if target_features.contains("atomics") {
         cc.flag("-pthread");
     }
-    cc.flag("-include")
+    cc.include("shim")
+        .flag("-DPRINTF_ALIAS_STANDARD_FUNCTION_NAMES_HARD")
+        .flag("-include")
         .flag("shim/wasm-shim.h")
         .compile("sqlite3");
 }

@@ -80,8 +80,8 @@ void rust_sqlite_wasm_qsort_r(void *base, size_t nel, size_t width,
 int *rust_sqlite_wasm_errno_location(void);
 
 /* stdio */
-#define sprintf sprintf_
-int sprintf_(char *buffer, const char *format, ...);
+#define sprintf rust_sqlite_wasm_sprintf
+int rust_sqlite_wasm_sprintf(char *buffer, const char *format, ...);
 
 /* malloc */
 #define malloc rust_sqlite_wasm_malloc

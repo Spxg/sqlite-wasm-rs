@@ -1,3 +1,3 @@
 # A printf / sprintf Implementation for Embedded Systems
 
-<https://github.com/mpaland/printf>
+<https://github.com/eyalroz/printf>

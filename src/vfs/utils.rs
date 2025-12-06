@@ -907,7 +907,8 @@ pub fn check_db_and_page_size(db_size: usize, page_size: usize) -> Result<(), Im
     Ok(())
 }
 
-/// This is a testing utility for VFS, Don't use it in production code.
+/// This is a testing utility for VFS, don't use it in production code.
+#[doc(hidden)]
 pub mod test_suite {
     use super::{
         sqlite3_file, sqlite3_vfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult,
