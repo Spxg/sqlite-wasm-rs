@@ -31,8 +31,12 @@ const FULL_FEATURED: [&str; 24] = [
 #[cfg(feature = "sqlite3mc")]
 const SQLITE3_MC_FEATURED: [&str; 2] = ["-D__WASM__", "-DARGON2_NO_THREADS"];
 
+const UPDATE_BINDGEN_ENV: &str = "SQLITE_WASM_RS_UPDATE_BINDGEN";
+
 fn main() {
-    const UPDATE_BINDGEN_ENV: &str = "SQLITE_WASM_RS_UPDATE_BINDGEN";
+    if cfg!(feature = "__docsrs") {
+        return;
+    }
 
     println!("cargo::rerun-if-env-changed={UPDATE_BINDGEN_ENV}");
     println!("cargo::rerun-if-changed=shim");
@@ -227,7 +231,10 @@ fn compile() {
         panic!("It looks like you don't have the emscripten toolchain: https://emscripten.org/docs/getting_started/downloads.html");
     }
 
-    cc.file(SQLITE3_SOURCE).flags(FULL_FEATURED);
+    cc.file(SQLITE3_SOURCE)
+        .files(C_SOURCE.map(|s| format!("shim/musl/{s}")))
+        .file("shim/printf/printf.c");
+    cc.flags(FULL_FEATURED);
     #[cfg(feature = "sqlite3mc")]
     cc.flags(SQLITE3_MC_FEATURED);
 
@@ -240,10 +247,7 @@ fn compile() {
     if target_features.contains("atomics") {
         cc.flag("-pthread");
     }
-
-    cc.files(C_SOURCE.map(|s| format!("shim/musl/{s}")))
-        .file("shim/printf/printf.c")
-        .flag("-include")
+    cc.flag("-include")
         .flag("shim/wasm-shim.h")
         .compile("sqlite3");
 }

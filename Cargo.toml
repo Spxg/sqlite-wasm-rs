@@ -53,6 +53,10 @@ indexed_db_futures = { version = "0.6.4", optional = true }
 sqlite3mc = []
 relaxed-idb = ["indexed_db_futures"]
 
+# Don't use it!
+# This feature used to pass crates.io build!
+__docsrs = []
+
 [dev-dependencies]
 wasm-bindgen-test = "0.3.54"
 web-time = "1.1.0"
@@ -62,8 +66,7 @@ cc = "1.2.27"
 bindgen = { version = "0.72", optional = true }
 
 [package.metadata.docs.rs]
-no-default-features = true
-features = ["precompiled"]
+features = ["__docsrs"]
 targets = ["wasm32-unknown-unknown"]
 
 [workspace]
