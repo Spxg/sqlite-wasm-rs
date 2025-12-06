@@ -15,7 +15,6 @@ include = [
     'build.rs',
     'sqlite3/**/*.c',
     'sqlite3/**/*.h',
-    'sqlite3/**/*.a',
     'sqlite3mc/**/*.c',
     'sqlite3mc/**/*.h',
     'shim/**/*.h',
@@ -49,15 +48,12 @@ indexed_db_futures = { version = "0.6.4", optional = true }
 sqlite-wasm-libc = { path = "crates/sqlite-wasm-libc", version = "0.1.0", optional = true }
 
 [features]
-default = ["bundled"]
-bundled = ["cc"]
-precompiled = []
 buildtime-bindgen = ["bindgen"]
-custom-libc = ["bundled", "sqlite-wasm-libc"]
+custom-libc = ["sqlite-wasm-libc"]
 # SQLite3MultipleCiphers
 # <https://github.com/utelle/SQLite3MultipleCiphers>
 # <https://utelle.github.io/SQLite3MultipleCiphers>
-sqlite3mc = ["bundled"]
+sqlite3mc = []
 relaxed-idb = ["indexed_db_futures"]
 
 [dev-dependencies]
@@ -65,8 +61,8 @@ wasm-bindgen-test = "0.3.54"
 web-time = "1.1.0"
 
 [build-dependencies]
+cc = "1.2.27"
 bindgen = { version = "0.72", optional = true }
-cc = { version = "1.2.27", optional = true }
 
 [package.metadata.docs.rs]
 no-default-features = true

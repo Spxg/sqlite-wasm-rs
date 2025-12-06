@@ -1,7 +1,3 @@
-#[cfg(any(
-    all(feature = "bundled", not(feature = "precompiled")),
-    feature = "buildtime-bindgen",
-))]
 const FULL_FEATURED: [&str; 24] = [
     "-DSQLITE_OS_OTHER",
     "-DSQLITE_USE_URI",
@@ -32,53 +28,9 @@ const FULL_FEATURED: [&str; 24] = [
     "-DSQLITE_ENABLE_COLUMN_METADATA",
 ];
 
-#[cfg(all(
-    any(feature = "bundled", feature = "buildtime-bindgen"),
-    feature = "sqlite3mc"
-))]
+#[cfg(feature = "sqlite3mc")]
 const SQLITE3_MC_FEATURED: [&str; 2] = ["-D__WASM__", "-DARGON2_NO_THREADS"];
 
-#[cfg(all(not(feature = "bundled"), not(feature = "precompiled")))]
-fn main() {
-    panic!(
-        "
-must set `bundled` or `precompiled` feature
-"
-    );
-}
-
-#[cfg(all(feature = "bundled", feature = "precompiled"))]
-fn main() {
-    panic!(
-        "
-`bundled` feature and `precompiled` feature can't use together
-"
-    );
-}
-
-#[cfg(all(not(feature = "bundled"), feature = "precompiled"))]
-fn main() {
-    const CUSTOM_LD_LIB_PATH: &str = "SQLITE_WASM_RS_PREBUILD_LD_LIB_PATH";
-
-    println!("cargo::rerun-if-env-changed={CUSTOM_LD_LIB_PATH}");
-
-    #[cfg(feature = "buildtime-bindgen")]
-    bindgen(&std::env::var("OUT_DIR").expect("OUT_DIR env not set"));
-
-    let ld_path = std::env::var(CUSTOM_LD_LIB_PATH).unwrap_or_else(|_| {
-        std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
-            .join("sqlite3")
-            .to_string_lossy()
-            .to_string()
-    });
-
-    println!("cargo::rerun-if-changed={ld_path}");
-    println!("cargo:rustc-link-search=native={ld_path}");
-    println!("cargo:rustc-link-lib=static=sqlite3");
-    println!("cargo:rustc-link-lib=static=wasmuslibc");
-}
-
-#[cfg(all(not(feature = "precompiled"), feature = "bundled"))]
 fn main() {
     const UPDATE_LIB_ENV: &str = "SQLITE_WASM_RS_UPDATE_PREBUILD";
 
@@ -227,7 +179,6 @@ fn bindgen(output: &str) {
         .unwrap();
 }
 
-#[cfg(all(feature = "bundled", not(feature = "precompiled")))]
 fn compile(output: &str) {
     use std::collections::HashSet;
 
