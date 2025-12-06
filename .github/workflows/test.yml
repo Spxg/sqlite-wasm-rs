@@ -188,3 +188,20 @@ jobs:
       run: |
         cd crates/sqlite-wasm-vfs
         wasm-pack test --chrome --headless --all-features
+
+  test_sqlite_wasm_tests:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install wasm-pack
+      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+    - name: Setup emscripten
+      uses: ./.github/actions/setup-emscripten
+    - name: Test
+      run: |
+        cd tests
+        wasm-pack test --chrome --headless --features relaxed-idb
+        wasm-pack test --chrome --headless --features sqlite3mc,relaxed-idb
