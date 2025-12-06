@@ -1,6 +1,7 @@
 [package]
 name = "sqlite-wasm-vec"
 version = "0.1.0"
+links = "sqlite_vec0"
 edition = "2021"
 authors = ["Spxg <unsafe@outlook.es>"]
 readme = "README.md"
@@ -20,3 +21,6 @@ cc = "1.2.44"
 sqlite-wasm-rs = { path = "../../" }
 wasm-bindgen-test = "0.3.55"
 
+[package.metadata.docs.rs]
+targets = ["wasm32-unknown-unknown"]
+cargo-args = ["--config", "docsrs.toml"]

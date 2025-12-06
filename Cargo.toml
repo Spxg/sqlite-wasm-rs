@@ -1,6 +1,7 @@
 [package]
 name = "sqlite-wasm-rs"
-version = "0.4.8"
+version = "0.5.0"
+links = "sqlite3"
 edition = "2021"
 authors = ["Spxg <unsafe@outlook.es>"]
 readme = "README.md"
@@ -15,7 +16,6 @@ include = [
     'build.rs',
     'sqlite3/**/*.c',
     'sqlite3/**/*.h',
-    'sqlite3/**/*.a',
     'sqlite3mc/**/*.c',
     'sqlite3mc/**/*.h',
     'shim/**/*.h',
@@ -23,10 +23,11 @@ include = [
     'Cargo.toml',
     '/README.md',
     'LICENSE',
+    # use to build docs
+    'docsrs.toml',
 ]
 
 [dependencies]
-once_cell = "1.21.3"
 tokio = { version = "1.45.1", features = ["sync"] }
 thiserror = "2.0.12"
 
@@ -45,40 +46,31 @@ web-sys = { version = "0.3.81", features = [
   "FileSystemFileHandle",
 ]}
 
-indexed_db_futures = { version = "0.6.4", optional = true }
-sqlite-wasm-libc = { path = "crates/sqlite-wasm-libc", version = "0.1.0", optional = true }
-
 [features]
-default = ["bundled"]
-bundled = ["cc"]
-precompiled = []
-buildtime-bindgen = ["bindgen"]
-custom-libc = ["bundled", "sqlite-wasm-libc"]
 # SQLite3MultipleCiphers
 # <https://github.com/utelle/SQLite3MultipleCiphers>
 # <https://utelle.github.io/SQLite3MultipleCiphers>
-sqlite3mc = ["bundled"]
-relaxed-idb = ["indexed_db_futures"]
+sqlite3mc = []
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.54"
-web-time = "1.1.0"
 
 [build-dependencies]
+cc = "1.2.27"
 bindgen = { version = "0.72", optional = true }
-cc = { version = "1.2.27", optional = true }
 
 [package.metadata.docs.rs]
-no-default-features = true
-features = ["precompiled"]
 targets = ["wasm32-unknown-unknown"]
+cargo-args = ["--config", "docsrs.toml"]
 
 [workspace]
 resolver = "2"
-exclude = ["examples/custom-libc"]
 members = [
+  "tests",
   "crates/sqlite-wasm-libc",
+  "crates/sqlite-wasm-vfs",
   "extensions/sqlite-vec",
   "examples/implement-a-vfs",
-  "examples/nodejs"
+  "examples/nodejs",
+  "examples/use-prebuild-lib"
 ]

@@ -1,19 +1,19 @@
 //! This module is codegen from build.rs
 
-#[cfg(all(not(feature = "buildtime-bindgen"), feature = "sqlite3mc"))]
+#[cfg(all(not(feature = "bindgen"), feature = "sqlite3mc"))]
 mod sqlite3mc_bindgen;
 
-#[cfg(all(not(feature = "buildtime-bindgen"), not(feature = "sqlite3mc")))]
+#[cfg(all(not(feature = "bindgen"), not(feature = "sqlite3mc")))]
 mod sqlite3_bindgen;
 
 mod bindgen {
-    #[cfg(feature = "buildtime-bindgen")]
+    #[cfg(feature = "bindgen")]
     include!(concat!(env!("OUT_DIR"), "/bindgen.rs"));
 
-    #[cfg(all(not(feature = "buildtime-bindgen"), feature = "sqlite3mc"))]
+    #[cfg(all(not(feature = "bindgen"), feature = "sqlite3mc"))]
     pub use super::sqlite3mc_bindgen::*;
 
-    #[cfg(all(not(feature = "buildtime-bindgen"), not(feature = "sqlite3mc")))]
+    #[cfg(all(not(feature = "bindgen"), not(feature = "sqlite3mc")))]
     pub use super::sqlite3_bindgen::*;
 }
 

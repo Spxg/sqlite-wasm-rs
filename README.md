@@ -4,24 +4,18 @@
 
 ## Usage
 
+Due to restrictions on the target platform, the [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) toolchain needs to be installed for compilation.
+
 ```toml
 [dependencies]
-# Using `bundled` default feature causes us to automatically compile
-# and link in an up to date, requires the emscripten toolchain.
-sqlite-wasm-rs = "0.4"
+sqlite-wasm-rs = "0.5"
 ```
 
 ```toml
 [dependencies]
-# If you don't have the emscripten toolchain, you can use the `precompiled` feature.
-sqlite-wasm-rs = { version = "0.4", default-features = false, features = ["precompiled"] }
-```
-
-```toml
-[dependencies]
-# Encryption is supported by SQLite3MultipleCiphers, need to enable the bundled feature.
+# Encryption is supported by SQLite3MultipleCiphers
 # See <https://utelle.github.io/SQLite3MultipleCiphers>
-sqlite-wasm-rs = { version = "0.4", features = ["sqlite3mc"] }
+sqlite-wasm-rs = { version = "0.5", features = ["sqlite3mc"] }
 ```
 
 ```rust
@@ -68,7 +62,7 @@ The following vfs have been implemented:
 
 * [`memory`](./src/vfs/memory.rs): as the default vfs, no additional conditions are required, store the database in memory.
 * [`sahpool`](./src/vfs/sahpool.rs): ported from sqlite-wasm, store the database in opfs.
-* [`relaxed-idb`](./src/vfs/relaxed_idb.rs): store the database in blocks in indexed db.
+* [`relaxed-idb`](./crates/sqlite-wasm-vfs/src/relaxed_idb.rs): store the database in blocks in indexed db.
 
 ### VFS Comparison
 
@@ -93,24 +87,13 @@ This library is not thread-safe:
 * `JsValue` is not cross-threaded, see <https://github.com/rustwasm/wasm-bindgen/pull/955> for details.
 * sqlite is compiled with `-DSQLITE_THREADSAFE=0`.
 
-## Precompiled libsqlite3.a
+## Use prebuild libsqlite3.a
 
-Since `wasm32-unknown-unknown` does not have sysroot, emscripten is used here for compilation, otherwise we need to copy a bunch of c headers required for sqlite3 compilation. If bundled feature is enabled, the emscripten toolchain is required, and we cannot assume that all users have it installed. (Believe me, because rust mainly supports the `wasm32-unknown-unknown` target, most people do not have the emscripten toolchain). Considering that wasm is cross-platform, vendor compilation products are acceptable.
+We provide the ability to use prebuild `libsqlite3.a`, cargo provides a [`links`](https://doc.rust-lang.org/cargo/reference/manifest.html#the-links-field) field that can be used to specify which library to link to.
 
-About security:
+With the help of [overriding build scripts](https://doc.rust-lang.org/cargo/reference/build-scripts.html#overriding-build-scripts), you can overriding its configuration in your crate and link sqlite to your prebuild `libsqlite3.a`.
 
-* You can specify the bundled feature to compile sqlite locally, which requires the emscripten toolchain.
-* Currently all precompiled products are compiled and committed through Github Actions, which can be tracked, downloaded and compared.
-
-[Precompile Workflow](./.github/workflows/precompile.yml) | [Change History](https://github.com/Spxg/sqlite-wasm-rs/commits/master/sqlite3) | [Actions](https://github.com/Spxg/sqlite-wasm-rs/actions?query=event%3Aworkflow_dispatch)
-
-## Use external libc
-
-We provide the ability to customize "libc", cargo provides a [`links`](https://doc.rust-lang.org/cargo/reference/manifest.html#the-links-field) field that can be used to specify which library to link to.
-
-We created a new [`sqlite-wasm-libc`](./crates/sqlite-wasm-libc) library with no implementation and only a `links = "libc"` configuration, and then with the help of [overriding build scripts](https://doc.rust-lang.org/cargo/reference/build-scripts.html#overriding-build-scripts), you can overriding its configuration in your crate and link sqlite to your custom libc.
-
-More see [`custom-libc`](./examples/custom-libc) example.
+More see [`use-prebuild-lib`](./examples/use-prebuild-lib) example.
 
 ## Minimum supported Rust version (MSRV)
 

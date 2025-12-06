@@ -5,9 +5,21 @@
 
 ### Added
 
+* New crate `sqlite-wasm-vfs`: some experimental VFS implementations.
+  [#146](https://github.com/Spxg/sqlite-wasm-rs/pull/146)
+
 ### Fixed
 
 ### Changed
+
+* Moved `relaxed-idb` vfs to `sqlite-wasm-vfs`.
+  [#146](https://github.com/Spxg/sqlite-wasm-rs/pull/146)
+
+* Removed `relaxed-idb`, `precompiled`, `custom-libc`, `bundled` features.
+  [#146](https://github.com/Spxg/sqlite-wasm-rs/pull/146)
+
+* Renamed `buildtime-bindgen` feature to `bindgen`.
+  [#146](https://github.com/Spxg/sqlite-wasm-rs/pull/146)
 
 --------------------------------------------------------------------------------
 

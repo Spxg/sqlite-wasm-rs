@@ -109,7 +109,7 @@ impl OpfsSAHPool {
         let mut handle: FileSystemDirectoryHandle = JsFuture::from(
             js_sys::global()
                 .dyn_into::<WorkerGlobalScope>()
-                .map_err(|_| OpfsSAHError::NotSuported)?
+                .map_err(|_| OpfsSAHError::NotSupported)?
                 .navigator()
                 .storage()
                 .get_directory(),
@@ -776,7 +776,7 @@ pub enum OpfsSAHError {
     #[error(transparent)]
     ImportDb(#[from] ImportDbError),
     #[error("This vfs is only available in dedicated worker")]
-    NotSuported,
+    NotSupported,
     #[error("An error occurred while getting the directory handle")]
     GetDirHandle(JsValue),
     #[error("An error occurred while getting the file handle")]
@@ -815,12 +815,6 @@ impl OpfsSAHError {
 pub struct OpfsSAHPoolUtil {
     pool: &'static VfsAppData<SyncAccessHandleAppData>,
 }
-
-/// Because it was previously implemented with `Send` + `Sync` by mistake,
-/// it is temporarily retained for compatibility reasons and will be
-/// removed in the next major version update.
-unsafe impl Send for OpfsSAHPoolUtil {}
-unsafe impl Sync for OpfsSAHPoolUtil {}
 
 impl OpfsSAHPoolUtil {
     /// Returns the number of files currently contained in the SAH pool.

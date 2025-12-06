@@ -1,7 +1,3 @@
-#[cfg(any(
-    all(feature = "bundled", not(feature = "precompiled")),
-    feature = "buildtime-bindgen",
-))]
 const FULL_FEATURED: [&str; 24] = [
     "-DSQLITE_OS_OTHER",
     "-DSQLITE_USE_URI",
@@ -32,61 +28,14 @@ const FULL_FEATURED: [&str; 24] = [
     "-DSQLITE_ENABLE_COLUMN_METADATA",
 ];
 
-#[cfg(all(
-    any(feature = "bundled", feature = "buildtime-bindgen"),
-    feature = "sqlite3mc"
-))]
+#[cfg(feature = "sqlite3mc")]
 const SQLITE3_MC_FEATURED: [&str; 2] = ["-D__WASM__", "-DARGON2_NO_THREADS"];
 
-#[cfg(all(not(feature = "bundled"), not(feature = "precompiled")))]
+const UPDATE_BINDGEN_ENV: &str = "SQLITE_WASM_RS_UPDATE_BINDGEN";
+
 fn main() {
-    panic!(
-        "
-must set `bundled` or `precompiled` feature
-"
-    );
-}
-
-#[cfg(all(feature = "bundled", feature = "precompiled"))]
-fn main() {
-    panic!(
-        "
-`bundled` feature and `precompiled` feature can't use together
-"
-    );
-}
-
-#[cfg(all(not(feature = "bundled"), feature = "precompiled"))]
-fn main() {
-    const CUSTOM_LD_LIB_PATH: &str = "SQLITE_WASM_RS_PREBUILD_LD_LIB_PATH";
-
-    println!("cargo::rerun-if-env-changed={CUSTOM_LD_LIB_PATH}");
-
-    #[cfg(feature = "buildtime-bindgen")]
-    bindgen(&std::env::var("OUT_DIR").expect("OUT_DIR env not set"));
-
-    let ld_path = std::env::var(CUSTOM_LD_LIB_PATH).unwrap_or_else(|_| {
-        std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
-            .join("sqlite3")
-            .to_string_lossy()
-            .to_string()
-    });
-
-    println!("cargo::rerun-if-changed={ld_path}");
-    println!("cargo:rustc-link-search=native={ld_path}");
-    println!("cargo:rustc-link-lib=static=sqlite3");
-    println!("cargo:rustc-link-lib=static=wasmuslibc");
-}
-
-#[cfg(all(not(feature = "precompiled"), feature = "bundled"))]
-fn main() {
-    const UPDATE_LIB_ENV: &str = "SQLITE_WASM_RS_UPDATE_PREBUILD";
-
-    println!("cargo::rerun-if-env-changed={UPDATE_LIB_ENV}");
+    println!("cargo::rerun-if-env-changed={UPDATE_BINDGEN_ENV}");
     println!("cargo::rerun-if-changed=shim");
-
-    let update_precompiled = std::env::var(UPDATE_LIB_ENV).is_ok();
-    let output = std::env::var("OUT_DIR").expect("OUT_DIR env not set");
 
     #[cfg(feature = "sqlite3mc")]
     println!("cargo::rerun-if-changed=sqlite3mc");
@@ -94,35 +43,28 @@ fn main() {
     #[cfg(not(feature = "sqlite3mc"))]
     println!("cargo::rerun-if-changed=sqlite3");
 
-    compile(&output);
+    compile();
 
-    #[cfg(feature = "buildtime-bindgen")]
-    bindgen(&output);
+    #[cfg(feature = "bindgen")]
+    {
+        let update_bindgen = std::env::var(UPDATE_BINDGEN_ENV).is_ok();
+        let output =
+            std::path::PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR env not set"))
+                .join("bindgen.rs");
+        bindgen(&output);
 
-    if update_precompiled {
-        #[cfg(not(feature = "sqlite3mc"))]
-        {
-            std::fs::copy(format!("{output}/libsqlite3.a"), "sqlite3/libsqlite3.a").unwrap();
-            std::fs::copy(
-                format!("{output}/libwasmuslibc.a"),
-                "sqlite3/libwasmuslibc.a",
-            )
-            .unwrap();
-        }
-
-        #[cfg(feature = "buildtime-bindgen")]
-        {
+        if update_bindgen {
             #[cfg(not(feature = "sqlite3mc"))]
             const SQLITE3_BINDGEN: &str = "src/libsqlite3/sqlite3_bindgen.rs";
             #[cfg(feature = "sqlite3mc")]
             const SQLITE3_BINDGEN: &str = "src/libsqlite3/sqlite3mc_bindgen.rs";
-            std::fs::copy(format!("{output}/bindgen.rs"), SQLITE3_BINDGEN).unwrap();
+            std::fs::copy(&output, SQLITE3_BINDGEN).unwrap();
         }
     }
 }
 
-#[cfg(feature = "buildtime-bindgen")]
-fn bindgen(output: &str) {
+#[cfg(feature = "bindgen")]
+fn bindgen(output: &std::path::PathBuf) {
     #[cfg(not(feature = "sqlite3mc"))]
     const SQLITE3_HEADER: &str = "sqlite3/sqlite3.h";
     #[cfg(feature = "sqlite3mc")]
@@ -222,17 +164,13 @@ fn bindgen(output: &str) {
         .generate()
         .unwrap();
 
-    bindings
-        .write_to_file(format!("{output}/bindgen.rs"))
-        .unwrap();
+    bindings.write_to_file(output).unwrap();
 }
 
-#[cfg(all(feature = "bundled", not(feature = "precompiled")))]
-fn compile(output: &str) {
+fn compile() {
     use std::collections::HashSet;
 
-    #[cfg(not(feature = "custom-libc"))]
-    const C_SYMBOL_PATH: [&str; 36] = [
+    const C_SOURCE: [&str; 36] = [
         // string
         "string/memchr.c",
         "string/memrchr.c",
@@ -286,13 +224,13 @@ fn compile(output: &str) {
     cc.warnings(false).target("wasm32-unknown-emscripten");
 
     if cc.get_compiler().to_command().status().is_err() {
-        panic!("
-It looks like you don't have the emscripten toolchain: https://emscripten.org/docs/getting_started/downloads.html,
-or use the precompiled binaries via the `default-features = false` and `precompiled` feature flag.
-");
+        panic!("It looks like you don't have the emscripten toolchain: https://emscripten.org/docs/getting_started/downloads.html");
     }
 
-    cc.file(SQLITE3_SOURCE).flags(FULL_FEATURED);
+    cc.file(SQLITE3_SOURCE)
+        .files(C_SOURCE.map(|s| format!("shim/musl/{s}")))
+        .file("shim/printf/printf.c");
+    cc.flags(FULL_FEATURED);
     #[cfg(feature = "sqlite3mc")]
     cc.flags(SQLITE3_MC_FEATURED);
 
@@ -305,27 +243,7 @@ or use the precompiled binaries via the `default-features = false` and `precompi
     if target_features.contains("atomics") {
         cc.flag("-pthread");
     }
-
-    #[cfg(not(feature = "custom-libc"))]
-    cc.flag("-include").flag("shim/wasm-shim.h");
-
-    cc.out_dir(output).compile("sqlite3");
-
-    #[cfg(not(feature = "custom-libc"))]
-    cc::Build::new()
-        .warnings(false)
-        .target("wasm32-unknown-emscripten")
-        .files(C_SYMBOL_PATH.map(|x| format!("shim/musl/{x}")))
-        .flag("-include")
+    cc.flag("-include")
         .flag("shim/wasm-shim.h")
-        .out_dir(output)
-        .compile("wasmuslibc");
-
-    #[cfg(feature = "sqlite3mc")]
-    cc::Build::new()
-        .warnings(false)
-        .target("wasm32-unknown-emscripten")
-        .file("shim/printf/printf.c")
-        .out_dir(output)
-        .compile("printf");
+        .compile("sqlite3");
 }
