@@ -931,10 +931,10 @@ pub mod test_suite {
                 .any(|&x| x != 42)
             || read_buffer[write_buffer.len()..].iter().any(|&x| x != 0)
         {
-            return Err(VfsError::new(SQLITE_IOERR, "incorrect buffer data".into()))?;
+            Err(VfsError::new(SQLITE_IOERR, "incorrect buffer data".into()))?;
         }
         if file.size()? != write_buffer.len() {
-            return Err(VfsError::new(
+            Err(VfsError::new(
                 SQLITE_IOERR,
                 "incorrect buffer length".into(),
             ))?;
@@ -942,7 +942,7 @@ pub mod test_suite {
 
         file.write(&write_buffer, base_offset)?;
         if file.size()? != base_offset + write_buffer.len() {
-            return Err(VfsError::new(
+            Err(VfsError::new(
                 SQLITE_IOERR,
                 "incorrect buffer length".into(),
             ))?;
@@ -960,7 +960,7 @@ pub mod test_suite {
                 .iter()
                 .any(|&x| x != 42)
         {
-            return Err(VfsError::new(SQLITE_IOERR, "incorrect buffer data".into()))?;
+            Err(VfsError::new(SQLITE_IOERR, "incorrect buffer data".into()))?;
         }
 
         Ok(SQLITE_OK)
@@ -978,7 +978,7 @@ pub mod test_suite {
 
         let test_file = |filename: &str, flags: i32| {
             if Store::contains_file(vfs, filename)? {
-                return Err(VfsError::new(SQLITE_IOERR, "found file before test".into()))?;
+                Err(VfsError::new(SQLITE_IOERR, "found file before test".into()))?;
             }
 
             let vfs_file = SQLiteVfsFile {
@@ -994,7 +994,7 @@ pub mod test_suite {
             Store::add_file(vfs, filename, flags)?;
 
             if !Store::contains_file(vfs, filename)? {
-                return Err(VfsError::new(
+                Err(VfsError::new(
                     SQLITE_IOERR,
                     "not found file after create".into(),
                 ))?;
@@ -1005,7 +1005,7 @@ pub mod test_suite {
             Store::delete_file(vfs, filename)?;
 
             if Store::contains_file(vfs, filename)? {
-                return Err(VfsError::new(
+                Err(VfsError::new(
                     SQLITE_IOERR,
                     "found file after delete".into(),
                 ))?;
