@@ -50,7 +50,7 @@ fn main() {
         let update_bindgen = std::env::var(UPDATE_BINDGEN_ENV).is_ok();
         let output =
             std::path::PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR env not set"))
-                .join("bindings.rs");
+                .join("bindgen.rs");
         bindgen(&output);
 
         if update_bindgen {
