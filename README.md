@@ -89,9 +89,7 @@ This library is not thread-safe:
 
 ## Use prebuild libsqlite3.a
 
-We provide the ability to use prebuild `libsqlite3.a`, cargo provides a [`links`](https://doc.rust-lang.org/cargo/reference/manifest.html#the-links-field) field that can be used to specify which library to link to.
-
-With the help of [overriding build scripts](https://doc.rust-lang.org/cargo/reference/build-scripts.html#overriding-build-scripts), you can overriding its configuration in your crate and link sqlite to your prebuild `libsqlite3.a`.
+We provide the ability to use prebuild `libsqlite3.a`, cargo provides a [`links`](https://doc.rust-lang.org/cargo/reference/manifest.html#the-links-field) field that can be used to specify which library to link to. With the help of [overriding build scripts](https://doc.rust-lang.org/cargo/reference/build-scripts.html#overriding-build-scripts), you can overriding its configuration in your crate and link sqlite to your prebuild `libsqlite3.a`.
 
 More see [`use-prebuild-lib`](./examples/use-prebuild-lib) example.
 
