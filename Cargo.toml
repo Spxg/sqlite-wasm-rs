@@ -45,10 +45,8 @@ web-sys = { version = "0.3.81", features = [
 ]}
 
 indexed_db_futures = { version = "0.6.4", optional = true }
-sqlite-wasm-libc = { path = "crates/sqlite-wasm-libc", version = "0.1.0", optional = true }
 
 [features]
-custom-libc = ["sqlite-wasm-libc"]
 # SQLite3MultipleCiphers
 # <https://github.com/utelle/SQLite3MultipleCiphers>
 # <https://utelle.github.io/SQLite3MultipleCiphers>
@@ -70,7 +68,6 @@ targets = ["wasm32-unknown-unknown"]
 
 [workspace]
 resolver = "2"
-exclude = ["examples/custom-libc"]
 members = [
   "crates/sqlite-wasm-libc",
   "extensions/sqlite-vec",

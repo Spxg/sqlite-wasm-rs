@@ -11,7 +11,6 @@
 #[allow(clippy::type_complexity)]
 mod libsqlite3;
 
-#[cfg(not(feature = "custom-libc"))]
 #[allow(non_upper_case_globals)]
 #[allow(non_camel_case_types)]
 #[allow(non_snake_case)]
@@ -38,11 +37,6 @@ pub use vfs::relaxed_idb as relaxed_idb_vfs;
 
 /// Utility functions and types to help with creating custom VFS implementations.
 pub use vfs::utils;
-
-/// Re-export of `sqlite-wasm-libc` to ensure it's linked when the `custom-libc`
-/// feature is enabled. This prevents the compiler from optimizing it away.
-#[cfg(feature = "custom-libc")]
-pub use sqlite_wasm_libc;
 
 #[cfg(test)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_dedicated_worker);
