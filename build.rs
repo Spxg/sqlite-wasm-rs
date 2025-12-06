@@ -48,7 +48,7 @@ fn main() {
 
     compile(&output);
 
-    #[cfg(feature = "buildtime-bindgen")]
+    #[cfg(feature = "bindgen")]
     bindgen(&output);
 
     if update_precompiled {
@@ -62,7 +62,7 @@ fn main() {
             .unwrap();
         }
 
-        #[cfg(feature = "buildtime-bindgen")]
+        #[cfg(feature = "bindgen")]
         {
             #[cfg(not(feature = "sqlite3mc"))]
             const SQLITE3_BINDGEN: &str = "src/libsqlite3/sqlite3_bindgen.rs";
@@ -73,7 +73,7 @@ fn main() {
     }
 }
 
-#[cfg(feature = "buildtime-bindgen")]
+#[cfg(feature = "bindgen")]
 fn bindgen(output: &str) {
     #[cfg(not(feature = "sqlite3mc"))]
     const SQLITE3_HEADER: &str = "sqlite3/sqlite3.h";
