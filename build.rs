@@ -34,10 +34,6 @@ const SQLITE3_MC_FEATURED: [&str; 2] = ["-D__WASM__", "-DARGON2_NO_THREADS"];
 const UPDATE_BINDGEN_ENV: &str = "SQLITE_WASM_RS_UPDATE_BINDGEN";
 
 fn main() {
-    if cfg!(feature = "__docsrs") {
-        return;
-    }
-
     println!("cargo::rerun-if-env-changed={UPDATE_BINDGEN_ENV}");
     println!("cargo::rerun-if-changed=shim");
 

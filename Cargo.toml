@@ -23,6 +23,8 @@ include = [
     'Cargo.toml',
     '/README.md',
     'LICENSE',
+    # use to build docs
+    'docsrs.toml',
 ]
 
 [dependencies]
@@ -50,10 +52,6 @@ web-sys = { version = "0.3.81", features = [
 # <https://utelle.github.io/SQLite3MultipleCiphers>
 sqlite3mc = []
 
-# Don't use it!
-# This feature used to pass crates.io build!
-__docsrs = []
-
 [dev-dependencies]
 wasm-bindgen-test = "0.3.54"
 
@@ -62,8 +60,8 @@ cc = "1.2.27"
 bindgen = { version = "0.72", optional = true }
 
 [package.metadata.docs.rs]
-features = ["__docsrs"]
 targets = ["wasm32-unknown-unknown"]
+cargo-args = ["--config", "docsrs.toml"]
 
 [workspace]
 resolver = "2"

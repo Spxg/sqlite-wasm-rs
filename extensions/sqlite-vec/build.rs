@@ -1,8 +1,4 @@
 fn main() {
-    if cfg!(feature = "__docsrs") {
-        return;
-    }
-
     let mut cc = cc::Build::new();
     cc.warnings(false).target("wasm32-unknown-emscripten");
 

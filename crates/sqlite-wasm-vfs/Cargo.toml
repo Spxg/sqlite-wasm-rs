@@ -25,3 +25,7 @@ wasm-bindgen-test = "0.3.54"
 
 [features]
 relaxed-idb = ["indexed_db_futures"]
+
+[package.metadata.docs.rs]
+targets = ["wasm32-unknown-unknown"]
+cargo-args = ["--config", "docsrs.toml"]

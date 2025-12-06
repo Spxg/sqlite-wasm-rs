@@ -17,15 +17,10 @@ rust-version = "1.78.0"
 [build-dependencies]
 cc = "1.2.44"
 
-[features]
-# Don't use it!
-# This feature used to pass crates.io build!
-__docsrs = []
-
 [dev-dependencies]
 sqlite-wasm-rs = { path = "../../" }
 wasm-bindgen-test = "0.3.55"
 
 [package.metadata.docs.rs]
-features = ["__docsrs"]
 targets = ["wasm32-unknown-unknown"]
+cargo-args = ["--config", "docsrs.toml"]
