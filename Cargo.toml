@@ -61,3 +61,7 @@ members = [
   "examples/nodejs",
   "examples/use-prebuild-lib"
 ]
+
+[patch.crates-io]
+sqlite-wasm-rs = { path = "./" }
+sqlite-wasm-vfs = { path = "./crates/sqlite-wasm-vfs" }

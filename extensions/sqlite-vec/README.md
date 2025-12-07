@@ -7,7 +7,7 @@
 ```toml
 [dependencies]
 sqlite-wasm-vec = "0.1"
-sqlite-wasm-rs = "0.4"
+sqlite-wasm-rs = "0.5"
 ```
 
 ```rust
