@@ -38,6 +38,11 @@ async fn open_db() {
 
 ## About VFS
 
+```toml
+[dependencies]
+sqlite-wasm-vfs = "0.1"
+```
+
 The following vfs have been implemented:
 
 * [`memory`](./src/vfs/memory.rs): as the default vfs, no additional conditions are required, store the database in memory.
