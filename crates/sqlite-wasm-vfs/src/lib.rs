@@ -4,7 +4,6 @@
 #![allow(non_snake_case)]
 
 /// IndexedDB VFS implementation with relaxed durability guarantees.
-#[cfg(feature = "relaxed-idb")]
 pub mod relaxed_idb;
 
 /// Origin Private File System (OPFS) VFS implementation using `SyncAccessHandle`.

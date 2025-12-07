@@ -71,7 +71,6 @@ unsafe fn test_memvfs_cipher(cipher: &str) {
     assert_eq!(ret, SQLITE_OK);
 }
 
-#[cfg(feature = "relaxed-idb")]
 async unsafe fn test_relaxed_idb_vfs_cipher(cipher: &str) {
     let util = sqlite_wasm_vfs::relaxed_idb::install(
         &sqlite_wasm_vfs::relaxed_idb::RelaxedIdbCfgBuilder::new()
@@ -192,7 +191,6 @@ macro_rules! sah_sqlite3_mc {
 
 macro_rules! relaxed_idb_sqlite3_mc {
     ($name:ident, $cipher:literal) => {
-        #[cfg(feature = "relaxed-idb")]
         #[wasm_bindgen_test]
         async fn $name() {
             unsafe {
