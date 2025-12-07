@@ -6,5 +6,5 @@ fn main() {
         .flag("-include")
         .flag("cc/wasm-shim.h")
         .define("SQLITE_CORE", None)
-        .compile("sqlite_vec0");
+        .compile("wsqlite_vec0");
 }

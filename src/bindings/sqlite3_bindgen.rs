@@ -22,6 +22,22 @@ extern "C" {
         >,
     ) -> ::core::ffi::c_int;
 }
+pub unsafe fn sqlite3_load_extension(
+    _db: *mut sqlite3,
+    _zFile: *const ::core::ffi::c_char,
+    _zProc: *const ::core::ffi::c_char,
+    _pzErrMsg: *mut *mut ::core::ffi::c_char,
+) -> ::core::ffi::c_int {
+    // SQLITE_ERROR
+    1
+}
+pub unsafe fn sqlite3_enable_load_extension(
+    _db: *mut sqlite3,
+    _onoff: ::core::ffi::c_int,
+) -> ::core::ffi::c_int {
+    // SQLITE_ERROR
+    1
+}
 
 pub const SQLITE_VERSION: &::core::ffi::CStr = c"3.51.1";
 pub const SQLITE_VERSION_NUMBER: i32 = 3051001;
