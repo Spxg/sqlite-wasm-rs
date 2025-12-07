@@ -5,13 +5,13 @@
 //!
 //! fn open_db() {
 //!     // open with memory vfs
-//!     let mut db = std::ptr::null_mut();
+//!     let mut db = core::ptr::null_mut();
 //!     let ret = unsafe {
 //!         ffi::sqlite3_open_v2(
 //!             c"mem.db".as_ptr().cast(),
 //!             &mut db as *mut _,
 //!             ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
-//!             std::ptr::null()
+//!             core::ptr::null()
 //!         )
 //!     };
 //!     assert_eq!(ffi::SQLITE_OK, ret);
@@ -24,19 +24,23 @@
 //! Refresh the page and data will be lost, and you also need to
 //! pay attention to the memory size limit of the browser page.
 
-use crate::libsqlite3::*;
-use crate::vfs::utils::{
+use crate::bindings::*;
+use crate::utils::{
     check_import_db, ImportDbError, MemChunksFile, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile,
     VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
 };
 
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::ffi::CStr;
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec::Vec;
+use alloc::{format, vec};
+use core::cell::RefCell;
+use core::ffi::CStr;
+use hashbrown::HashMap;
 
 const VFS_NAME: &CStr = c"memvfs";
 
-type Result<T> = std::result::Result<T, MemVfsError>;
+type Result<T> = core::result::Result<T, MemVfsError>;
 
 pub(crate) enum MemFile {
     Main(MemChunksFile),
@@ -146,13 +150,13 @@ impl SQLiteIoMethods for MemIoMethods {
     type AppData = MemAppData;
     type Store = MemStore;
 
-    const VERSION: ::std::os::raw::c_int = 1;
+    const VERSION: ::core::ffi::c_int = 1;
 }
 
 struct MemVfs;
 
 impl SQLiteVfs<MemIoMethods> for MemVfs {
-    const VERSION: ::std::os::raw::c_int = 1;
+    const VERSION: ::core::ffi::c_int = 1;
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -250,7 +254,7 @@ impl MemVfsUtil {
 
     /// Delete all database, make sure that all database is closed.
     pub fn clear_all(&self) {
-        std::mem::take(&mut *self.0.borrow_mut());
+        core::mem::take(&mut *self.0.borrow_mut());
     }
 
     /// Does the database exists.
@@ -309,7 +313,7 @@ pub(crate) unsafe fn uninstall() {
 #[cfg(test)]
 mod tests {
     use crate::{
-        mem_vfs::{MemAppData, MemFile, MemStore},
+        memvfs::{MemAppData, MemFile, MemStore},
         utils::{test_suite::test_vfs_store, VfsAppData},
     };
     use wasm_bindgen_test::wasm_bindgen_test;

@@ -28,23 +28,10 @@ include = [
 ]
 
 [dependencies]
-tokio = { version = "1.45.1", features = ["sync"] }
-thiserror = "2.0.12"
-
-wasm-bindgen = "0.2.104"
-wasm-bindgen-futures = "0.4.54"
-js-sys = "0.3.81"
-web-sys = { version = "0.3.81", features = [
-  "StorageManager",
-  "FileSystemSyncAccessHandle",
-  "FileSystemDirectoryHandle",
-  "FileSystemGetDirectoryOptions",
-  "FileSystemReadWriteOptions",
-  "WorkerGlobalScope",
-  "WorkerNavigator",
-  "FileSystemGetFileOptions",
-  "FileSystemFileHandle",
-]}
+wasm-bindgen = { version = "0.2.104", default-features = false }
+js-sys = { version = "0.3.81", default-features = false }
+thiserror = { version = "2.0.12", default-features = false }
+hashbrown = { version = "0.16.1", default-features = false, features = ["default-hasher"] }
 
 [features]
 # SQLite3MultipleCiphers

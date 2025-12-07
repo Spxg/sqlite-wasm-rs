@@ -1,6 +1,6 @@
-use std::error;
-use std::fmt;
-use std::os::raw::c_int;
+use core::error;
+use core::fmt;
+use core::ffi::c_int;
 
 /// Error Codes
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1,7 +1,7 @@
 //! This module fills in the external functions needed to link to `sqlite.o`
 
-use std::ffi::{c_char, c_int, c_long, c_longlong, c_void};
-use std::{alloc, ptr};
+use core::ffi::{c_char, c_int, c_long, c_longlong, c_void};
+use core::ptr;
 
 use js_sys::{Date, Number};
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -87,9 +87,9 @@ pub struct tm {
 pub unsafe extern "C" fn rust_sqlite_wasm_getentropy(
     buf: *mut u8,
     buf_len: c_size_t,
-) -> std::ffi::c_ushort {
+) -> core::ffi::c_ushort {
     // https://github.com/WebAssembly/wasi-libc/blob/e9524a0980b9bb6bb92e87a41ed1055bdda5bb86/libc-bottom-half/headers/public/wasi/api.h#L373
-    const FUNCTION_NOT_SUPPORT: std::ffi::c_ushort = 52;
+    const FUNCTION_NOT_SUPPORT: core::ffi::c_ushort = 52;
 
     #[cfg(target_feature = "atomics")]
     {
@@ -97,11 +97,11 @@ pub unsafe extern "C" fn rust_sqlite_wasm_getentropy(
         if get_random_values(&array).is_err() {
             return FUNCTION_NOT_SUPPORT;
         }
-        array.copy_to(std::slice::from_raw_parts_mut(buf, buf_len));
+        array.copy_to(core::slice::from_raw_parts_mut(buf, buf_len));
     }
 
     #[cfg(not(target_feature = "atomics"))]
-    if get_random_values(std::slice::from_raw_parts_mut(buf, buf_len)).is_err() {
+    if get_random_values(core::slice::from_raw_parts_mut(buf, buf_len)).is_err() {
         return FUNCTION_NOT_SUPPORT;
     }
 
@@ -115,15 +115,15 @@ pub unsafe extern "C" fn rust_sqlite_wasm_assert_fail(
     line: c_int,
     func: *const c_char,
 ) {
-    let expr = std::ffi::CStr::from_ptr(expr).to_string_lossy();
-    let file = std::ffi::CStr::from_ptr(file).to_string_lossy();
-    let func = std::ffi::CStr::from_ptr(func).to_string_lossy();
+    let expr = core::ffi::CStr::from_ptr(expr).to_string_lossy();
+    let file = core::ffi::CStr::from_ptr(file).to_string_lossy();
+    let func = core::ffi::CStr::from_ptr(func).to_string_lossy();
     panic!("Assertion failed: {expr} ({file}: {func}: {line})");
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_abort() {
-    std::process::abort();
+    core::unreachable!();
 }
 
 /// See <https://github.com/emscripten-core/emscripten/blob/089590d17eeb705424bf32f8a1afe34a034b4682/system/lib/libc/mktime.c#L28>.
@@ -147,12 +147,12 @@ pub unsafe extern "C" fn rust_sqlite_wasm_localtime(t: *const c_time_t) -> *mut 
 }
 
 // https://github.com/alexcrichton/dlmalloc-rs/blob/fb116603713825b43b113cc734bb7d663cb64be9/src/dlmalloc.rs#L141
-const ALIGN: usize = std::mem::size_of::<usize>() * 2;
+const ALIGN: usize = core::mem::size_of::<usize>() * 2;
 
 #[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_malloc(size: c_size_t) -> *mut c_void {
-    let layout = alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
-    let ptr = alloc::alloc(layout);
+    let layout = core::alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
+    let ptr = alloc::alloc::alloc(layout);
 
     if ptr.is_null() {
         return ptr::null_mut();
@@ -167,8 +167,8 @@ pub unsafe extern "C" fn rust_sqlite_wasm_free(ptr: *mut c_void) {
     let ptr: *mut u8 = ptr.sub(ALIGN).cast();
     let size = *(ptr.cast::<usize>());
 
-    let layout = alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
-    alloc::dealloc(ptr, layout);
+    let layout = core::alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
+    alloc::alloc::dealloc(ptr, layout);
 }
 
 #[no_mangle]
@@ -179,8 +179,8 @@ pub unsafe extern "C" fn rust_sqlite_wasm_realloc(
     let ptr: *mut u8 = ptr.sub(ALIGN).cast();
     let size = *(ptr.cast::<usize>());
 
-    let layout = alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
-    let ptr = alloc::realloc(ptr, layout, new_size + ALIGN);
+    let layout = core::alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
+    let ptr = alloc::alloc::realloc(ptr, layout, new_size + ALIGN);
 
     if ptr.is_null() {
         return ptr::null_mut();
@@ -200,17 +200,46 @@ pub unsafe extern "C" fn rust_sqlite_wasm_calloc(num: c_size_t, size: c_size_t) 
     ptr.cast()
 }
 
+/// SQLite OS initialization entry point.
+///
+/// This function is called by SQLite when it is initialized. It sets up the
+/// default VFS for the environment, which in this case is the in-memory VFS.
+#[no_mangle]
+pub unsafe extern "C" fn sqlite3_os_init() -> core::ffi::c_int {
+    crate::memvfs::install();
+    crate::bindings::SQLITE_OK
+}
+
+/// SQLite OS shutdown entry point.
+///
+/// This function is called by SQLite when it is shut down. It cleans up
+/// any resources allocated by `sqlite3_os_init`.
+#[no_mangle]
+pub unsafe extern "C" fn sqlite3_os_end() -> core::ffi::c_int {
+    crate::memvfs::uninstall();
+    crate::bindings::SQLITE_OK
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::CStr;
+    use core::ffi::CStr;
 
     use crate::{
         sqlite3_column_count, sqlite3_column_name, sqlite3_column_text, sqlite3_column_type,
-        sqlite3_open, sqlite3_prepare_v3, sqlite3_step, SQLITE_OK, SQLITE_ROW, SQLITE_TEXT,
+        sqlite3_initialize, sqlite3_open, sqlite3_prepare_v3, sqlite3_shutdown, sqlite3_step,
+        SQLITE_OK, SQLITE_ROW, SQLITE_TEXT,
     };
 
     use wasm_bindgen_test::{console_log, wasm_bindgen_test};
+
+    #[wasm_bindgen_test]
+    fn test_initialize_shutdown() {
+        unsafe {
+            assert_eq!(sqlite3_initialize(), SQLITE_OK, "failed to initialize");
+            assert_eq!(sqlite3_shutdown(), SQLITE_OK, "failed to shutdown");
+        }
+    }
 
     #[wasm_bindgen_test]
     fn test_random_get() {
@@ -228,7 +257,7 @@ mod tests {
             console_log!("test_memory: {ptr1:?} {ptr2:?}");
 
             let ptr: *mut u8 = rust_sqlite_wasm_calloc(2, 8).cast();
-            let buf = std::slice::from_raw_parts(ptr, 2 * 8);
+            let buf = core::slice::from_raw_parts(ptr, 2 * 8);
 
             assert!(buf.iter().all(|&x| x == 0));
         }
@@ -237,17 +266,17 @@ mod tests {
     #[wasm_bindgen_test]
     fn test_localtime_sqlite() {
         unsafe {
-            let mut db = std::ptr::null_mut();
+            let mut db = core::ptr::null_mut();
             let ret = sqlite3_open(c":memory:".as_ptr().cast(), &mut db as *mut _);
             assert_eq!(ret, SQLITE_OK);
-            let mut stmt = std::ptr::null_mut();
+            let mut stmt = core::ptr::null_mut();
             let ret = sqlite3_prepare_v3(
                 db,
                 c"SELECT datetime('now', 'localtime');".as_ptr().cast(),
                 -1,
                 0,
                 &mut stmt as *mut _,
-                std::ptr::null_mut(),
+                core::ptr::null_mut(),
             );
             assert_eq!(ret, SQLITE_OK);
             while sqlite3_step(stmt) == SQLITE_ROW {
@@ -279,7 +308,7 @@ mod tests {
             tm_yday: 0,
             tm_isdst: 0,
             tm_gmtoff: 0,
-            tm_zone: std::ptr::null_mut(),
+            tm_zone: core::ptr::null_mut(),
         };
         unsafe {
             localtime_js(1733976732, &mut tm as *mut tm);
@@ -289,7 +318,7 @@ mod tests {
         assert_eq!(tm.tm_year, 2024 - 1900);
         assert_eq!(tm.tm_mon, 12 - 1);
         assert_eq!(tm.tm_mday, 12);
-        assert_eq!(tm.tm_hour as std::os::raw::c_long, 12 - 8 + gmtoff);
+        assert_eq!(tm.tm_hour as core::ffi::c_long, 12 - 8 + gmtoff);
         assert_eq!(tm.tm_min, 12);
         assert_eq!(tm.tm_sec, 12);
         assert_eq!(tm.tm_wday, 4);
