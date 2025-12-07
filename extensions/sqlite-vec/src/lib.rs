@@ -1,4 +1,5 @@
 #![doc = include_str!("../README.md")]
+#![no_std]
 
 #[link(name = "sqlite_vec0")]
 extern "C" {
@@ -7,9 +8,7 @@ extern "C" {
 
 #[cfg(test)]
 mod tests {
-    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
-
-    use std::ffi::CStr;
+    use core::ffi::CStr;
 
     use crate::sqlite3_vec_init;
     use sqlite_wasm_rs::{
@@ -22,22 +21,22 @@ mod tests {
     #[wasm_bindgen_test]
     fn test_auto_extension() {
         unsafe {
-            sqlite3_auto_extension(Some(std::mem::transmute(sqlite3_vec_init as *const ())));
+            sqlite3_auto_extension(Some(core::mem::transmute(sqlite3_vec_init as *const ())));
         }
 
-        let mut db = std::ptr::null_mut();
+        let mut db = core::ptr::null_mut();
         let ret = unsafe {
             sqlite3_open_v2(
                 c":memory:".as_ptr().cast(),
                 &mut db as *mut _,
                 SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-                std::ptr::null(),
+                core::ptr::null(),
             )
         };
         assert_eq!(ret, SQLITE_OK);
 
         let sql = c"select vec_version();";
-        let mut stmt = std::ptr::null_mut();
+        let mut stmt = core::ptr::null_mut();
         let ret = unsafe {
             sqlite3_prepare_v3(
                 db,
@@ -45,7 +44,7 @@ mod tests {
                 -1,
                 0,
                 &mut stmt as *mut _,
-                std::ptr::null_mut(),
+                core::ptr::null_mut(),
             )
         };
         assert_eq!(ret, SQLITE_OK);
