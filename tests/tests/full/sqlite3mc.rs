@@ -1,4 +1,5 @@
-use sqlite_wasm_rs::{mem_vfs::MemVfsUtil, sahpool_vfs::OpfsSAHPoolCfgBuilder, *};
+use sqlite_wasm_rs::{mem_vfs::MemVfsUtil, *};
+use sqlite_wasm_vfs::sahpool::OpfsSAHPoolCfgBuilder;
 use std::ffi::CString;
 use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -126,7 +127,7 @@ async unsafe fn test_relaxed_idb_vfs_cipher(cipher: &str) {
 }
 
 async unsafe fn test_opfs_sah_vfs_cipher(cipher: &str) {
-    let util = sqlite_wasm_rs::sahpool_vfs::install(
+    let util = sqlite_wasm_vfs::sahpool::install(
         &OpfsSAHPoolCfgBuilder::new()
             .vfs_name("sah-cipher")
             .directory("sah-cipher")

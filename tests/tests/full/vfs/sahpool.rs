@@ -1,5 +1,5 @@
-use sqlite_wasm_rs::sahpool_vfs::{install as install_opfs_sahpool, *};
 use sqlite_wasm_rs::*;
+use sqlite_wasm_vfs::sahpool::{install as install_opfs_sahpool, *};
 use wasm_bindgen_test::wasm_bindgen_test;
 
 use crate::full::{check_persistent, prepare_simple_db};

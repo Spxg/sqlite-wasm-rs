@@ -1,7 +1,6 @@
 //! This module aggregates the various Virtual File System (VFS) implementations.
 
 pub mod memory;
-pub mod sahpool;
 pub mod utils;
 
 /// SQLite OS initialization entry point.

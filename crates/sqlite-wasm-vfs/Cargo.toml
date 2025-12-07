@@ -18,6 +18,18 @@ js-sys = "0.3.81"
 wasm-bindgen-futures = "0.4.54"
 tokio = { version = "1.45.1", features = ["sync"] }
 thiserror = "2.0.12"
+web-sys = { version = "0.3.81", features = [
+  "StorageManager",
+  "FileSystemSyncAccessHandle",
+  "FileSystemDirectoryHandle",
+  "FileSystemGetDirectoryOptions",
+  "FileSystemReadWriteOptions",
+  "WorkerGlobalScope",
+  "WorkerNavigator",
+  "FileSystemGetFileOptions",
+  "FileSystemFileHandle",
+]}
+
 indexed_db_futures = { version = "0.6.4", optional = true }
 
 [dev-dependencies]

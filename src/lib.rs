@@ -18,9 +18,6 @@ pub use libsqlite3::*;
 /// In-memory VFS implementation.
 pub use vfs::memory as mem_vfs;
 
-/// Origin Private File System (OPFS) VFS implementation using `SyncAccessHandle`.
-pub use vfs::sahpool as sahpool_vfs;
-
 /// Utility functions and types to help with creating custom VFS implementations.
 pub use vfs::utils;
 
