@@ -1,13 +1,13 @@
 //! Low-level utilities, traits, and macros for implementing custom SQLite Virtual File Systems (VFS).
 
-use crate::libsqlite3::*;
+use crate::bindings::*;
 
+use alloc::string::String;
+use alloc::vec::Vec;
+use alloc::{boxed::Box, ffi::CString};
+use alloc::{format, vec};
+use core::{cell::RefCell, ffi::CStr, ops::Deref};
 use js_sys::{Date, Math, Number};
-use std::{
-    cell::RefCell,
-    ffi::{CStr, CString},
-    ops::Deref,
-};
 
 /// A macro to return a specific SQLite error code if a condition is true.
 ///
@@ -133,7 +133,7 @@ impl VfsFile for MemChunksFile {
             let mut offset = 0;
 
             for chunk in &self.chunks[chunk_idx..] {
-                let n = std::cmp::min(chunk_size.min(self.file_size) - remaining_idx, size);
+                let n = core::cmp::min(chunk_size.min(self.file_size) - remaining_idx, size);
                 buf[offset..offset + n].copy_from_slice(&chunk[remaining_idx..remaining_idx + n]);
                 offset += n;
                 size -= n;
@@ -190,7 +190,7 @@ impl VfsFile for MemChunksFile {
             let mut offset = 0;
 
             for idx in chunk_start_idx..=chunk_end_idx {
-                let n = std::cmp::min(chunk_size - remaining_idx, size);
+                let n = core::cmp::min(chunk_size - remaining_idx, size);
                 self.chunks[idx][remaining_idx..remaining_idx + n]
                     .copy_from_slice(&buf[offset..offset + n]);
                 offset += n;
@@ -210,7 +210,7 @@ impl VfsFile for MemChunksFile {
     fn truncate(&mut self, size: usize) -> VfsResult<()> {
         if let Some(chunk_size) = self.chunk_size {
             if size == 0 {
-                std::mem::take(&mut self.chunks);
+                core::mem::take(&mut self.chunks);
             } else {
                 let idx = ((size - 1) / chunk_size) + 1;
                 self.chunks.drain(idx..);
@@ -270,7 +270,7 @@ impl SQLiteVfsFile {
     /// Do not use again after free.
     pub unsafe fn name(&self) -> &'static mut str {
         // emm, `from_raw_parts_mut` is unstable
-        std::str::from_utf8_unchecked_mut(std::slice::from_raw_parts_mut(
+        core::str::from_utf8_unchecked_mut(core::slice::from_raw_parts_mut(
             self.name_ptr.cast_mut(),
             self.name_length,
         ))
@@ -430,18 +430,18 @@ pub trait VfsStore<File, AppData> {
 /// A trait that abstracts the `sqlite3_vfs` struct, allowing for a more idiomatic Rust implementation.
 #[allow(clippy::missing_safety_doc)]
 pub trait SQLiteVfs<IO: SQLiteIoMethods> {
-    const VERSION: ::std::os::raw::c_int;
-    const MAX_PATH_SIZE: ::std::os::raw::c_int = 1024;
+    const VERSION: ::core::ffi::c_int;
+    const MAX_PATH_SIZE: ::core::ffi::c_int = 1024;
 
     fn vfs(
-        vfs_name: *const ::std::os::raw::c_char,
+        vfs_name: *const ::core::ffi::c_char,
         app_data: *mut VfsAppData<IO::AppData>,
     ) -> sqlite3_vfs {
         sqlite3_vfs {
             iVersion: Self::VERSION,
-            szOsFile: std::mem::size_of::<SQLiteVfsFile>() as i32,
+            szOsFile: core::mem::size_of::<SQLiteVfsFile>() as i32,
             mxPathname: Self::MAX_PATH_SIZE,
-            pNext: std::ptr::null_mut(),
+            pNext: core::ptr::null_mut(),
             zName: vfs_name,
             pAppData: app_data.cast(),
             xOpen: Some(Self::xOpen),
@@ -467,9 +467,9 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
         pVfs: *mut sqlite3_vfs,
         zName: sqlite3_filename,
         pFile: *mut sqlite3_file,
-        flags: ::std::os::raw::c_int,
-        pOutFlags: *mut ::std::os::raw::c_int,
-    ) -> ::std::os::raw::c_int {
+        flags: ::core::ffi::c_int,
+        pOutFlags: *mut ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
         Self::xOpenImpl(pVfs, zName, pFile, flags, pOutFlags)
     }
 
@@ -477,9 +477,9 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
         pVfs: *mut sqlite3_vfs,
         zName: sqlite3_filename,
         pFile: *mut sqlite3_file,
-        flags: ::std::os::raw::c_int,
-        pOutFlags: *mut ::std::os::raw::c_int,
-    ) -> ::std::os::raw::c_int {
+        flags: ::core::ffi::c_int,
+        pOutFlags: *mut ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
         let app_data = IO::Store::app_data(pVfs);
 
         let name = if zName.is_null() {
@@ -523,9 +523,9 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
 
     unsafe extern "C" fn xDelete(
         pVfs: *mut sqlite3_vfs,
-        zName: *const ::std::os::raw::c_char,
-        syncDir: ::std::os::raw::c_int,
-    ) -> ::std::os::raw::c_int {
+        zName: *const ::core::ffi::c_char,
+        syncDir: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
         unused!(syncDir);
 
         let app_data = IO::Store::app_data(pVfs);
@@ -540,10 +540,10 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
 
     unsafe extern "C" fn xAccess(
         pVfs: *mut sqlite3_vfs,
-        zName: *const ::std::os::raw::c_char,
-        flags: ::std::os::raw::c_int,
-        pResOut: *mut ::std::os::raw::c_int,
-    ) -> ::std::os::raw::c_int {
+        zName: *const ::core::ffi::c_char,
+        flags: ::core::ffi::c_int,
+        pResOut: *mut ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
         unused!(flags);
 
         *pResOut = if zName.is_null() {
@@ -563,10 +563,10 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
 
     unsafe extern "C" fn xFullPathname(
         pVfs: *mut sqlite3_vfs,
-        zName: *const ::std::os::raw::c_char,
-        nOut: ::std::os::raw::c_int,
-        zOut: *mut ::std::os::raw::c_char,
-    ) -> ::std::os::raw::c_int {
+        zName: *const ::core::ffi::c_char,
+        nOut: ::core::ffi::c_int,
+        zOut: *mut ::core::ffi::c_char,
+    ) -> ::core::ffi::c_int {
         unused!(pVfs);
         bail!(zName.is_null() || zOut.is_null(), SQLITE_CANTOPEN);
         let len = CStr::from_ptr(zName).to_bytes_with_nul().len();
@@ -577,9 +577,9 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
 
     unsafe extern "C" fn xGetLastError(
         pVfs: *mut sqlite3_vfs,
-        nOut: ::std::os::raw::c_int,
-        zOut: *mut ::std::os::raw::c_char,
-    ) -> ::std::os::raw::c_int {
+        nOut: ::core::ffi::c_int,
+        zOut: *mut ::core::ffi::c_char,
+    ) -> ::core::ffi::c_int {
         let app_data = IO::Store::app_data(pVfs);
         let Some((code, msg)) = app_data.pop_err() else {
             return SQLITE_OK;
@@ -589,11 +589,11 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
             let count = msg.len().min(nOut);
             msg.as_ptr().copy_to(zOut.cast(), count);
             let zero = match nOut.cmp(&msg.len()) {
-                std::cmp::Ordering::Less | std::cmp::Ordering::Equal => nOut,
-                std::cmp::Ordering::Greater => msg.len() + 1,
+                core::cmp::Ordering::Less | core::cmp::Ordering::Equal => nOut,
+                core::cmp::Ordering::Greater => msg.len() + 1,
             };
             if zero > 0 {
-                std::ptr::write(zOut.add(zero - 1), 0);
+                core::ptr::write(zOut.add(zero - 1), 0);
             }
         }
         code
@@ -607,7 +607,7 @@ pub trait SQLiteIoMethods {
     type AppData: 'static;
     type Store: VfsStore<Self::File, Self::AppData>;
 
-    const VERSION: ::std::os::raw::c_int;
+    const VERSION: ::core::ffi::c_int;
 
     const METHODS: sqlite3_io_methods = sqlite3_io_methods {
         iVersion: Self::VERSION,
@@ -631,11 +631,11 @@ pub trait SQLiteIoMethods {
         xUnfetch: None,
     };
 
-    unsafe extern "C" fn xClose(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
+    unsafe extern "C" fn xClose(pFile: *mut sqlite3_file) -> ::core::ffi::c_int {
         Self::xCloseImpl(pFile)
     }
 
-    unsafe extern "C" fn xCloseImpl(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
+    unsafe extern "C" fn xCloseImpl(pFile: *mut sqlite3_file) -> ::core::ffi::c_int {
         let vfs_file = SQLiteVfsFile::from_file(pFile);
         let app_data = Self::Store::app_data(vfs_file.vfs);
 
@@ -652,17 +652,17 @@ pub trait SQLiteIoMethods {
 
     unsafe extern "C" fn xRead(
         pFile: *mut sqlite3_file,
-        zBuf: *mut ::std::os::raw::c_void,
-        iAmt: ::std::os::raw::c_int,
+        zBuf: *mut ::core::ffi::c_void,
+        iAmt: ::core::ffi::c_int,
         iOfst: sqlite3_int64,
-    ) -> ::std::os::raw::c_int {
+    ) -> ::core::ffi::c_int {
         let vfs_file = SQLiteVfsFile::from_file(pFile);
         let app_data = Self::Store::app_data(vfs_file.vfs);
 
         let f = |file: &Self::File| {
             let size = iAmt as usize;
             let offset = iOfst as usize;
-            let slice = std::slice::from_raw_parts_mut(zBuf.cast::<u8>(), size);
+            let slice = core::slice::from_raw_parts_mut(zBuf.cast::<u8>(), size);
             let code = if file.read(slice, offset)? {
                 SQLITE_OK
             } else {
@@ -679,16 +679,16 @@ pub trait SQLiteIoMethods {
 
     unsafe extern "C" fn xWrite(
         pFile: *mut sqlite3_file,
-        zBuf: *const ::std::os::raw::c_void,
-        iAmt: ::std::os::raw::c_int,
+        zBuf: *const ::core::ffi::c_void,
+        iAmt: ::core::ffi::c_int,
         iOfst: sqlite3_int64,
-    ) -> ::std::os::raw::c_int {
+    ) -> ::core::ffi::c_int {
         let vfs_file = SQLiteVfsFile::from_file(pFile);
         let app_data = Self::Store::app_data(vfs_file.vfs);
 
         let f = |file: &mut Self::File| {
             let (offset, size) = (iOfst as usize, iAmt as usize);
-            let slice = std::slice::from_raw_parts(zBuf.cast::<u8>(), size);
+            let slice = core::slice::from_raw_parts(zBuf.cast::<u8>(), size);
             file.write(slice, offset)?;
             Ok(SQLITE_OK)
         };
@@ -702,7 +702,7 @@ pub trait SQLiteIoMethods {
     unsafe extern "C" fn xTruncate(
         pFile: *mut sqlite3_file,
         size: sqlite3_int64,
-    ) -> ::std::os::raw::c_int {
+    ) -> ::core::ffi::c_int {
         let vfs_file = SQLiteVfsFile::from_file(pFile);
         let app_data = Self::Store::app_data(vfs_file.vfs);
 
@@ -719,8 +719,8 @@ pub trait SQLiteIoMethods {
 
     unsafe extern "C" fn xSync(
         pFile: *mut sqlite3_file,
-        flags: ::std::os::raw::c_int,
-    ) -> ::std::os::raw::c_int {
+        flags: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
         unused!(flags);
 
         let vfs_file = SQLiteVfsFile::from_file(pFile);
@@ -740,7 +740,7 @@ pub trait SQLiteIoMethods {
     unsafe extern "C" fn xFileSize(
         pFile: *mut sqlite3_file,
         pSize: *mut sqlite3_int64,
-    ) -> ::std::os::raw::c_int {
+    ) -> ::core::ffi::c_int {
         let vfs_file = SQLiteVfsFile::from_file(pFile);
         let app_data = Self::Store::app_data(vfs_file.vfs);
 
@@ -759,24 +759,24 @@ pub trait SQLiteIoMethods {
 
     unsafe extern "C" fn xLock(
         pFile: *mut sqlite3_file,
-        eLock: ::std::os::raw::c_int,
-    ) -> ::std::os::raw::c_int {
+        eLock: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
         unused!((pFile, eLock));
         SQLITE_OK
     }
 
     unsafe extern "C" fn xUnlock(
         pFile: *mut sqlite3_file,
-        eLock: ::std::os::raw::c_int,
-    ) -> ::std::os::raw::c_int {
+        eLock: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
         unused!((pFile, eLock));
         SQLITE_OK
     }
 
     unsafe extern "C" fn xCheckReservedLock(
         pFile: *mut sqlite3_file,
-        pResOut: *mut ::std::os::raw::c_int,
-    ) -> ::std::os::raw::c_int {
+        pResOut: *mut ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
         unused!(pFile);
         *pResOut = 0;
         SQLITE_OK
@@ -784,19 +784,19 @@ pub trait SQLiteIoMethods {
 
     unsafe extern "C" fn xFileControl(
         pFile: *mut sqlite3_file,
-        op: ::std::os::raw::c_int,
-        pArg: *mut ::std::os::raw::c_void,
-    ) -> ::std::os::raw::c_int {
+        op: ::core::ffi::c_int,
+        pArg: *mut ::core::ffi::c_void,
+    ) -> ::core::ffi::c_int {
         unused!((pFile, op, pArg));
         SQLITE_NOTFOUND
     }
 
-    unsafe extern "C" fn xSectorSize(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
+    unsafe extern "C" fn xSectorSize(pFile: *mut sqlite3_file) -> ::core::ffi::c_int {
         unused!(pFile);
         512
     }
 
-    unsafe extern "C" fn xDeviceCharacteristics(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
+    unsafe extern "C" fn xDeviceCharacteristics(pFile: *mut sqlite3_file) -> ::core::ffi::c_int {
         unused!(pFile);
         0
     }
@@ -811,27 +811,41 @@ pub mod x_methods_shim {
     #[cfg(target_feature = "atomics")]
     pub unsafe extern "C" fn xSleep(
         _pVfs: *mut sqlite3_vfs,
-        microseconds: ::std::os::raw::c_int,
-    ) -> ::std::os::raw::c_int {
-        use std::{thread, time::Duration};
-        thread::sleep(Duration::from_micros(microseconds as u64));
+        microseconds: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
+        use core::time::Duration;
+
+        // Use an atomic wait to block the current thread artificially with a
+        // timeout listed. Note that we should never be notified (return value
+        // of 0) or our comparison should never fail (return value of 1) so we
+        // should always only resume execution through a timeout (return value
+        // 2).
+        let dur = Duration::from_micros(microseconds as u64);
+        let mut nanos = dur.as_nanos();
+        while nanos > 0 {
+            let amt = core::cmp::min(i64::MAX as u128, nanos);
+            let mut x = 0;
+            let val = unsafe { core::arch::wasm32::memory_atomic_wait32(&mut x, 0, amt as i64) };
+            debug_assert_eq!(val, 2);
+            nanos -= amt;
+        }
         SQLITE_OK
     }
 
     #[cfg(not(target_feature = "atomics"))]
     pub unsafe extern "C" fn xSleep(
         _pVfs: *mut sqlite3_vfs,
-        _microseconds: ::std::os::raw::c_int,
-    ) -> ::std::os::raw::c_int {
+        _microseconds: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
         SQLITE_OK
     }
 
     /// <https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L951>
     pub unsafe extern "C" fn xRandomness(
         _pVfs: *mut sqlite3_vfs,
-        nByte: ::std::os::raw::c_int,
-        zOut: *mut ::std::os::raw::c_char,
-    ) -> ::std::os::raw::c_int {
+        nByte: ::core::ffi::c_int,
+        zOut: *mut ::core::ffi::c_char,
+    ) -> ::core::ffi::c_int {
         for i in 0..nByte as usize {
             *zOut.add(i) = (Math::random() * 255000.0) as _;
         }
@@ -842,7 +856,7 @@ pub mod x_methods_shim {
     pub unsafe extern "C" fn xCurrentTime(
         _pVfs: *mut sqlite3_vfs,
         pTimeOut: *mut f64,
-    ) -> ::std::os::raw::c_int {
+    ) -> ::core::ffi::c_int {
         *pTimeOut = 2440587.5 + (Date::new_0().get_time() / 86400000.0);
         SQLITE_OK
     }
@@ -851,7 +865,7 @@ pub mod x_methods_shim {
     pub unsafe extern "C" fn xCurrentTimeInt64(
         _pVfs: *mut sqlite3_vfs,
         pOut: *mut sqlite3_int64,
-    ) -> ::std::os::raw::c_int {
+    ) -> ::core::ffi::c_int {
         *pOut = ((2440587.5 * 86400000.0) + Date::new_0().get_time()) as sqlite3_int64;
         SQLITE_OK
     }
@@ -910,6 +924,8 @@ pub fn check_db_and_page_size(db_size: usize, page_size: usize) -> Result<(), Im
 /// This is a testing utility for VFS, don't use it in production code.
 #[doc(hidden)]
 pub mod test_suite {
+    use alloc::vec;
+
     use super::{
         sqlite3_file, sqlite3_vfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult,
         VfsStore, SQLITE_IOERR, SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_MAIN_DB,
@@ -970,9 +986,9 @@ pub mod test_suite {
     pub fn test_vfs_store<AppData, File: VfsFile, Store: VfsStore<File, AppData>>(
         vfs_data: VfsAppData<AppData>,
     ) -> VfsResult<()> {
-        let layout = std::alloc::Layout::new::<sqlite3_vfs>();
+        let layout = core::alloc::Layout::new::<sqlite3_vfs>();
         let vfs = unsafe {
-            let vfs = std::alloc::alloc(layout) as *mut sqlite3_vfs;
+            let vfs = alloc::alloc::alloc(layout) as *mut sqlite3_vfs;
             (*vfs).pAppData = vfs_data.leak().cast();
             vfs
         };
@@ -984,7 +1000,7 @@ pub mod test_suite {
 
             let vfs_file = SQLiteVfsFile {
                 io_methods: sqlite3_file {
-                    pMethods: std::ptr::null(),
+                    pMethods: core::ptr::null(),
                 },
                 vfs,
                 flags,
@@ -1027,7 +1043,7 @@ pub mod test_suite {
 
         unsafe {
             drop(VfsAppData::<AppData>::from_raw((*vfs).pAppData as *mut _));
-            std::alloc::dealloc(vfs.cast(), layout);
+            alloc::alloc::dealloc(vfs.cast(), layout);
         }
 
         Ok(())

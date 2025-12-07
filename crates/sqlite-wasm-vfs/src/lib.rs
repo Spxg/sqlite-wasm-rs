@@ -7,5 +7,8 @@
 #[cfg(feature = "relaxed-idb")]
 pub mod relaxed_idb;
 
+/// Origin Private File System (OPFS) VFS implementation using `SyncAccessHandle`.
+pub mod sahpool;
+
 #[cfg(test)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_dedicated_worker);

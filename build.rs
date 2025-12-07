@@ -55,9 +55,9 @@ fn main() {
 
         if update_bindgen {
             #[cfg(not(feature = "sqlite3mc"))]
-            const SQLITE3_BINDGEN: &str = "src/libsqlite3/sqlite3_bindgen.rs";
+            const SQLITE3_BINDGEN: &str = "src/bindings/sqlite3_bindgen.rs";
             #[cfg(feature = "sqlite3mc")]
-            const SQLITE3_BINDGEN: &str = "src/libsqlite3/sqlite3mc_bindgen.rs";
+            const SQLITE3_BINDGEN: &str = "src/bindings/sqlite3mc_bindgen.rs";
             std::fs::copy(&output, SQLITE3_BINDGEN).unwrap();
         }
     }
@@ -102,28 +102,28 @@ fn bindgen(output: &std::path::PathBuf) {
         .raw_line(
             r#"extern "C" {
     pub fn sqlite3_auto_extension(
-        xEntryPoint: ::std::option::Option<
+        xEntryPoint: ::core::option::Option<
             unsafe extern "C" fn(
                 db: *mut sqlite3,
-                pzErrMsg: *mut *mut ::std::os::raw::c_char,
+                pzErrMsg: *mut *mut ::core::ffi::c_char,
                 _: *const sqlite3_api_routines,
-            ) -> ::std::os::raw::c_int,
+            ) -> ::core::ffi::c_int,
         >,
-    ) -> ::std::os::raw::c_int;
+    ) -> ::core::ffi::c_int;
 }"#,
         )
         .blocklist_function("sqlite3_cancel_auto_extension")
         .raw_line(
             r#"extern "C" {
     pub fn sqlite3_cancel_auto_extension(
-        xEntryPoint: ::std::option::Option<
+        xEntryPoint: ::core::option::Option<
             unsafe extern "C" fn(
                 db: *mut sqlite3,
-                pzErrMsg: *mut *mut ::std::os::raw::c_char,
+                pzErrMsg: *mut *mut ::core::ffi::c_char,
                 _: *const sqlite3_api_routines,
-            ) -> ::std::os::raw::c_int,
+            ) -> ::core::ffi::c_int,
         >,
-    ) -> ::std::os::raw::c_int;
+    ) -> ::core::ffi::c_int;
 }"#,
         )
         // Block functions related to dynamic library loading, which is not available.
@@ -160,6 +160,7 @@ fn bindgen(output: &std::path::PathBuf) {
 
     let bindings = bindings
         .layout_tests(false)
+        .use_core()
         .formatter(bindgen::Formatter::Prettyplease)
         .generate()
         .unwrap();

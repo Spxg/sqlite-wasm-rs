@@ -8,6 +8,9 @@
 * New crate `sqlite-wasm-vfs`: some experimental VFS implementations.
   [#146](https://github.com/Spxg/sqlite-wasm-rs/pull/146)
 
+* Added `no_std` support for `sqlite-wasm-rs`.
+  [#149](https://github.com/Spxg/sqlite-wasm-rs/pull/149)
+
 ### Fixed
 
 ### Changed
@@ -23,6 +26,9 @@
 
 * Bump MSRV to 1.82.0.
   [#148](https://github.com/Spxg/sqlite-wasm-rs/pull/148)
+
+* Moved `opfs-sahpool` vfs to `sqlite-wasm-vfs`.
+  [#149](https://github.com/Spxg/sqlite-wasm-rs/pull/149)
 
 --------------------------------------------------------------------------------
 

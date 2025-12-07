@@ -1,5 +1,4 @@
 use crate::full::{check_persistent, check_result, prepare_simple_db};
-use sqlite_wasm_rs::mem_vfs::MemVfsUtil;
 use sqlite_wasm_rs::*;
 use wasm_bindgen_test::wasm_bindgen_test;
 

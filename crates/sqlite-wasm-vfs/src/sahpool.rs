@@ -3,10 +3,8 @@
 //! See [`opfs-sahpool`](https://sqlite.org/wasm/doc/trunk/persistence.md#vfs-opfs-sahpool) for details.
 //!
 //! ```rust
-//! use sqlite_wasm_rs::{
-//!     self as ffi,
-//!     sahpool_vfs::{install as install_opfs_sahpool, OpfsSAHPoolCfg},
-//! };
+//! use sqlite_wasm_rs as ffi;
+//! use sqlite_wasm_vfs::sahpool::{install as install_opfs_sahpool, OpfsSAHPoolCfg};
 //!
 //! async fn open_db() {
 //!     // install opfs-sahpool persistent vfs and set as default vfs
@@ -34,15 +32,19 @@
 //! [`opfs-explorer`](https://chromewebstore.google.com/detail/opfs-explorer/acndjpgkpaclldomagafnognkcgjignd)
 //! plugin to browse files.
 
-use crate::libsqlite3::*;
-use crate::vfs::utils::{
+use sqlite_wasm_rs::utils::{
     check_import_db, random_name, register_vfs, registered_vfs, ImportDbError, RegisterVfsError,
-    SQLiteIoMethods, SQLiteVfs, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
+    SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
+};
+use sqlite_wasm_rs::{
+    sqlite3_file, sqlite3_filename, sqlite3_vfs, sqlite3_vfs_register, sqlite3_vfs_unregister,
+    SQLITE_CANTOPEN, SQLITE_ERROR, SQLITE_IOCAP_UNDELETABLE_WHEN_OPEN, SQLITE_IOERR,
+    SQLITE_IOERR_DELETE, SQLITE_OK, SQLITE_OPEN_DELETEONCLOSE, SQLITE_OPEN_MAIN_DB,
+    SQLITE_OPEN_MAIN_JOURNAL, SQLITE_OPEN_SUPER_JOURNAL, SQLITE_OPEN_WAL,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
-use crate::utils::SQLiteVfsFile;
 use js_sys::{Array, DataView, IteratorNext, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
@@ -605,7 +607,7 @@ impl VfsStore<SyncAccessFile, SyncAccessHandleAppData> for SyncAccessHandleStore
     }
 
     fn with_file<F: Fn(&SyncAccessFile) -> VfsResult<i32>>(
-        vfs_file: &super::utils::SQLiteVfsFile,
+        vfs_file: &SQLiteVfsFile,
         f: F,
     ) -> VfsResult<i32> {
         let name = unsafe { vfs_file.name() };
@@ -615,7 +617,7 @@ impl VfsStore<SyncAccessFile, SyncAccessHandleAppData> for SyncAccessHandleStore
     }
 
     fn with_file_mut<F: Fn(&mut SyncAccessFile) -> VfsResult<i32>>(
-        vfs_file: &super::utils::SQLiteVfsFile,
+        vfs_file: &SQLiteVfsFile,
         f: F,
     ) -> VfsResult<i32> {
         let name = unsafe { vfs_file.name() };
@@ -951,13 +953,11 @@ pub async fn install(options: &OpfsSAHPoolCfg, default_vfs: bool) -> Result<Opfs
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        sahpool_vfs::{
-            OpfsSAHPool, OpfsSAHPoolCfgBuilder, SyncAccessFile, SyncAccessHandleAppData,
-            SyncAccessHandleStore,
-        },
-        utils::{test_suite::test_vfs_store, VfsAppData},
+    use super::{
+        OpfsSAHPool, OpfsSAHPoolCfgBuilder, SyncAccessFile, SyncAccessHandleAppData,
+        SyncAccessHandleStore,
     };
+    use sqlite_wasm_rs::utils::{test_suite::test_vfs_store, VfsAppData};
     use wasm_bindgen_test::wasm_bindgen_test;
 
     #[wasm_bindgen_test]
