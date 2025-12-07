@@ -41,7 +41,7 @@ async fn open_db() {
 The following vfs have been implemented:
 
 * [`memory`](./src/vfs/memory.rs): as the default vfs, no additional conditions are required, store the database in memory.
-* [`sahpool`](./src/vfs/sahpool.rs): ported from sqlite-wasm, store the database in opfs.
+* [`sahpool`](./crates/sqlite-wasm-vfs/src/sahpool.rs): ported from sqlite-wasm, store the database in opfs.
 * [`relaxed-idb`](./crates/sqlite-wasm-vfs/src/relaxed_idb.rs): store the database in blocks in indexed db.
 
 ### VFS Comparison
