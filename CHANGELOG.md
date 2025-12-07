@@ -5,6 +5,16 @@
 
 ### Added
 
+### Fixed
+
+### Changed
+
+--------------------------------------------------------------------------------
+
+## [0.5.0](https://github.com/Spxg/sqlite-wasm-rs/compare/0.4.8...0.5.0)
+
+### Added
+
 * New crate `sqlite-wasm-vfs`: some experimental VFS implementations.
   [#146](https://github.com/Spxg/sqlite-wasm-rs/pull/146)
 
