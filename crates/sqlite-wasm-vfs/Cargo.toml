@@ -11,7 +11,7 @@ categories = ["development-tools::ffi", "wasm", "database"]
 keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "javascript"]
 
 [dependencies]
-sqlite-wasm-rs = { path = "../..", default-features = false }
+sqlite-wasm-rs = { version = "0.5.0", default-features = false }
 
 wasm-bindgen = "0.2.104"
 js-sys = "0.3.81"
