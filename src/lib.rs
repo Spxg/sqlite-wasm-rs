@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 #![no_std]
 #![cfg_attr(target_feature = "atomics", feature(stdarch_wasm_atomic_wait))]
+#![allow(clippy::missing_safety_doc)]
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]

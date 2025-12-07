@@ -128,7 +128,27 @@ fn bindgen(output: &std::path::PathBuf) {
         )
         // Block functions related to dynamic library loading, which is not available.
         .blocklist_function("sqlite3_load_extension")
+        .raw_line(
+            r#"pub unsafe fn sqlite3_load_extension(
+    _db: *mut sqlite3,
+    _zFile: *const ::core::ffi::c_char,
+    _zProc: *const ::core::ffi::c_char,
+    _pzErrMsg: *mut *mut ::core::ffi::c_char,
+) -> ::core::ffi::c_int {
+    // SQLITE_ERROR
+    1
+}"#,
+        )
         .blocklist_function("sqlite3_enable_load_extension")
+        .raw_line(
+            r#"pub unsafe fn sqlite3_enable_load_extension(
+    _db: *mut sqlite3,
+    _onoff: ::core::ffi::c_int,
+) -> ::core::ffi::c_int {
+    // SQLITE_ERROR
+    1
+}"#,
+        )
         // Block deprecated functions that are omitted from the build via the DSQLITE_OMIT_DEPRECATED flag.
         .blocklist_function("sqlite3_profile")
         .blocklist_function("sqlite3_trace")
@@ -248,5 +268,5 @@ fn compile() {
         .flag("-DPRINTF_ALIAS_STANDARD_FUNCTION_NAMES_HARD")
         .flag("-include")
         .flag("shim/wasm-shim.h")
-        .compile("sqlite3");
+        .compile("wsqlite3");
 }

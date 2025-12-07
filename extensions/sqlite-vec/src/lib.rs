@@ -1,7 +1,7 @@
 #![doc = include_str!("../README.md")]
 #![no_std]
 
-#[link(name = "sqlite_vec0")]
+#[link(name = "wsqlite_vec0")]
 extern "C" {
     pub fn sqlite3_vec_init();
 }
