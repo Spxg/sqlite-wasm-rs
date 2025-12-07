@@ -10,7 +10,6 @@ sqlite-wasm-rs = { path = "../" }
 wasm-bindgen-test = "0.3.54"
 
 [features]
-relaxed-idb = ["sqlite-wasm-vfs/relaxed-idb"]
 sqlite3mc = ["sqlite-wasm-rs/sqlite3mc"]
 
 [[test]]

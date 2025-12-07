@@ -29,14 +29,10 @@ web-sys = { version = "0.3.81", features = [
   "FileSystemGetFileOptions",
   "FileSystemFileHandle",
 ]}
-
-indexed_db_futures = { version = "0.6.4", optional = true }
+indexed_db_futures = "0.6.4"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.54"
-
-[features]
-relaxed-idb = ["indexed_db_futures"]
 
 [package.metadata.docs.rs]
 targets = ["wasm32-unknown-unknown"]

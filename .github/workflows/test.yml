@@ -187,7 +187,7 @@ jobs:
     - name: Test
       run: |
         cd crates/sqlite-wasm-vfs
-        wasm-pack test --chrome --headless --all-features
+        wasm-pack test --chrome --headless
 
   test_sqlite_wasm_tests:
     strategy:
@@ -203,5 +203,5 @@ jobs:
     - name: Test
       run: |
         cd tests
-        wasm-pack test --chrome --headless --features relaxed-idb
-        wasm-pack test --chrome --headless --features sqlite3mc,relaxed-idb
+        wasm-pack test --chrome --headless
+        wasm-pack test --chrome --headless --features sqlite3mc

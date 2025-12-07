@@ -1,7 +1,5 @@
 //! relaxed-idb vfs implementation
 //!
-//! **The `relaxed-idb` feature is required, and it is not recommended to use in a production environment.**
-//!
 //! ```rust
 //! use sqlite_wasm_rs as ffi;
 //! use sqlite_wasm_vfs::relaxed_idb::{
