@@ -12,10 +12,9 @@ RUSTFLAGS="-L $(pwd)" CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-te
 
 ```sh
 # change opt-level
-CARGO_PROFILE_RELEASE_OPT_LEVEL="z"
-cargo build --target wasm32-unknown-unknown --release
+CARGO_PROFILE_RELEASE_OPT_LEVEL="z" cargo build --target wasm32-unknown-unknown --release
 # find library
-fd -H libwsqlite3.a target
+fd -IH libwsqlite3.a
 ```
 
 2. Copy library to your ld search path
