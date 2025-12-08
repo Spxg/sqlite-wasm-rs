@@ -21,7 +21,7 @@ sqlite-wasm-rs = { version = "0.5", features = ["sqlite3mc"] }
 ```rust
 use sqlite_wasm_rs as ffi;
 
-async fn open_db() {
+fn open_db() {
     // open with memory vfs
     let mut db = std::ptr::null_mut();
     let ret = unsafe {
