@@ -1,0 +1,37 @@
+[package]
+name = "sqlite-wasm-rs-sys"
+version = "0.1.0"
+edition = "2021"
+links = "wsqlite3"
+include = [
+    'src/**/*.rs',
+    'build.rs',
+    'sqlite3/**/*.c',
+    'sqlite3/**/*.h',
+    'sqlite3mc/**/*.c',
+    'sqlite3mc/**/*.h',
+    'shim/**/*.h',
+    'shim/**/*.c',
+    'Cargo.toml',
+    '/README.md',
+    'LICENSE',
+    # use to build docs
+    'docsrs.toml',
+]
+
+[dependencies]
+
+[build-dependencies]
+cc = "1.2.27"
+bindgen = { version = "0.72", optional = true }
+
+[package.metadata.docs.rs]
+targets = ["wasm32-unknown-unknown"]
+cargo-args = ["--config", "docsrs.toml"]
+
+[features]
+# SQLite3MultipleCiphers
+# <https://github.com/utelle/SQLite3MultipleCiphers>
+# <https://utelle.github.io/SQLite3MultipleCiphers>
+sqlite3mc = []
+

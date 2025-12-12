@@ -1,13 +1,28 @@
 //! Low-level utilities, traits, and macros for implementing custom SQLite Virtual File Systems (VFS).
+#![no_std]
+#![allow(non_upper_case_globals)]
+#![allow(non_camel_case_types)]
+#![allow(non_snake_case)]
 
-use crate::bindings::*;
+extern crate alloc;
+
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+extern crate libsqlite3_sys as bindings;
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+extern crate sqlite_wasm_rs_sys as bindings;
+
+use self::bindings::*;
+
+// libsqlite3-sys misses this type
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[allow(non_camel_case_types)]
+type sqlite3_filename = *const ::core::ffi::c_char;
 
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{boxed::Box, ffi::CString};
 use alloc::{format, vec};
 use core::{cell::RefCell, ffi::CStr, ops::Deref};
-use js_sys::{Date, Math, Number};
 
 /// A macro to return a specific SQLite error code if a condition is true.
 ///
@@ -70,9 +85,26 @@ macro_rules! unused {
 pub const SQLITE3_HEADER: &str = "SQLite format 3";
 
 /// Generates a random, temporary filename, typically used when SQLite requests a file with a NULL name.
-pub fn random_name() -> String {
-    let random = Number::from(Math::random()).to_string(36).unwrap();
-    random.slice(2, random.length()).as_string().unwrap()
+pub fn random_name(randomness: fn(&mut [u8])) -> String {
+    let mut random_buffer = [0; 32];
+    randomness(&mut random_buffer);
+    fn make_ascii_alphanumeric(mut u: u8) -> char {
+        if (u as char).is_alphanumeric() {
+            return u as char;
+        }
+        if u < '0' as u8 {
+            u = u + '0' as u8;
+        }
+        if u > 'z' as u8 {
+            u = '0' as u8 + (u % ('z' as u8 - 'u' as u8));
+        }
+        u as char
+    }
+
+    random_buffer
+        .into_iter()
+        .map(make_ascii_alphanumeric)
+        .collect()
 }
 
 /// An in-memory file implementation that stores data in fixed-size chunks. Suitable for temporary files.
@@ -425,6 +457,9 @@ pub trait VfsStore<File, AppData> {
         vfs_file: &SQLiteVfsFile,
         f: F,
     ) -> VfsResult<i32>;
+
+    fn random(buf: &mut [u8]);
+    fn epoch_timestamp_in_ms() -> i64;
 }
 
 /// A trait that abstracts the `sqlite3_vfs` struct, allowing for a more idiomatic Rust implementation.
@@ -452,11 +487,11 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
             xDlError: None,
             xDlSym: None,
             xDlClose: None,
-            xRandomness: Some(x_methods_shim::xRandomness),
+            xRandomness: Some(x_methods_shim::xRandomness::<IO::Store, _, _>),
             xSleep: Some(x_methods_shim::xSleep),
-            xCurrentTime: Some(x_methods_shim::xCurrentTime),
+            xCurrentTime: Some(x_methods_shim::xCurrentTime::<IO::Store, _, _>),
             xGetLastError: Some(Self::xGetLastError),
-            xCurrentTimeInt64: Some(x_methods_shim::xCurrentTimeInt64),
+            xCurrentTimeInt64: Some(x_methods_shim::xCurrentTimeInt64::<IO::Store, _, _>),
             xSetSystemCall: None,
             xGetSystemCall: None,
             xNextSystemCall: None,
@@ -483,7 +518,7 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
         let app_data = IO::Store::app_data(pVfs);
 
         let name = if zName.is_null() {
-            random_name()
+            random_name(IO::Store::random)
         } else {
             check_result!(CStr::from_ptr(zName).to_str()).into()
         };
@@ -841,32 +876,31 @@ pub mod x_methods_shim {
     }
 
     /// <https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L951>
-    pub unsafe extern "C" fn xRandomness(
+    pub unsafe extern "C" fn xRandomness<Store: VfsStore<F, A>, F, A>(
         _pVfs: *mut sqlite3_vfs,
         nByte: ::core::ffi::c_int,
         zOut: *mut ::core::ffi::c_char,
     ) -> ::core::ffi::c_int {
-        for i in 0..nByte as usize {
-            *zOut.add(i) = (Math::random() * 255000.0) as _;
-        }
+        let slice = core::slice::from_raw_parts_mut(zOut.cast(), nByte as usize);
+        Store::random(slice);
         nByte
     }
 
     /// <https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L870>
-    pub unsafe extern "C" fn xCurrentTime(
+    pub unsafe extern "C" fn xCurrentTime<Store: VfsStore<F, A>, F, A>(
         _pVfs: *mut sqlite3_vfs,
         pTimeOut: *mut f64,
     ) -> ::core::ffi::c_int {
-        *pTimeOut = 2440587.5 + (Date::new_0().get_time() / 86400000.0);
+        *pTimeOut = 2440587.5 + (Store::epoch_timestamp_in_ms() as f64 / 86400000.0);
         SQLITE_OK
     }
 
     /// <https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L877>
-    pub unsafe extern "C" fn xCurrentTimeInt64(
+    pub unsafe extern "C" fn xCurrentTimeInt64<Store: VfsStore<F, A>, F, A>(
         _pVfs: *mut sqlite3_vfs,
         pOut: *mut sqlite3_int64,
     ) -> ::core::ffi::c_int {
-        *pOut = ((2440587.5 * 86400000.0) + Date::new_0().get_time()) as sqlite3_int64;
+        *pOut = ((2440587.5 * 86400000.0) + Store::epoch_timestamp_in_ms() as f64) as sqlite3_int64;
         SQLITE_OK
     }
 }
@@ -1050,7 +1084,7 @@ pub mod test_suite {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_arch = "wasm32"))]
 mod tests {
     use super::{MemChunksFile, VfsFile};
     use wasm_bindgen_test::wasm_bindgen_test;
