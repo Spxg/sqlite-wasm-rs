@@ -4,8 +4,31 @@ use core::ffi::{c_char, c_int, c_long, c_longlong, c_void};
 use core::ptr;
 
 use js_sys::{Date, Number};
+use rsqlite_vfs::memvfs::OsCallback;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
+
+pub struct WasmOsCallback;
+
+impl OsCallback for WasmOsCallback {
+    fn random(buf: &mut [u8]) {
+        #[cfg(not(target_feature = "atomics"))]
+        let _ = get_random_values(buf);
+
+        #[cfg(target_feature = "atomics")]
+        {
+            let array = js_sys::Uint8Array::new_with_length(buf.len() as _);
+            let _ = get_random_values(&array);
+            for idx in 0..buf.len() {
+                buf[idx] = array.at(idx as _).unwrap_or_default();
+            }
+        }
+    }
+
+    fn epoch_timestamp_in_ms() -> i64 {
+        Date::new_0().get_time() as i64
+    }
+}
 
 type c_size_t = usize;
 type c_time_t = c_longlong;
@@ -206,7 +229,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_calloc(num: c_size_t, size: c_size_t) 
 /// default VFS for the environment, which in this case is the in-memory VFS.
 #[no_mangle]
 pub unsafe extern "C" fn sqlite3_os_init() -> core::ffi::c_int {
-    crate::memvfs::install();
+    crate::memvfs::install::<WasmOsCallback>();
     crate::bindings::SQLITE_OK
 }
 

@@ -2,6 +2,7 @@
 //!
 //! We want to implement a simple memory VFS
 
+use sqlite_wasm_rs::memvfs::OsCallback;
 use sqlite_wasm_rs::{
     sqlite3_close, sqlite3_exec, sqlite3_file, sqlite3_open_v2, sqlite3_vfs,
     utils::{
@@ -180,6 +181,15 @@ struct MemVfs;
 /// Implementing vfs is just as simple, just like this
 impl SQLiteVfs<MemIoMethods> for MemVfs {
     const VERSION: ::std::os::raw::c_int = 1;
+
+    fn random(buf: &mut [u8]) {
+        sqlite_wasm_rs::WasmOsCallback::random(buf);
+    }
+
+    fn epoch_timestamp_in_ms() -> i64 {
+        sqlite_wasm_rs::WasmOsCallback::epoch_timestamp_in_ms()
+    }
+
     // As above, you can still override the default implementation
 }
 

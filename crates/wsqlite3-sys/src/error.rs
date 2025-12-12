@@ -1,6 +1,6 @@
 use core::error;
-use core::fmt;
 use core::ffi::c_int;
+use core::fmt;
 
 /// Error Codes
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

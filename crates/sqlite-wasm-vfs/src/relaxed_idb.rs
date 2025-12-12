@@ -44,13 +44,14 @@
 //! It is particularly important to note that using it on multiple pages may cause DB corruption.
 //! It is recommended to use it in SharedWorker.
 
+use sqlite_wasm_rs::memvfs::OsCallback;
 use sqlite_wasm_rs::utils::{
     check_db_and_page_size, check_import_db, register_vfs, registered_vfs, ImportDbError,
     MemChunksFile, RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData,
     VfsError, VfsFile, VfsResult, VfsStore,
 };
 use sqlite_wasm_rs::{
-    bail, check_option, check_result, sqlite3_file, sqlite3_vfs, SQLITE_ERROR,
+    bail, check_option, check_result, sqlite3_file, sqlite3_vfs, WasmOsCallback, SQLITE_ERROR,
     SQLITE_FCNTL_COMMIT_PHASETWO, SQLITE_FCNTL_PRAGMA, SQLITE_FCNTL_SYNC, SQLITE_IOERR,
     SQLITE_IOERR_DELETE, SQLITE_NOTFOUND, SQLITE_OK, SQLITE_OPEN_MAIN_DB,
 };
@@ -719,6 +720,14 @@ struct RelaxedIdbVfs;
 
 impl SQLiteVfs<RelaxedIdbIoMethods> for RelaxedIdbVfs {
     const VERSION: ::std::os::raw::c_int = 1;
+
+    fn random(buf: &mut [u8]) {
+        WasmOsCallback::random(buf);
+    }
+
+    fn epoch_timestamp_in_ms() -> i64 {
+        WasmOsCallback::epoch_timestamp_in_ms()
+    }
 }
 
 /// A future that resolves when a pending IndexedDB commit operation is complete.

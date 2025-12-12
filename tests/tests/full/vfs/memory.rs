@@ -51,7 +51,7 @@ fn test_memory_vfs_util() {
     let ret = unsafe { sqlite3_close(db1) };
     assert_eq!(SQLITE_OK, ret);
 
-    let util = MemVfsUtil::new();
+    let util = MemVfsUtil::<sqlite_wasm_rs::WasmOsCallback>::new();
     assert!(util.exists("test_memory_vfs_util.db"));
 
     let db = util.export_db("test_memory_vfs_util.db").unwrap();

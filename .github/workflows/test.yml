@@ -64,6 +64,7 @@ jobs:
         cd rusqlite
         printf "[patch.crates-io]\n" >> Cargo.toml
         printf "sqlite-wasm-rs = { path = \"..\" }\n" >> Cargo.toml
+        printf "libsqlite3-sys = { path = \"libsqlite3-sys\"}\n" >> Cargo.toml
         WASM_BINDGEN_TEST_TIMEOUT=60 wasm-pack test --node --features modern-full
 
   test_clippy:
@@ -182,3 +183,15 @@ jobs:
         cd tests
         wasm-pack test --chrome --headless
         wasm-pack test --chrome --headless --features sqlite3mc
+        
+  test_vfs_native:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        run: |
+          cd crates/rsqlite-vfs
+          cargo test

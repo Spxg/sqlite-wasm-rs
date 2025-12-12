@@ -1,0 +1,23 @@
+[package]
+name = "rsqlite-vfs"
+version = "0.1.0"
+readme.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+include.workspace = true
+
+[dependencies]
+hashbrown = { version = "0.16.1", default-features = false, features = ["default-hasher"] }
+thiserror = { version = "2.0.12", default-features = false }
+
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+# libsqlite3-sys doesn't compile without features
+# see https://github.com/rusqlite/rusqlite/issues/1205
+libsqlite3-sys = { version = "0.35.0", default-features = false, features = ["vcpkg", "pkg-config"] }
+
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+wsqlite3-sys = { default-features = false, path = "../wsqlite3-sys" }
+
+[dev-dependencies]
+rand = { version = "0.9" }
