@@ -1,0 +1,13 @@
+[package]
+name = "sqlite-vfs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+thiserror = { version = "2.0.12", default-features = false }
+
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+libsqlite3-sys = { version = "0.35.0" }
+
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+sqlite-wasm-rs-sys = { default-features = false, path = "../sqlite-wasm-rs-sys" }

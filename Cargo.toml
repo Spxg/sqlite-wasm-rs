@@ -1,7 +1,6 @@
 [package]
 name = "sqlite-wasm-rs"
 version = "0.5.0"
-links = "wsqlite3"
 edition = "2021"
 authors = ["Spxg <unsafe@outlook.es>"]
 readme = "README.md"
@@ -30,6 +29,9 @@ include = [
 [dependencies]
 wasm-bindgen = { version = "0.2.104", default-features = false }
 js-sys = { version = "0.3.81", default-features = false }
+sqlite-wasm-rs-sys = { path = "crates/sqlite-wasm-rs-sys" }
+sqlite-mem-vfs = { path = "crates/sqlite-mem-vfs"}
+sqlite-vfs = { path = "crates/sqlite-vfs" }
 thiserror = { version = "2.0.12", default-features = false }
 hashbrown = { version = "0.16.1", default-features = false, features = ["default-hasher"] }
 
@@ -60,7 +62,7 @@ members = [
   "examples/implement-a-vfs",
   "examples/nodejs",
   "examples/use-prebuild-lib"
-]
+, "crates/sqlite-mem-vfs", "crates/sqlite-vfs", "crates/sqlite-wasm-rs-sys"]
 
 [patch.crates-io]
 sqlite-wasm-rs = { path = "./" }

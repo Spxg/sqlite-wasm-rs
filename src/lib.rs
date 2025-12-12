@@ -8,17 +8,18 @@
 
 extern crate alloc;
 
-#[rustfmt::skip]
-#[allow(clippy::type_complexity)]
-mod bindings;
-mod memvfs;
+pub use sqlite_mem_vfs as memvfs;
+pub use sqlite_wasm_rs_sys as bindings;
 mod shim;
 
 /// Low-level utilities, traits, and macros for implementing custom SQLite Virtual File Systems (VFS)
-pub mod utils;
+pub use sqlite_vfs as utils;
+
+pub use self::utils::{bail, check_option, check_result};
 
 /// Raw C-style bindings to the underlying `libsqlite3` library.
 pub use bindings::*;
 
+pub use self::shim::WasmOsCallback;
 /// In-memory VFS implementation.
 pub use memvfs::{MemVfsError, MemVfsUtil};
