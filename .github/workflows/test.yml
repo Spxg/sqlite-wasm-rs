@@ -10,14 +10,12 @@ jobs:
   test_bundled:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-    - name: Setup emscripten
-      uses: ./.github/actions/setup-emscripten
     - name: Test bundled
       run: |
         wasm-pack test --chrome --headless
@@ -30,14 +28,12 @@ jobs:
   test_bundled_sqlite3mc:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-    - name: Setup emscripten
-      uses: ./.github/actions/setup-emscripten
     - name: Test bundled sqlite3mc
       run: |
         wasm-pack test --chrome --headless --features sqlite3mc
@@ -46,8 +42,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Setup emscripten
-      uses: ./.github/actions/setup-emscripten
     - name: Run diesel tests
       run: |
         git clone https://github.com/diesel-rs/diesel.git
@@ -64,15 +58,13 @@ jobs:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-    - name: Setup emscripten
-      uses: ./.github/actions/setup-emscripten
     - name: Run rusqlite tests
       run: |
-        git clone https://github.com/Spxg/rusqlite.git
+        git clone https://github.com/rusqlite/rusqlite.git
         cd rusqlite
         printf "[patch.crates-io]\n" >> Cargo.toml
         printf "sqlite-wasm-rs = { path = \"..\" }\n" >> Cargo.toml
-        WASM_BINDGEN_TEST_TIMEOUT=60 wasm-pack test --chrome --headless --features modern-base
+        WASM_BINDGEN_TEST_TIMEOUT=60 wasm-pack test --chrome --headless --features modern-full
 
   test_clippy:
     runs-on: ubuntu-latest
@@ -81,7 +73,7 @@ jobs:
     - name: Check clippy
       run: |
         rustup target add wasm32-unknown-unknown
-        cargo clippy --no-default-features --config docsrs.toml --target wasm32-unknown-unknown -- -D warnings
+        cargo clippy --no-default-features --target wasm32-unknown-unknown -- -D warnings
 
   test_implement_a_vfs:
     runs-on: ubuntu-latest
@@ -89,8 +81,6 @@ jobs:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-    - name: Setup emscripten
-      uses: ./.github/actions/setup-emscripten
     - name: Test implement-a-vfs example
       run: |
         cd examples/implement-a-vfs
@@ -112,13 +102,12 @@ jobs:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-    - name: Setup emscripten
-      uses: ./.github/actions/setup-emscripten
     - name: Test
       run: |
         rustup toolchain install nightly
         rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
-        RUSTFLAGS='-Ctarget-feature=+atomics -Clink-args=--shared-memory -Clink-args=--max-memory=1073741824 -Clink-args=--import-memory -Clink-args=--export=__wasm_init_tls -Clink-args=--export=__tls_size -Clink-args=--export=__tls_align -Clink-args=--export=__tls_base' rustup run nightly wasm-pack test --chrome --headless -Z build-std=panic_abort,std
+        cd tests
+        CFLAGS_wasm32_unknown_unknown='-matomics' RUSTFLAGS='-Ctarget-feature=+atomics -Clink-args=--shared-memory -Clink-args=--max-memory=1073741824 -Clink-args=--import-memory -Clink-args=--export=__wasm_init_tls -Clink-args=--export=__tls_size -Clink-args=--export=__tls_align -Clink-args=--export=__tls_base' rustup run nightly wasm-pack test --chrome --headless -Z build-std=panic_abort,std
 
   test_msrv:
     strategy:
@@ -129,10 +118,6 @@ jobs:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-    - name: Setup emscripten
-      uses: ./.github/actions/setup-emscripten
-      with:
-        version: '3.1.52'
     - name: Test MSRV
       run: |
         rustup toolchain install 1.82.0
@@ -149,8 +134,6 @@ jobs:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-    - name: Setup emscripten
-      uses: ./.github/actions/setup-emscripten
     - name: Test
       run: |
         cd examples/nodejs
@@ -160,14 +143,12 @@ jobs:
   test_sqlite_wasm_vec:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-    - name: Setup emscripten
-      uses: ./.github/actions/setup-emscripten
     - name: Test
       run: |
         cd extensions/sqlite-vec
@@ -176,14 +157,12 @@ jobs:
   test_sqlite_wasm_vfs:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-    - name: Setup emscripten
-      uses: ./.github/actions/setup-emscripten
     - name: Test
       run: |
         cd crates/sqlite-wasm-vfs
@@ -198,8 +177,6 @@ jobs:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-    - name: Setup emscripten
-      uses: ./.github/actions/setup-emscripten
     - name: Test
       run: |
         cd tests

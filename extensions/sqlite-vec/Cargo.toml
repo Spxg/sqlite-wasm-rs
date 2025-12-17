@@ -19,7 +19,3 @@ cc = "1.2.44"
 [dev-dependencies]
 sqlite-wasm-rs = { path = "../../" }
 wasm-bindgen-test = "0.3.55"
-
-[package.metadata.docs.rs]
-targets = ["wasm32-unknown-unknown"]
-cargo-args = ["--config", "docsrs.toml"]

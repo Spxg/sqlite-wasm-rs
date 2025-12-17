@@ -4,8 +4,6 @@
 
 ## Usage
 
-Due to restrictions on the target platform, the [emscripten](https://emscripten.org/docs/getting_started/downloads.html) toolchain needs to be installed for compilation.
-
 ```toml
 [dependencies]
 sqlite-wasm-rs = "0.5"

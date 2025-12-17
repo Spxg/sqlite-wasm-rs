@@ -33,7 +33,3 @@ indexed_db_futures = "0.6.4"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.54"
-
-[package.metadata.docs.rs]
-targets = ["wasm32-unknown-unknown"]
-cargo-args = ["--config", "docsrs.toml"]
