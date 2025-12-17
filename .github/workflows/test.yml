@@ -68,11 +68,11 @@ jobs:
       uses: ./.github/actions/setup-emscripten
     - name: Run rusqlite tests
       run: |
-        git clone https://github.com/Spxg/rusqlite.git
+        git clone https://github.com/rusqlite/rusqlite.git
         cd rusqlite
         printf "[patch.crates-io]\n" >> Cargo.toml
         printf "sqlite-wasm-rs = { path = \"..\" }\n" >> Cargo.toml
-        WASM_BINDGEN_TEST_TIMEOUT=60 wasm-pack test --chrome --headless --features modern-base
+        WASM_BINDGEN_TEST_TIMEOUT=60 wasm-pack test --chrome --headless --features modern-full
 
   test_clippy:
     runs-on: ubuntu-latest
