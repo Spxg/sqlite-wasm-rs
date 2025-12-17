@@ -1,10 +1,14 @@
 fn main() {
     let mut cc = cc::Build::new();
-    cc.warnings(false).target("wasm32-unknown-emscripten");
 
-    cc.file("cc/sqlite-vec.c")
+    cc.warnings(false)
+        .flag("-Wno-macro-redefined")
+        .include("cc/shim/musl/arch/generic")
+        .include("cc/shim/musl/include")
+        .file("cc/sqlite-vec.c")
         .flag("-include")
-        .flag("cc/wasm-shim.h")
-        .define("SQLITE_CORE", None)
+        .flag("cc/shim/wasm-shim.h")
+        .flag("-D__COSMOPOLITAN__")
+        .flag("-DSQLITE_CORE")
         .compile("wsqlite_vec0");
 }

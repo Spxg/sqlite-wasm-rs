@@ -189,8 +189,6 @@ fn bindgen(output: &std::path::PathBuf) {
 }
 
 fn compile() {
-    use std::collections::HashSet;
-
     const C_SOURCE: [&str; 36] = [
         // string
         "string/memchr.c",
@@ -242,29 +240,21 @@ fn compile() {
     const SQLITE3_SOURCE: &str = "sqlite3mc/sqlite3mc_amalgamation.c";
 
     let mut cc = cc::Build::new();
-    cc.warnings(false).cargo_warnings(false);
-
-    cc.file(SQLITE3_SOURCE)
-        .files(C_SOURCE.map(|s| format!("shim/musl/{s}")))
+    cc.warnings(false)
+        .flag("-Wno-macro-redefined")
+        .include("shim")
         .include("shim/musl/arch/generic")
         .include("shim/musl/include")
-        .file("shim/printf/printf.c");
+        .file("shim/printf/printf.c")
+        .file(SQLITE3_SOURCE)
+        .files(C_SOURCE.map(|s| format!("shim/musl/{s}")))
+        .flag("-DPRINTF_ALIAS_STANDARD_FUNCTION_NAMES_HARD")
+        .flag("-include")
+        .flag("shim/wasm-shim.h");
+
     cc.flags(FULL_FEATURED);
     #[cfg(feature = "sqlite3mc")]
     cc.flags(SQLITE3_MC_FEATURED);
 
-    let target_features = std::env::var("CARGO_CFG_TARGET_FEATURE").unwrap_or_default();
-    let target_features = target_features
-        .split(',')
-        .map(str::trim)
-        .collect::<HashSet<_>>();
-
-    if target_features.contains("atomics") {
-        cc.flag("-pthread");
-    }
-    cc.include("shim")
-        .flag("-DPRINTF_ALIAS_STANDARD_FUNCTION_NAMES_HARD")
-        .flag("-include")
-        .flag("shim/wasm-shim.h")
-        .compile("wsqlite3");
+    cc.compile("wsqlite3");
 }
