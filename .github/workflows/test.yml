@@ -81,7 +81,7 @@ jobs:
     - name: Check clippy
       run: |
         rustup target add wasm32-unknown-unknown
-        cargo clippy --no-default-features --config docsrs.toml --target wasm32-unknown-unknown -- -D warnings
+        cargo clippy --no-default-features --target wasm32-unknown-unknown -- -D warnings
 
   test_implement_a_vfs:
     runs-on: ubuntu-latest

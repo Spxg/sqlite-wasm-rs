@@ -1,2 +1,0 @@
-[target.wasm32-unknown-unknown.wsqlite3]
-rustc-link-lib = []
