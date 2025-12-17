@@ -18,7 +18,7 @@ jobs:
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - name: Test bundled
       run: |
-        wasm-pack test --chrome --headless
+        wasm-pack test --node
     - name: Test use prebuild libsqlite3.a
       if: matrix.os != 'windows-latest'
       run: |
@@ -36,7 +36,7 @@ jobs:
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - name: Test bundled sqlite3mc
       run: |
-        wasm-pack test --chrome --headless --features sqlite3mc
+        wasm-pack test --node --features sqlite3mc
 
   test_diesel:
     runs-on: ubuntu-latest
@@ -64,7 +64,7 @@ jobs:
         cd rusqlite
         printf "[patch.crates-io]\n" >> Cargo.toml
         printf "sqlite-wasm-rs = { path = \"..\" }\n" >> Cargo.toml
-        WASM_BINDGEN_TEST_TIMEOUT=60 wasm-pack test --chrome --headless --features modern-full
+        WASM_BINDGEN_TEST_TIMEOUT=60 wasm-pack test --node --features modern-full
 
   test_clippy:
     runs-on: ubuntu-latest
@@ -84,7 +84,7 @@ jobs:
     - name: Test implement-a-vfs example
       run: |
         cd examples/implement-a-vfs
-        wasm-pack test --chrome --headless -- -- --nocapture
+        wasm-pack test --node -- -- --nocapture
 
   test_fmt:
     runs-on: ubuntu-latest
@@ -122,8 +122,8 @@ jobs:
       run: |
         rustup toolchain install 1.82.0
         rustup default 1.82.0
-        wasm-pack test --chrome --headless
-        wasm-pack test --chrome --headless --features sqlite3mc
+        wasm-pack test --node
+        wasm-pack test --node --features sqlite3mc
 
   test_nodejs:
     strategy:
@@ -152,7 +152,7 @@ jobs:
     - name: Test
       run: |
         cd extensions/sqlite-vec
-        wasm-pack test --chrome --headless
+        wasm-pack test --node
 
   test_sqlite_wasm_vfs:
     strategy:
@@ -166,7 +166,7 @@ jobs:
     - name: Test
       run: |
         cd crates/sqlite-wasm-vfs
-        wasm-pack test --chrome --headless
+        wasm-pack test --node
 
   test_sqlite_wasm_tests:
     strategy:
