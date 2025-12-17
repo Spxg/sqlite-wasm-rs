@@ -1,6 +1,6 @@
 [package]
 name = "sqlite-wasm-vec"
-version = "0.1.2"
+version = "0.1.3"
 links = "wsqlite_vec0"
 edition = "2021"
 authors = ["Spxg <unsafe@outlook.es>"]
@@ -19,3 +19,6 @@ cc = "1.2.44"
 [dev-dependencies]
 sqlite-wasm-rs = { path = "../../" }
 wasm-bindgen-test = "0.3.55"
+
+[package.metadata.docs.rs]
+targets = ["wasm32-unknown-unknown"]
