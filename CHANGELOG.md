@@ -9,6 +9,9 @@
 
 ### Changed
 
+* Removed emcc requirement.
+  [#157](https://github.com/Spxg/sqlite-wasm-rs/pull/157)
+
 --------------------------------------------------------------------------------
 
 ## [0.5.0](https://github.com/Spxg/sqlite-wasm-rs/compare/0.4.8...0.5.0)
