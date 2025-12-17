@@ -44,6 +44,9 @@ wasm-bindgen-test = "0.3.54"
 cc = "1.2.27"
 bindgen = { version = "0.72", optional = true }
 
+[package.metadata.docs.rs]
+targets = ["wasm32-unknown-unknown"]
+
 [workspace]
 resolver = "2"
 members = [

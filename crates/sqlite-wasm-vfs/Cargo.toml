@@ -1,6 +1,6 @@
 [package]
 name = "sqlite-wasm-vfs"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Spxg <unsafe@outlook.es>"]
 readme = "README.md"
@@ -11,7 +11,7 @@ categories = ["development-tools::ffi", "wasm", "database"]
 keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "javascript"]
 
 [dependencies]
-sqlite-wasm-rs = { version = "0.5.0", default-features = false }
+sqlite-wasm-rs = { version = "0.5.1", default-features = false }
 
 wasm-bindgen = "0.2.104"
 js-sys = "0.3.81"
@@ -33,3 +33,6 @@ indexed_db_futures = "0.6.4"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.54"
+
+[package.metadata.docs.rs]
+targets = ["wasm32-unknown-unknown"]
