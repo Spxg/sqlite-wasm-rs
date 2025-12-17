@@ -1,6 +1,6 @@
 [package]
 name = "sqlite-wasm-vec"
-version = "0.1.1"
+version = "0.1.2"
 links = "wsqlite_vec0"
 edition = "2021"
 authors = ["Spxg <unsafe@outlook.es>"]
