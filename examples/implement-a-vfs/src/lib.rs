@@ -2,8 +2,6 @@
 //!
 //! We want to implement a simple memory VFS
 
-wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
-
 use sqlite_wasm_rs::{
     sqlite3_close, sqlite3_exec, sqlite3_file, sqlite3_open_v2, sqlite3_vfs,
     utils::{
