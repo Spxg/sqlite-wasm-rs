@@ -7,9 +7,7 @@ extern "C" {
 
 #include <features.h>
 
-#if __cplusplus >= 201103L && !defined(__EMSCRIPTEN__)
-#define NULL nullptr
-#elif defined(__cplusplus)
+#if defined(__cplusplus)
 #define NULL 0L
 #else
 #define NULL ((void*)0)

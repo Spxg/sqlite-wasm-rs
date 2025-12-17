@@ -242,7 +242,7 @@ fn compile() {
     const SQLITE3_SOURCE: &str = "sqlite3mc/sqlite3mc_amalgamation.c";
 
     let mut cc = cc::Build::new();
-    cc.warnings(false);
+    cc.warnings(false).cargo_warnings(false);
 
     cc.file(SQLITE3_SOURCE)
         .files(C_SOURCE.map(|s| format!("shim/musl/{s}")))

@@ -16,7 +16,7 @@
 #define _XOPEN_SOURCE 700
 #endif
 
-#if defined(__EMSCRIPTEN__) && defined(_GNU_SOURCE)
+#if defined(_GNU_SOURCE)
 // In emscripten the LFS functions are kept around when _GNU_SOURCE is
 // defined, for increased compatabiliy. This is also what glibc does.
 #undef _LARGEFILE64_SOURCE
