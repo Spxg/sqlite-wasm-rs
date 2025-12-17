@@ -242,14 +242,12 @@ fn compile() {
     const SQLITE3_SOURCE: &str = "sqlite3mc/sqlite3mc_amalgamation.c";
 
     let mut cc = cc::Build::new();
-    cc.warnings(false).target("wasm32-unknown-emscripten");
-
-    if cc.get_compiler().to_command().status().is_err() {
-        panic!("It looks like you don't have the emscripten toolchain: https://emscripten.org/docs/getting_started/downloads.html");
-    }
+    cc.warnings(false);
 
     cc.file(SQLITE3_SOURCE)
         .files(C_SOURCE.map(|s| format!("shim/musl/{s}")))
+        .include("shim/musl/arch/generic")
+        .include("shim/musl/include")
         .file("shim/printf/printf.c");
     cc.flags(FULL_FEATURED);
     #[cfg(feature = "sqlite3mc")]
