@@ -43,6 +43,7 @@ use alloc::{format, vec};
 use core::cell::RefCell;
 use core::ffi::CStr;
 use core::marker::PhantomData;
+use core::time::Duration;
 use hashbrown::HashMap;
 
 const VFS_NAME: &CStr = c"memvfs";
@@ -99,6 +100,7 @@ impl VfsFile for MemFile {
 type MemAppData = RefCell<HashMap<String, MemFile>>;
 
 pub trait OsCallback {
+    fn sleep(dur: Duration);
     fn random(buf: &mut [u8]);
     fn epoch_timestamp_in_ms() -> i64;
 }
@@ -181,6 +183,10 @@ where
     C: OsCallback,
 {
     const VERSION: ::core::ffi::c_int = 1;
+
+    fn sleep(dur: Duration) {
+        C::sleep(dur);
+    }
 
     fn random(buf: &mut [u8]) {
         C::random(buf);

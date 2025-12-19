@@ -45,6 +45,7 @@ use sqlite_wasm_rs::{
 };
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 use js_sys::{Array, DataView, IteratorNext, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
@@ -694,6 +695,10 @@ impl SQLiteVfs<SyncAccessHandleIoMethods> for SyncAccessHandleVfs {
                 .insert(vfs_file.name().into());
         }
         ret
+    }
+
+    fn sleep(dur: Duration) {
+        WasmOsCallback::sleep(dur);
     }
 
     fn random(buf: &mut [u8]) {

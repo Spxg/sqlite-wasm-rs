@@ -5,7 +5,6 @@
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
-#![cfg_attr(target_feature = "atomics", feature(stdarch_wasm_atomic_wait))]
 
 extern crate alloc;
 
@@ -25,6 +24,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{boxed::Box, ffi::CString};
 use alloc::{format, vec};
+use core::time::Duration;
 use core::{cell::RefCell, ffi::CStr, ops::Deref};
 
 pub mod memvfs;
@@ -464,6 +464,7 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
     const VERSION: ::core::ffi::c_int;
     const MAX_PATH_SIZE: ::core::ffi::c_int = 1024;
 
+    fn sleep(dur: Duration);
     fn random(buf: &mut [u8]);
     fn epoch_timestamp_in_ms() -> i64;
 
@@ -487,7 +488,7 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
             xDlSym: None,
             xDlClose: None,
             xRandomness: Some(Self::xRandomness),
-            xSleep: Some(x_methods_shim::xSleep),
+            xSleep: Some(Self::xSleep),
             xCurrentTime: Some(Self::xCurrentTime),
             xGetLastError: Some(Self::xGetLastError),
             xCurrentTimeInt64: Some(Self::xCurrentTimeInt64),
@@ -635,10 +636,11 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
 
     /// <https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L951>
     unsafe extern "C" fn xRandomness(
-        _pVfs: *mut sqlite3_vfs,
+        pVfs: *mut sqlite3_vfs,
         nByte: ::core::ffi::c_int,
         zOut: *mut ::core::ffi::c_char,
     ) -> ::core::ffi::c_int {
+        unused!(pVfs);
         let slice = core::slice::from_raw_parts_mut(zOut.cast(), nByte as usize);
         Self::random(slice);
         nByte
@@ -646,19 +648,31 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
 
     /// <https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L870>
     unsafe extern "C" fn xCurrentTime(
-        _pVfs: *mut sqlite3_vfs,
+        pVfs: *mut sqlite3_vfs,
         pTimeOut: *mut f64,
     ) -> ::core::ffi::c_int {
+        unused!(pVfs);
         *pTimeOut = 2440587.5 + (Self::epoch_timestamp_in_ms() as f64 / 86400000.0);
         SQLITE_OK
     }
 
     /// <https://github.com/sqlite/sqlite/blob/fb9e8e48fd70b463fb7ba6d99e00f2be54df749e/ext/wasm/api/sqlite3-vfs-opfs.c-pp.js#L877>
     unsafe extern "C" fn xCurrentTimeInt64(
-        _pVfs: *mut sqlite3_vfs,
+        pVfs: *mut sqlite3_vfs,
         pOut: *mut sqlite3_int64,
     ) -> ::core::ffi::c_int {
+        unused!(pVfs);
         *pOut = ((2440587.5 * 86400000.0) + Self::epoch_timestamp_in_ms() as f64) as sqlite3_int64;
+        SQLITE_OK
+    }
+
+    unsafe extern "C" fn xSleep(
+        pVfs: *mut sqlite3_vfs,
+        microseconds: ::core::ffi::c_int,
+    ) -> ::core::ffi::c_int {
+        unused!(pVfs);
+        let dur = Duration::from_micros(microseconds as u64);
+        Self::sleep(dur);
         SQLITE_OK
     }
 }
@@ -862,45 +876,6 @@ pub trait SQLiteIoMethods {
     unsafe extern "C" fn xDeviceCharacteristics(pFile: *mut sqlite3_file) -> ::core::ffi::c_int {
         unused!(pFile);
         0
-    }
-}
-
-/// A module containing shims for VFS methods that are implemented using JavaScript interoperability.
-#[allow(clippy::missing_safety_doc)]
-pub mod x_methods_shim {
-    use super::*;
-
-    /// thread::sleep is available when atomics is enabled
-    #[cfg(target_feature = "atomics")]
-    pub unsafe extern "C" fn xSleep(
-        _pVfs: *mut sqlite3_vfs,
-        microseconds: ::core::ffi::c_int,
-    ) -> ::core::ffi::c_int {
-        use core::time::Duration;
-
-        // Use an atomic wait to block the current thread artificially with a
-        // timeout listed. Note that we should never be notified (return value
-        // of 0) or our comparison should never fail (return value of 1) so we
-        // should always only resume execution through a timeout (return value
-        // 2).
-        let dur = Duration::from_micros(microseconds as u64);
-        let mut nanos = dur.as_nanos();
-        while nanos > 0 {
-            let amt = core::cmp::min(i64::MAX as u128, nanos);
-            let mut x = 0;
-            let val = unsafe { core::arch::wasm32::memory_atomic_wait32(&mut x, 0, amt as i64) };
-            debug_assert_eq!(val, 2);
-            nanos -= amt;
-        }
-        SQLITE_OK
-    }
-
-    #[cfg(not(target_feature = "atomics"))]
-    pub unsafe extern "C" fn xSleep(
-        _pVfs: *mut sqlite3_vfs,
-        _microseconds: ::core::ffi::c_int,
-    ) -> ::core::ffi::c_int {
-        SQLITE_OK
     }
 }
 

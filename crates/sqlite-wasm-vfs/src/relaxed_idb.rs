@@ -56,6 +56,7 @@ use sqlite_wasm_rs::{
     SQLITE_IOERR_DELETE, SQLITE_NOTFOUND, SQLITE_OK, SQLITE_OPEN_MAIN_DB,
 };
 use std::cell::RefCell;
+use std::time::Duration;
 
 use indexed_db_futures::database::Database;
 use indexed_db_futures::prelude::*;
@@ -720,6 +721,10 @@ struct RelaxedIdbVfs;
 
 impl SQLiteVfs<RelaxedIdbIoMethods> for RelaxedIdbVfs {
     const VERSION: ::std::os::raw::c_int = 1;
+
+    fn sleep(dur: Duration) {
+        WasmOsCallback::sleep(dur);
+    }
 
     fn random(buf: &mut [u8]) {
         WasmOsCallback::random(buf);
