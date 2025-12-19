@@ -48,7 +48,7 @@ unsafe fn test_memvfs_cipher(cipher: &str) {
     let ret = sqlite3_close(db);
     assert_eq!(ret, SQLITE_OK);
 
-    let util = MemVfsUtil::new();
+    let util = MemVfsUtil::<WasmOsCallback>::new();
     let db1 = util.export_db(&db_name).unwrap();
     let new_db_name = format!("test_memvfs_vfs_{cipher}2.db");
     util.import_db_unchecked(&new_db_name, &db1, 8192).unwrap();

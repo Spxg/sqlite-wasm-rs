@@ -32,14 +32,15 @@
 //! [`opfs-explorer`](https://chromewebstore.google.com/detail/opfs-explorer/acndjpgkpaclldomagafnognkcgjignd)
 //! plugin to browse files.
 
+use sqlite_wasm_rs::memvfs::OsCallback;
 use sqlite_wasm_rs::utils::{
-    check_import_db, random_name, register_vfs, registered_vfs, ImportDbError, RegisterVfsError,
+    check_import_db, register_vfs, registered_vfs, ImportDbError, RegisterVfsError,
     SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
 };
 use sqlite_wasm_rs::{
     sqlite3_file, sqlite3_filename, sqlite3_vfs, sqlite3_vfs_register, sqlite3_vfs_unregister,
-    SQLITE_CANTOPEN, SQLITE_ERROR, SQLITE_IOCAP_UNDELETABLE_WHEN_OPEN, SQLITE_IOERR,
-    SQLITE_IOERR_DELETE, SQLITE_OK, SQLITE_OPEN_DELETEONCLOSE, SQLITE_OPEN_MAIN_DB,
+    WasmOsCallback, SQLITE_CANTOPEN, SQLITE_ERROR, SQLITE_IOCAP_UNDELETABLE_WHEN_OPEN,
+    SQLITE_IOERR, SQLITE_IOERR_DELETE, SQLITE_OK, SQLITE_OPEN_DELETEONCLOSE, SQLITE_OPEN_MAIN_DB,
     SQLITE_OPEN_MAIN_JOURNAL, SQLITE_OPEN_SUPER_JOURNAL, SQLITE_OPEN_WAL,
 };
 use std::cell::{Cell, RefCell};
@@ -162,7 +163,7 @@ impl OpfsSAHPool {
 
     async fn add_capacity(&self, n: u32) -> Result<u32> {
         for _ in 0..n {
-            let opaque = random_name();
+            let opaque = sqlite_wasm_rs::utils::random_name(WasmOsCallback::random);
             let handle: FileSystemFileHandle =
                 JsFuture::from(self.dh_opaque.get_file_handle_with_options(&opaque, &{
                     let options = FileSystemGetFileOptions::new();
@@ -693,6 +694,14 @@ impl SQLiteVfs<SyncAccessHandleIoMethods> for SyncAccessHandleVfs {
                 .insert(vfs_file.name().into());
         }
         ret
+    }
+
+    fn random(buf: &mut [u8]) {
+        WasmOsCallback::random(buf);
+    }
+
+    fn epoch_timestamp_in_ms() -> i64 {
+        WasmOsCallback::epoch_timestamp_in_ms()
     }
 }
 
