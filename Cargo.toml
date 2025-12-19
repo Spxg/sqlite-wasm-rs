@@ -24,7 +24,7 @@ hashbrown = { version = "0.16.1", default-features = false, features = ["default
 # SQLite3MultipleCiphers
 # <https://github.com/utelle/SQLite3MultipleCiphers>
 # <https://utelle.github.io/SQLite3MultipleCiphers>
-sqlite3mc = []
+sqlite3mc = ["wsqlite3-sys/sqlite3mc"]
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.54"
