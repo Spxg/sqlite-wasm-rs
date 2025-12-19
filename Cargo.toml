@@ -17,8 +17,6 @@ wasm-bindgen = { version = "0.2.104", default-features = false }
 js-sys = { version = "0.3.81", default-features = false }
 wsqlite3-sys = { path = "crates/wsqlite3-sys" }
 rsqlite-vfs = { path = "crates/rsqlite-vfs" }
-thiserror = { version = "2.0.12", default-features = false }
-hashbrown = { version = "0.16.1", default-features = false, features = ["default-hasher"] }
 
 [features]
 # SQLite3MultipleCiphers
