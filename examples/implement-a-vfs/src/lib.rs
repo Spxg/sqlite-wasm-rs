@@ -10,6 +10,7 @@ use sqlite_wasm_rs::{
     },
     SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_READWRITE,
 };
+use std::time::Duration;
 use std::{cell::RefCell, collections::HashMap};
 use wasm_bindgen_test::{console_log, wasm_bindgen_test};
 
@@ -181,6 +182,10 @@ struct MemVfs;
 /// Implementing vfs is just as simple, just like this
 impl SQLiteVfs<MemIoMethods> for MemVfs {
     const VERSION: ::std::os::raw::c_int = 1;
+
+    fn sleep(dur: Duration) {
+        sqlite_wasm_rs::WasmOsCallback::sleep(dur);
+    }
 
     fn random(buf: &mut [u8]) {
         sqlite_wasm_rs::WasmOsCallback::random(buf);

@@ -2,6 +2,7 @@
 
 use core::ffi::{c_char, c_int, c_long, c_longlong, c_void};
 use core::ptr;
+use core::time::Duration;
 
 use js_sys::{Date, Math, Number};
 use rsqlite_vfs::memvfs::OsCallback;
@@ -11,6 +12,22 @@ use wasm_bindgen::JsValue;
 pub struct WasmOsCallback;
 
 impl OsCallback for WasmOsCallback {
+    /// thread::sleep is available when atomics is enabled
+    #[cfg(target_feature = "atomics")]
+    fn sleep(dur: Duration) {
+        let mut nanos = dur.as_nanos();
+        while nanos > 0 {
+            let amt = core::cmp::min(i64::MAX as u128, nanos);
+            let mut x = 0;
+            let val = unsafe { core::arch::wasm32::memory_atomic_wait32(&mut x, 0, amt as i64) };
+            debug_assert_eq!(val, 2);
+            nanos -= amt;
+        }
+    }
+
+    #[cfg(not(target_feature = "atomics"))]
+    fn sleep(_dur: Duration) {}
+
     fn random(buf: &mut [u8]) {
         fn fallback(buf: &mut [u8]) {
             for b in buf {
