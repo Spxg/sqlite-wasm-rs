@@ -19,9 +19,7 @@ impl OsCallback for WasmOsCallback {
         {
             let array = js_sys::Uint8Array::new_with_length(buf.len() as _);
             let _ = get_random_values(&array);
-            for idx in 0..buf.len() {
-                buf[idx] = array.at(idx as _).unwrap_or_default();
-            }
+            array.copy_to(buf);
         }
     }
 
