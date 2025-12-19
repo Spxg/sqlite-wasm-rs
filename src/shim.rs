@@ -3,7 +3,7 @@
 use core::ffi::{c_char, c_int, c_long, c_longlong, c_void};
 use core::ptr;
 
-use js_sys::{Date, Number};
+use js_sys::{Date, Math, Number};
 use rsqlite_vfs::memvfs::OsCallback;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
@@ -12,14 +12,23 @@ pub struct WasmOsCallback;
 
 impl OsCallback for WasmOsCallback {
     fn random(buf: &mut [u8]) {
+        fn fallback(buf: &mut [u8]) {
+            for b in buf {
+                *b = (Math::random() * 255000.0) as u32 as u8;
+            }
+        }
+
         #[cfg(not(target_feature = "atomics"))]
-        let _ = get_random_values(buf);
+        get_random_values(buf).unwrap_or_else(|_| fallback(buf));
 
         #[cfg(target_feature = "atomics")]
         {
             let array = js_sys::Uint8Array::new_with_length(buf.len() as _);
-            let _ = get_random_values(&array);
-            array.copy_to(buf);
+            if get_random_values(&array).is_ok() {
+                array.copy_to(buf);
+            } else {
+                fallback(buf);
+            }
         }
     }
 
