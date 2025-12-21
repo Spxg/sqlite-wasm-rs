@@ -1,10 +1,17 @@
 #![doc = include_str!("../README.md")]
 #![no_std]
 #![cfg_attr(target_feature = "atomics", feature(stdarch_wasm_atomic_wait))]
+#![allow(clippy::missing_safety_doc)]
+#![allow(non_upper_case_globals)]
+#![allow(non_camel_case_types)]
+#![allow(non_snake_case)]
 
 extern crate alloc;
 
 mod shim;
+#[rustfmt::skip]
+#[allow(clippy::type_complexity)]
+mod bindings;
 
 /// Low-level utilities, traits, and macros for implementing custom SQLite Virtual File Systems (VFS)
 pub mod utils {
@@ -26,7 +33,7 @@ pub mod utils {
 pub use self::utils::{bail, check_option, check_result};
 
 /// Raw C-style bindings to the underlying `libsqlite3` library.
-pub use wsqlite3_sys::*;
+pub use bindings::*;
 
 /// Wasm platform implementation
 pub use self::shim::WasmOsCallback;

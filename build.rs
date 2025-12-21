@@ -55,9 +55,9 @@ fn main() {
 
         if update_bindgen {
             #[cfg(not(feature = "sqlite3mc"))]
-            const SQLITE3_BINDGEN: &str = "src/sqlite3_bindgen.rs";
+            const SQLITE3_BINDGEN: &str = "src/bindings/sqlite3_bindgen.rs";
             #[cfg(feature = "sqlite3mc")]
-            const SQLITE3_BINDGEN: &str = "src/sqlite3mc_bindgen.rs";
+            const SQLITE3_BINDGEN: &str = "src/bindings/sqlite3mc_bindgen.rs";
             std::fs::copy(&output, SQLITE3_BINDGEN).unwrap();
         }
     }
