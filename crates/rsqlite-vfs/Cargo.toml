@@ -14,7 +14,7 @@ thiserror = { version = "2.0.12", default-features = false }
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 # libsqlite3-sys doesn't compile without features
 # see https://github.com/rusqlite/rusqlite/issues/1205
-libsqlite3-sys = { version = "0.35.0", default-features = false, features = ["vcpkg", "pkg-config"] }
+libsqlite3-sys = { version = "0.36.0", default-features = false, features = ["vcpkg", "pkg-config"] }
 
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 wsqlite3-sys = { default-features = false, path = "../wsqlite3-sys" }
