@@ -72,7 +72,7 @@ unsafe fn test_memvfs_cipher(cipher: &str) {
 }
 
 async unsafe fn test_relaxed_idb_vfs_cipher(cipher: &str) {
-    let util = sqlite_wasm_vfs::relaxed_idb::install(
+    let util = sqlite_wasm_vfs::relaxed_idb::install::<sqlite_wasm_rs::WasmOsCallback>(
         &sqlite_wasm_vfs::relaxed_idb::RelaxedIdbCfgBuilder::new()
             .vfs_name("relaxed-db-cipher")
             .clear_on_init(true)
@@ -126,7 +126,7 @@ async unsafe fn test_relaxed_idb_vfs_cipher(cipher: &str) {
 }
 
 async unsafe fn test_opfs_sah_vfs_cipher(cipher: &str) {
-    let util = sqlite_wasm_vfs::sahpool::install(
+    let util = sqlite_wasm_vfs::sahpool::install::<sqlite_wasm_rs::WasmOsCallback>(
         &OpfsSAHPoolCfgBuilder::new()
             .vfs_name("sah-cipher")
             .directory("sah-cipher")

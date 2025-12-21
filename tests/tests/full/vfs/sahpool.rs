@@ -1,6 +1,15 @@
 use sqlite_wasm_rs::*;
-use sqlite_wasm_vfs::sahpool::{install as install_opfs_sahpool, *};
+use sqlite_wasm_vfs::sahpool::{
+    install, OpfsSAHError, OpfsSAHPoolCfg, OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil,
+};
 use wasm_bindgen_test::wasm_bindgen_test;
+
+pub async fn install_opfs_sahpool(
+    options: &OpfsSAHPoolCfg,
+    default_vfs: bool,
+) -> Result<OpfsSAHPoolUtil, OpfsSAHError> {
+    install::<sqlite_wasm_rs::WasmOsCallback>(options, default_vfs).await
+}
 
 use crate::full::{check_persistent, prepare_simple_db};
 

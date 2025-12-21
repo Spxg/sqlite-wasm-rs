@@ -65,5 +65,6 @@ include = [
 ]
 
 [patch.crates-io]
+rsqlite-vfs = { path = "./crates/rsqlite-vfs" }
 sqlite-wasm-rs = { path = "./" }
 sqlite-wasm-vfs = { path = "./crates/sqlite-wasm-vfs" }
