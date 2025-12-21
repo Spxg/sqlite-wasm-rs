@@ -1,5 +1,5 @@
 #![doc = include_str!("../README.md")]
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 
 #[link(name = "wsqlite_vec0")]
 extern "C" {
@@ -8,62 +8,22 @@ extern "C" {
 
 #[cfg(test)]
 mod tests {
-    use core::ffi::CStr;
+    use super::*;
 
-    use crate::sqlite3_vec_init;
-    use sqlite_wasm_rs::{
-        sqlite3_auto_extension, sqlite3_close, sqlite3_column_count, sqlite3_column_text,
-        sqlite3_column_type, sqlite3_finalize, sqlite3_open_v2, sqlite3_prepare_v3, sqlite3_step,
-        SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_READWRITE, SQLITE_ROW, SQLITE_TEXT,
-    };
-    use wasm_bindgen_test::wasm_bindgen_test;
+    use rusqlite::{ffi::sqlite3_auto_extension, Connection};
 
-    #[wasm_bindgen_test]
-    fn test_auto_extension() {
+    #[wasm_bindgen_test::wasm_bindgen_test]
+    fn test_rusqlite_auto_extension() {
         unsafe {
-            sqlite3_auto_extension(Some(core::mem::transmute(sqlite3_vec_init as *const ())));
+            sqlite3_auto_extension(Some(std::mem::transmute(sqlite3_vec_init as *const ())));
         }
 
-        let mut db = core::ptr::null_mut();
-        let ret = unsafe {
-            sqlite3_open_v2(
-                c":memory:".as_ptr().cast(),
-                &mut db as *mut _,
-                SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-                core::ptr::null(),
-            )
-        };
-        assert_eq!(ret, SQLITE_OK);
+        let conn = Connection::open_in_memory().unwrap();
 
-        let sql = c"select vec_version();";
-        let mut stmt = core::ptr::null_mut();
-        let ret = unsafe {
-            sqlite3_prepare_v3(
-                db,
-                sql.as_ptr().cast(),
-                -1,
-                0,
-                &mut stmt as *mut _,
-                core::ptr::null_mut(),
-            )
-        };
-        assert_eq!(ret, SQLITE_OK);
+        let result: String = conn
+            .query_row("select vec_version()", [], |x| x.get(0))
+            .unwrap();
 
-        unsafe {
-            assert_eq!(sqlite3_step(stmt), SQLITE_ROW);
-            let count = sqlite3_column_count(stmt);
-            assert_eq!(count, 1);
-            let ty = sqlite3_column_type(stmt, 0);
-            assert_eq!(ty, SQLITE_TEXT);
-            let s = CStr::from_ptr(sqlite3_column_text(stmt, 0).cast())
-                .to_str()
-                .unwrap();
-            assert!(s.starts_with('v'));
-            sqlite3_finalize(stmt);
-        }
-
-        unsafe {
-            sqlite3_close(db);
-        }
+        assert!(result.starts_with("v"));
     }
 }
