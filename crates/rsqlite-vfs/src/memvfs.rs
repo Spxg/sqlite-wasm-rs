@@ -367,11 +367,7 @@ mod tests {
         VfsAppData,
     };
 
-    #[cfg_attr(
-        all(target_family = "wasm", target_os = "unknown"),
-        wasm_bindgen_test::wasm_bindgen_test
-    )]
-    #[cfg_attr(not(all(target_family = "wasm", target_os = "unknown")), test)]
+    #[test]
     fn test_memory_vfs_store() {
         test_vfs_store::<MemAppData, MemFile, MemStore>(VfsAppData::new(MemAppData::default()))
             .unwrap();
