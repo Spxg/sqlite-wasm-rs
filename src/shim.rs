@@ -257,7 +257,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_calloc(num: c_size_t, size: c_size_t) 
 #[no_mangle]
 pub unsafe extern "C" fn sqlite3_os_init() -> core::ffi::c_int {
     rsqlite_vfs::memvfs::install::<WasmOsCallback>();
-    wsqlite3_sys::SQLITE_OK
+    crate::bindings::SQLITE_OK
 }
 
 /// SQLite OS shutdown entry point.
@@ -267,7 +267,7 @@ pub unsafe extern "C" fn sqlite3_os_init() -> core::ffi::c_int {
 #[no_mangle]
 pub unsafe extern "C" fn sqlite3_os_end() -> core::ffi::c_int {
     rsqlite_vfs::memvfs::uninstall();
-    wsqlite3_sys::SQLITE_OK
+    crate::bindings::SQLITE_OK
 }
 
 #[cfg(test)]

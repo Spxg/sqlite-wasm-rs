@@ -1,15 +1,8 @@
 //! This module is codegen from build.rs
-#![no_std]
-#![allow(non_camel_case_types)]
-#![allow(non_snake_case)]
 
-#[rustfmt::skip]
-#[allow(clippy::missing_safety_doc, clippy::type_complexity)]
 #[cfg(all(not(feature = "bindgen"), feature = "sqlite3mc"))]
 mod sqlite3mc_bindgen;
 
-#[rustfmt::skip]
-#[allow(clippy::missing_safety_doc, clippy::type_complexity)]
 #[cfg(all(not(feature = "bindgen"), not(feature = "sqlite3mc")))]
 mod sqlite3_bindgen;
 

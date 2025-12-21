@@ -1,1 +1,1 @@
-../../../crates/wsqlite3-sys/sqlite3/sqlite3.h
+../../../sqlite3/sqlite3.h
