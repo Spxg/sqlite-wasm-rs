@@ -64,7 +64,6 @@ include = [
     'LICENSE',
 ]
 
-
 [patch.crates-io]
 sqlite-wasm-rs = { path = "./" }
 sqlite-wasm-vfs = { path = "./crates/sqlite-wasm-vfs" }

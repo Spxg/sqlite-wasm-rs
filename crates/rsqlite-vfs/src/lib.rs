@@ -3,20 +3,14 @@
 //! This crate also contains a simple operating system independent memvfs implementation
 #![no_std]
 #![allow(non_snake_case)]
+#![allow(non_camel_case_types)]
 
 extern crate alloc;
 
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-extern crate libsqlite3_sys as bindings;
-#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-extern crate wsqlite3_sys as bindings;
-
-use self::bindings::*;
-
-// libsqlite3-sys misses this type
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-#[allow(non_camel_case_types)]
-type sqlite3_filename = *const ::core::ffi::c_char;
+/// sqlite3 types to implement VFS.
+#[rustfmt::skip]
+pub mod ffi;
+pub mod memvfs;
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -24,8 +18,7 @@ use alloc::{boxed::Box, ffi::CString};
 use alloc::{format, vec};
 use core::time::Duration;
 use core::{cell::RefCell, ffi::CStr, ops::Deref};
-
-pub mod memvfs;
+use ffi::*;
 
 /// A macro to return a specific SQLite error code if a condition is true.
 ///
@@ -454,6 +447,13 @@ pub trait VfsStore<File, AppData> {
         vfs_file: &SQLiteVfsFile,
         f: F,
     ) -> VfsResult<i32>;
+}
+
+/// Platform implementation
+pub trait OsCallback {
+    fn sleep(dur: Duration);
+    fn random(buf: &mut [u8]);
+    fn epoch_timestamp_in_ms() -> i64;
 }
 
 /// A trait that abstracts the `sqlite3_vfs` struct, allowing for a more idiomatic Rust implementation.
@@ -1056,12 +1056,12 @@ pub mod test_suite {
     }
 }
 
-#[cfg(all(test, target_arch = "wasm32"))]
+#[cfg(test)]
 mod tests {
-    use super::{MemChunksFile, VfsFile};
-    use wasm_bindgen_test::wasm_bindgen_test;
+    use crate::random_name;
+    use crate::{MemChunksFile, VfsFile};
 
-    #[wasm_bindgen_test]
+    #[test]
     fn test_chunks_file() {
         let mut file = MemChunksFile::new(512);
         file.write(&[], 0).unwrap();
@@ -1109,17 +1109,16 @@ mod tests {
         assert!(file.size().unwrap() == 0);
         assert!(file.chunks.len() == 0);
     }
-}
 
-#[cfg(not(all(test, target_arch = "wasm32")))]
-#[test]
-fn random_name_is_valid() {
-    fn random(buf: &mut [u8]) {
-        rand::fill(buf);
+    #[test]
+    fn random_name_is_valid() {
+        fn random(buf: &mut [u8]) {
+            rand::fill(buf);
+        }
+        let name_1 = random_name(random);
+        let name_2 = random_name(random);
+        assert!(name_1.is_ascii(), "Expected an ascii-name: `{name_1}`");
+        assert!(name_2.is_ascii(), "Expected an ascii-name: `{name_2}`");
+        assert_ne!(name_1, name_2);
     }
-    let name_1 = random_name(random);
-    let name_2 = random_name(random);
-    assert!(name_1.is_ascii(), "Expected an ascii-name: `{name_1}`");
-    assert!(name_2.is_ascii(), "Expected an ascii-name: `{name_2}`");
-    assert_ne!(name_1, name_2);
 }

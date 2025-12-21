@@ -1,11 +1,6 @@
 //! memory vfs, used as the default VFS
 //!
-//! ```rust
-//! # #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-//! # extern crate libsqlite3_sys as ffi;
-//! # #[cfg(all(target_family = "wasm", target_os = "unknown"))]
-//! # extern crate wsqlite3_sys as ffi;
-//!
+//! ```ignore
 //! fn open_db() {
 //!     // open with memory vfs
 //!     let mut db = core::ptr::null_mut();
@@ -26,14 +21,12 @@
 //!
 //! Refresh the page and data will be lost, and you also need to
 //! pay attention to the memory size limit of the browser page.
-#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-extern crate libsqlite3_sys as bindings;
-#[cfg(all(target_family = "wasm", target_os = "unknown"))]
-extern crate wsqlite3_sys as bindings;
+
+use crate::ffi as bindings;
 
 use crate::{
-    check_import_db, ImportDbError, MemChunksFile, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile,
-    VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
+    check_import_db, ImportDbError, MemChunksFile, OsCallback, SQLiteIoMethods, SQLiteVfs,
+    SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
 };
 
 use alloc::boxed::Box;
@@ -98,12 +91,6 @@ impl VfsFile for MemFile {
 }
 
 type MemAppData = RefCell<HashMap<String, MemFile>>;
-
-pub trait OsCallback {
-    fn sleep(dur: Duration);
-    fn random(buf: &mut [u8]);
-    fn epoch_timestamp_in_ms() -> i64;
-}
 
 #[derive(Copy, Clone, Default)]
 struct MemStore;

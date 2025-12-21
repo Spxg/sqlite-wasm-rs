@@ -44,16 +44,16 @@
 //! It is particularly important to note that using it on multiple pages may cause DB corruption.
 //! It is recommended to use it in SharedWorker.
 
-use sqlite_wasm_rs::memvfs::OsCallback;
-use sqlite_wasm_rs::utils::{
-    check_db_and_page_size, check_import_db, register_vfs, registered_vfs, ImportDbError,
-    MemChunksFile, RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData,
-    VfsError, VfsFile, VfsResult, VfsStore,
-};
 use sqlite_wasm_rs::{
-    bail, check_option, check_result, sqlite3_file, sqlite3_vfs, WasmOsCallback, SQLITE_ERROR,
-    SQLITE_FCNTL_COMMIT_PHASETWO, SQLITE_FCNTL_PRAGMA, SQLITE_FCNTL_SYNC, SQLITE_IOERR,
-    SQLITE_IOERR_DELETE, SQLITE_NOTFOUND, SQLITE_OK, SQLITE_OPEN_MAIN_DB,
+    utils::{
+        bail, check_db_and_page_size, check_import_db, check_option, check_result, register_vfs,
+        registered_vfs, sqlite3_file, sqlite3_vfs, ImportDbError, MemChunksFile, OsCallback,
+        RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile,
+        VfsResult, VfsStore,
+    },
+    WasmOsCallback, SQLITE_ERROR, SQLITE_FCNTL_COMMIT_PHASETWO, SQLITE_FCNTL_PRAGMA,
+    SQLITE_FCNTL_SYNC, SQLITE_IOERR, SQLITE_IOERR_DELETE, SQLITE_NOTFOUND, SQLITE_OK,
+    SQLITE_OPEN_MAIN_DB,
 };
 use std::cell::RefCell;
 use std::time::Duration;

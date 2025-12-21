@@ -2,11 +2,11 @@
 //!
 //! We want to implement a simple memory VFS
 
-use sqlite_wasm_rs::memvfs::OsCallback;
 use sqlite_wasm_rs::{
-    sqlite3_close, sqlite3_exec, sqlite3_file, sqlite3_open_v2, sqlite3_vfs,
+    sqlite3_close, sqlite3_exec, sqlite3_open_v2,
     utils::{
-        register_vfs, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsFile, VfsResult, VfsStore,
+        register_vfs, sqlite3_file, sqlite3_vfs, OsCallback, SQLiteIoMethods, SQLiteVfs,
+        SQLiteVfsFile, VfsFile, VfsResult, VfsStore,
     },
     SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_READWRITE,
 };

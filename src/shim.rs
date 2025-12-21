@@ -5,7 +5,7 @@ use core::ptr;
 use core::time::Duration;
 
 use js_sys::{Date, Math, Number};
-use rsqlite_vfs::memvfs::OsCallback;
+use rsqlite_vfs::OsCallback;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 
@@ -256,8 +256,8 @@ pub unsafe extern "C" fn rust_sqlite_wasm_calloc(num: c_size_t, size: c_size_t) 
 /// default VFS for the environment, which in this case is the in-memory VFS.
 #[no_mangle]
 pub unsafe extern "C" fn sqlite3_os_init() -> core::ffi::c_int {
-    crate::memvfs::install::<WasmOsCallback>();
-    crate::bindings::SQLITE_OK
+    rsqlite_vfs::memvfs::install::<WasmOsCallback>();
+    wsqlite3_sys::SQLITE_OK
 }
 
 /// SQLite OS shutdown entry point.
@@ -266,8 +266,8 @@ pub unsafe extern "C" fn sqlite3_os_init() -> core::ffi::c_int {
 /// any resources allocated by `sqlite3_os_init`.
 #[no_mangle]
 pub unsafe extern "C" fn sqlite3_os_end() -> core::ffi::c_int {
-    crate::memvfs::uninstall();
-    crate::bindings::SQLITE_OK
+    rsqlite_vfs::memvfs::uninstall();
+    wsqlite3_sys::SQLITE_OK
 }
 
 #[cfg(test)]

@@ -64,7 +64,6 @@ jobs:
         cd rusqlite
         printf "[patch.crates-io]\n" >> Cargo.toml
         printf "sqlite-wasm-rs = { path = \"..\" }\n" >> Cargo.toml
-        printf "libsqlite3-sys = { path = \"libsqlite3-sys\"}\n" >> Cargo.toml
         WASM_BINDGEN_TEST_TIMEOUT=60 wasm-pack test --node --features modern-full
 
   test_clippy:
