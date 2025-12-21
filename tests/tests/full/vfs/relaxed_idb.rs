@@ -1,10 +1,17 @@
 use sqlite_wasm_rs::*;
 use sqlite_wasm_vfs::relaxed_idb::{
-    install as install_idb_vfs, Preload, RelaxedIdbCfg, RelaxedIdbCfgBuilder,
+    install, Preload, RelaxedIdbCfg, RelaxedIdbCfgBuilder, RelaxedIdbError, RelaxedIdbUtil,
 };
 use wasm_bindgen_test::wasm_bindgen_test;
 
 use crate::full::{check_persistent, prepare_simple_db};
+
+pub async fn install_idb_vfs(
+    options: &RelaxedIdbCfg,
+    default_vfs: bool,
+) -> Result<RelaxedIdbUtil, RelaxedIdbError> {
+    install::<sqlite_wasm_rs::WasmOsCallback>(options, default_vfs).await
+}
 
 #[wasm_bindgen_test]
 async fn test_idb_vfs_default() {

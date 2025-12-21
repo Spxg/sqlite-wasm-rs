@@ -8,7 +8,7 @@
 //!
 //! async fn open_db() {
 //!     // install opfs-sahpool persistent vfs and set as default vfs
-//!     install_opfs_sahpool(&OpfsSAHPoolCfg::default(), true)
+//!     install_opfs_sahpool::<ffi::WasmOsCallback>(&OpfsSAHPoolCfg::default(), true)
 //!         .await
 //!         .unwrap();
 //!
@@ -32,20 +32,23 @@
 //! [`opfs-explorer`](https://chromewebstore.google.com/detail/opfs-explorer/acndjpgkpaclldomagafnognkcgjignd)
 //! plugin to browse files.
 
-use sqlite_wasm_rs::{
-    utils::{
-        check_import_db, register_vfs, registered_vfs, sqlite3_file, sqlite3_filename, sqlite3_vfs,
-        sqlite3_vfs_register, sqlite3_vfs_unregister, ImportDbError, OsCallback, RegisterVfsError,
-        SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult,
-        VfsStore,
+use rsqlite_vfs::{
+    check_import_db,
+    ffi::{
+        sqlite3_file, sqlite3_filename, sqlite3_vfs, sqlite3_vfs_register, sqlite3_vfs_unregister,
+        SQLITE_CANTOPEN, SQLITE_ERROR, SQLITE_IOCAP_UNDELETABLE_WHEN_OPEN, SQLITE_IOERR,
+        SQLITE_IOERR_DELETE, SQLITE_OK, SQLITE_OPEN_DELETEONCLOSE, SQLITE_OPEN_MAIN_DB,
+        SQLITE_OPEN_MAIN_JOURNAL, SQLITE_OPEN_SUPER_JOURNAL, SQLITE_OPEN_WAL,
     },
-    WasmOsCallback, SQLITE_CANTOPEN, SQLITE_ERROR, SQLITE_IOCAP_UNDELETABLE_WHEN_OPEN,
-    SQLITE_IOERR, SQLITE_IOERR_DELETE, SQLITE_OK, SQLITE_OPEN_DELETEONCLOSE, SQLITE_OPEN_MAIN_DB,
-    SQLITE_OPEN_MAIN_JOURNAL, SQLITE_OPEN_SUPER_JOURNAL, SQLITE_OPEN_WAL,
+    register_vfs, registered_vfs, ImportDbError, OsCallback, RegisterVfsError, SQLiteIoMethods,
+    SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
 };
-use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
+use std::{
+    cell::{Cell, RefCell},
+    marker::PhantomData,
+};
 
 use js_sys::{Array, DataView, IteratorNext, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
@@ -97,10 +100,11 @@ struct OpfsSAHPool {
     open_files: RefCell<HashSet<String>>,
     /// A tuple holding the raw pointer to the `sqlite3_vfs` struct and whether it was registered as the default.
     vfs: Cell<(*mut sqlite3_vfs, bool)>,
+    random: fn(&mut [u8]),
 }
 
 impl OpfsSAHPool {
-    async fn new(options: &OpfsSAHPoolCfg) -> Result<OpfsSAHPool> {
+    async fn new<C: OsCallback>(options: &OpfsSAHPoolCfg) -> Result<OpfsSAHPool> {
         const OPAQUE_DIR_NAME: &str = ".opaque";
 
         let vfs_dir = &options.directory;
@@ -154,6 +158,7 @@ impl OpfsSAHPool {
             is_paused: Cell::new(false),
             open_files: RefCell::new(HashSet::new()),
             vfs: Cell::new((std::ptr::null_mut(), false)),
+            random: C::random,
         };
 
         pool.acquire_access_handles(clear_files).await?;
@@ -164,7 +169,7 @@ impl OpfsSAHPool {
 
     async fn add_capacity(&self, n: u32) -> Result<u32> {
         for _ in 0..n {
-            let opaque = sqlite_wasm_rs::utils::random_name(WasmOsCallback::random);
+            let opaque = rsqlite_vfs::random_name(self.random);
             let handle: FileSystemFileHandle =
                 JsFuture::from(self.dh_opaque.get_file_handle_with_options(&opaque, &{
                     let options = FileSystemGetFileOptions::new();
@@ -670,9 +675,12 @@ impl SQLiteIoMethods for SyncAccessHandleIoMethods {
     }
 }
 
-struct SyncAccessHandleVfs;
+struct SyncAccessHandleVfs<C>(PhantomData<C>);
 
-impl SQLiteVfs<SyncAccessHandleIoMethods> for SyncAccessHandleVfs {
+impl<C> SQLiteVfs<SyncAccessHandleIoMethods> for SyncAccessHandleVfs<C>
+where
+    C: OsCallback,
+{
     const VERSION: ::std::os::raw::c_int = 2;
     const MAX_PATH_SIZE: ::std::os::raw::c_int = HEADER_MAX_FILENAME_SIZE as _;
 
@@ -698,15 +706,15 @@ impl SQLiteVfs<SyncAccessHandleIoMethods> for SyncAccessHandleVfs {
     }
 
     fn sleep(dur: Duration) {
-        WasmOsCallback::sleep(dur);
+        C::sleep(dur);
     }
 
     fn random(buf: &mut [u8]) {
-        WasmOsCallback::random(buf);
+        C::random(buf);
     }
 
     fn epoch_timestamp_in_ms() -> i64 {
-        WasmOsCallback::epoch_timestamp_in_ms()
+        C::epoch_timestamp_in_ms()
     }
 }
 
@@ -946,15 +954,18 @@ impl OpfsSAHPoolUtil {
 ///
 /// If the vfs corresponding to `options.vfs_name` has been registered,
 /// only return a management tool without register.
-pub async fn install(options: &OpfsSAHPoolCfg, default_vfs: bool) -> Result<OpfsSAHPoolUtil> {
+pub async fn install<C: OsCallback>(
+    options: &OpfsSAHPoolCfg,
+    default_vfs: bool,
+) -> Result<OpfsSAHPoolUtil> {
     static REGISTER_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _guard = REGISTER_GUARD.lock().await;
 
     let vfs = match registered_vfs(&options.vfs_name)? {
         Some(vfs) => vfs,
-        None => register_vfs::<SyncAccessHandleIoMethods, SyncAccessHandleVfs>(
+        None => register_vfs::<SyncAccessHandleIoMethods, SyncAccessHandleVfs<C>>(
             &options.vfs_name,
-            OpfsSAHPool::new(options).await?,
+            OpfsSAHPool::new::<C>(options).await?,
             default_vfs,
         )?,
     };
@@ -971,12 +982,12 @@ mod tests {
         OpfsSAHPool, OpfsSAHPoolCfgBuilder, SyncAccessFile, SyncAccessHandleAppData,
         SyncAccessHandleStore,
     };
-    use sqlite_wasm_rs::utils::{test_suite::test_vfs_store, VfsAppData};
+    use rsqlite_vfs::{test_suite::test_vfs_store, VfsAppData};
     use wasm_bindgen_test::wasm_bindgen_test;
 
     #[wasm_bindgen_test]
     async fn test_opfs_vfs_store() {
-        let data = OpfsSAHPool::new(
+        let data = OpfsSAHPool::new::<sqlite_wasm_rs::WasmOsCallback>(
             &OpfsSAHPoolCfgBuilder::new()
                 .directory("test_opfs_suite")
                 .build(),

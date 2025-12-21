@@ -16,7 +16,7 @@ pub mod utils {
         VfsStore, SQLITE3_HEADER,
     };
 
-    pub use rsqlite_vfs::ffi::*;
+    pub use rsqlite_vfs::ffi;
 
     #[doc(hidden)]
     pub use rsqlite_vfs::test_suite;
@@ -28,6 +28,7 @@ pub use self::utils::{bail, check_option, check_result};
 /// Raw C-style bindings to the underlying `libsqlite3` library.
 pub use wsqlite3_sys::*;
 
+/// Wasm platform implementation
 pub use self::shim::WasmOsCallback;
 /// In-memory VFS implementation.
 pub use rsqlite_vfs::memvfs::{MemVfsError, MemVfsUtil};

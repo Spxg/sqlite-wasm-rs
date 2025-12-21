@@ -9,7 +9,7 @@
 //!
 //! async fn open_db() {
 //!     // install relaxed-idb persistent vfs and set as default vfs
-//!     install_idb_vfs(&RelaxedIdbCfg::default(), true)
+//!     install_idb_vfs::<ffi::WasmOsCallback>(&RelaxedIdbCfg::default(), true)
 //!         .await
 //!         .unwrap();
 //!
@@ -44,19 +44,18 @@
 //! It is particularly important to note that using it on multiple pages may cause DB corruption.
 //! It is recommended to use it in SharedWorker.
 
-use sqlite_wasm_rs::{
-    utils::{
-        bail, check_db_and_page_size, check_import_db, check_option, check_result, register_vfs,
-        registered_vfs, sqlite3_file, sqlite3_vfs, ImportDbError, MemChunksFile, OsCallback,
-        RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile,
-        VfsResult, VfsStore,
+use rsqlite_vfs::{
+    bail, check_db_and_page_size, check_import_db, check_option, check_result,
+    ffi::{
+        sqlite3_file, sqlite3_vfs, SQLITE_ERROR, SQLITE_FCNTL_COMMIT_PHASETWO, SQLITE_FCNTL_PRAGMA,
+        SQLITE_FCNTL_SYNC, SQLITE_IOERR, SQLITE_IOERR_DELETE, SQLITE_NOTFOUND, SQLITE_OK,
+        SQLITE_OPEN_MAIN_DB,
     },
-    WasmOsCallback, SQLITE_ERROR, SQLITE_FCNTL_COMMIT_PHASETWO, SQLITE_FCNTL_PRAGMA,
-    SQLITE_FCNTL_SYNC, SQLITE_IOERR, SQLITE_IOERR_DELETE, SQLITE_NOTFOUND, SQLITE_OK,
-    SQLITE_OPEN_MAIN_DB,
+    register_vfs, registered_vfs, ImportDbError, MemChunksFile, OsCallback, RegisterVfsError,
+    SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
 };
-use std::cell::RefCell;
 use std::time::Duration;
+use std::{cell::RefCell, marker::PhantomData};
 
 use indexed_db_futures::database::Database;
 use indexed_db_futures::prelude::*;
@@ -717,21 +716,24 @@ impl SQLiteIoMethods for RelaxedIdbIoMethods {
     }
 }
 
-struct RelaxedIdbVfs;
+struct RelaxedIdbVfs<C>(PhantomData<C>);
 
-impl SQLiteVfs<RelaxedIdbIoMethods> for RelaxedIdbVfs {
+impl<C> SQLiteVfs<RelaxedIdbIoMethods> for RelaxedIdbVfs<C>
+where
+    C: OsCallback,
+{
     const VERSION: ::std::os::raw::c_int = 1;
 
     fn sleep(dur: Duration) {
-        WasmOsCallback::sleep(dur);
+        C::sleep(dur);
     }
 
     fn random(buf: &mut [u8]) {
-        WasmOsCallback::random(buf);
+        C::random(buf);
     }
 
     fn epoch_timestamp_in_ms() -> i64 {
-        WasmOsCallback::epoch_timestamp_in_ms()
+        C::epoch_timestamp_in_ms()
     }
 }
 
@@ -907,7 +909,10 @@ impl RelaxedIdbUtil {
 ///
 /// If the vfs corresponding to `options.vfs_name` has been registered,
 /// only return a management tool without register.
-pub async fn install(options: &RelaxedIdbCfg, default_vfs: bool) -> Result<RelaxedIdbUtil> {
+pub async fn install<C: OsCallback>(
+    options: &RelaxedIdbCfg,
+    default_vfs: bool,
+) -> Result<RelaxedIdbUtil> {
     static REGISTER_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _guard = REGISTER_GUARD.lock().await;
 
@@ -916,7 +921,7 @@ pub async fn install(options: &RelaxedIdbCfg, default_vfs: bool) -> Result<Relax
     } else {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let pool = RelaxedIdb::new(options, tx).await?;
-        let vfs = register_vfs::<RelaxedIdbIoMethods, RelaxedIdbVfs>(
+        let vfs = register_vfs::<RelaxedIdbIoMethods, RelaxedIdbVfs<C>>(
             &options.vfs_name,
             pool,
             default_vfs,
@@ -933,7 +938,7 @@ pub async fn install(options: &RelaxedIdbCfg, default_vfs: bool) -> Result<Relax
 #[cfg(test)]
 mod tests {
     use super::{IdbFile, RelaxedIdb, RelaxedIdbCfgBuilder, RelaxedIdbStore};
-    use sqlite_wasm_rs::utils::{test_suite::test_vfs_store, VfsAppData};
+    use rsqlite_vfs::{test_suite::test_vfs_store, VfsAppData};
     use wasm_bindgen_test::wasm_bindgen_test;
 
     #[wasm_bindgen_test]

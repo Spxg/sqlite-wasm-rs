@@ -5,10 +5,10 @@
 use sqlite_wasm_rs::{
     sqlite3_close, sqlite3_exec, sqlite3_open_v2,
     utils::{
-        register_vfs, sqlite3_file, sqlite3_vfs, OsCallback, SQLiteIoMethods, SQLiteVfs,
-        SQLiteVfsFile, VfsFile, VfsResult, VfsStore,
+        ffi::{sqlite3_file, sqlite3_vfs, SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_READWRITE},
+        register_vfs, OsCallback, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsFile, VfsResult,
+        VfsStore,
     },
-    SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_READWRITE,
 };
 use std::time::Duration;
 use std::{cell::RefCell, collections::HashMap};
