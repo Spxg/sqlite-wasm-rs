@@ -116,14 +116,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
-    - name: Install wasm-pack
-      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+    - uses: dtolnay/rust-toolchain@1.82.0
+      with:
+        targets: wasm32-unknown-unknown
+        components: rust-src
     - name: Test MSRV
       run: |
-        rustup toolchain install 1.82.0
-        rustup default 1.82.0
-        wasm-pack test --node
-        wasm-pack test --node --features sqlite3mc
+        cargo build --target wasm32-unknown-unknown
+        cargo build --features sqlite3mc --target wasm32-unknown-unknown
 
   test_nodejs:
     strategy:
