@@ -266,8 +266,7 @@ pub struct SQLiteVfsFile {
     pub vfs: *mut sqlite3_vfs,
     /// Flags used to open the database.
     pub flags: i32,
-    /// The pointer to the file name.
-    /// If it is a leaked static pointer, you need to drop it manually when xClose it.
+    /// The pointer to the file name (owned by the VFS, freed in xClose).
     pub name_ptr: *const u8,
     /// Length of the file name, on wasm32 platform, usize is u32.
     pub name_length: usize,
@@ -287,7 +286,7 @@ impl SQLiteVfsFile {
     ///
     /// # Safety
     ///
-    /// When xClose, you can free the memory by `drop(Box::from_raw(ptr));`.
+    /// The name is created from a UTF-8 Rust `String` and leaked for SQLite.
     ///
     /// Do not use again after free.
     pub unsafe fn name(&self) -> &'static mut str {
@@ -329,6 +328,7 @@ pub fn register_vfs<IO: SQLiteIoMethods, V: SQLiteVfs<IO>>(
     let name = CString::new(vfs_name).map_err(|_| RegisterVfsError::ToCStr)?;
     let name_ptr = name.into_raw();
 
+    // `name_ptr` and `app_data` are owned by SQLite until the VFS is unregistered.
     let app_data = VfsAppData::new(app_data).leak();
     let vfs = Box::leak(Box::new(V::vfs(name_ptr, app_data.cast())));
     let ret = unsafe { sqlite3_vfs_register(vfs, i32::from(default_vfs)) };
@@ -383,7 +383,7 @@ impl<T> VfsAppData<T> {
 
     /// # Safety
     ///
-    /// You have to make sure the pointer is correct
+    /// Takes ownership of a pointer returned by `leak`.
     pub unsafe fn from_raw(t: *mut Self) -> VfsAppData<T> {
         *Box::from_raw(t)
     }
@@ -836,6 +836,7 @@ pub trait SQLiteIoMethods {
         pFile: *mut sqlite3_file,
         eLock: ::core::ffi::c_int,
     ) -> ::core::ffi::c_int {
+        // No-op: in-memory/WASM VFS does not support file locking.
         unused!((pFile, eLock));
         SQLITE_OK
     }
@@ -844,6 +845,7 @@ pub trait SQLiteIoMethods {
         pFile: *mut sqlite3_file,
         eLock: ::core::ffi::c_int,
     ) -> ::core::ffi::c_int {
+        // No-op: in-memory/WASM VFS does not support file locking.
         unused!((pFile, eLock));
         SQLITE_OK
     }
@@ -888,6 +890,7 @@ pub enum ImportDbError {
 }
 
 /// Simple verification when importing db, and return page size;
+/// This only checks size/header; validate page size via `check_db_and_page_size`.
 pub fn check_import_db(bytes: &[u8]) -> Result<usize, ImportDbError> {
     let length = bytes.len();
 

@@ -1,4 +1,4 @@
-//! This module is codegen from build.rs
+//! This module is codegen from build.rs. Avoid manual edits.
 
 #[cfg(all(not(feature = "bindgen"), feature = "sqlite3mc"))]
 mod sqlite3mc_bindgen;
@@ -31,17 +31,22 @@ pub fn SQLITE_STATIC() -> sqlite3_destructor_type {
 
 #[must_use]
 pub fn SQLITE_TRANSIENT() -> sqlite3_destructor_type {
-    Some(unsafe { mem::transmute::<isize, unsafe extern "C" fn(*mut core::ffi::c_void)>(-1_isize) })
+    // SQLite uses -1 as a sentinel for "make your own copy".
+    Some(unsafe {
+        mem::transmute::<isize, unsafe extern "C" fn(*mut core::ffi::c_void)>(-1_isize)
+    })
 }
 
 impl Default for sqlite3_vtab {
     fn default() -> Self {
+        // C expects zero-initialized vtab structs.
         unsafe { mem::zeroed() }
     }
 }
 
 impl Default for sqlite3_vtab_cursor {
     fn default() -> Self {
+        // C expects zero-initialized vtab cursor structs.
         unsafe { mem::zeroed() }
     }
 }

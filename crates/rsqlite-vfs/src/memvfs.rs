@@ -210,6 +210,7 @@ where
 {
     /// Get management tool
     pub fn new() -> Self {
+        // Registers memvfs globally if not already present.
         MemVfsUtil(unsafe { install::<C>() }, PhantomData)
     }
 }
@@ -235,6 +236,7 @@ where
             let mut file = MemFile::Main(MemChunksFile::new(page_size));
             file.write(bytes, 0).unwrap();
             if clear_wal {
+                // Force rollback journal mode by updating the header at offset 18.
                 file.write(&[1, 1], 18).unwrap();
             }
             file

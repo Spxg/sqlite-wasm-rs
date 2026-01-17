@@ -1,4 +1,5 @@
-const FULL_FEATURED: [&str; 24] = [
+// SQLite compile flags tuned for WASM: no threads/dlopen, keep common extensions.
+const FULL_FEATURED: [&str; 23] = [
     "-DSQLITE_OS_OTHER",
     "-DSQLITE_USE_URI",
     // SQLite is configured for a single-threaded environment, as WebAssembly is single-threaded by default.
@@ -13,7 +14,6 @@ const FULL_FEATURED: [&str; 24] = [
     "-DSQLITE_OMIT_SHARED_CACHE",
     "-DSQLITE_ENABLE_UNLOCK_NOTIFY",
     "-DSQLITE_ENABLE_API_ARMOR",
-    "-DSQLITE_ENABLE_MATH_FUNCTIONS",
     "-DSQLITE_ENABLE_BYTECODE_VTAB",
     "-DSQLITE_ENABLE_DBPAGE_VTAB",
     "-DSQLITE_ENABLE_DBSTAT_VTAB",
@@ -152,6 +152,7 @@ fn bindgen(output: &std::path::PathBuf) {
         // Block deprecated functions that are omitted from the build via the DSQLITE_OMIT_DEPRECATED flag.
         .blocklist_function("sqlite3_profile")
         .blocklist_function("sqlite3_trace")
+        // Exclude UTF-16 entrypoints to keep the WASM surface minimal.
         .blocklist_function(".*16.*")
         .blocklist_function("sqlite3_close_v2")
         .blocklist_function("sqlite3_create_collation")
