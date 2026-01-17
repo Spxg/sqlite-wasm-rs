@@ -676,10 +676,10 @@ impl SQLiteIoMethods for RelaxedIdbIoMethods {
                 bail!(name.is_null());
                 bail!(value.is_null(), SQLITE_NOTFOUND);
 
-                let key = check_result!(CStr::from_ptr(name).to_str()).to_ascii_lowercase();
-                let value = check_result!(CStr::from_ptr(value).to_str()).to_ascii_lowercase();
+                let key = check_result!(CStr::from_ptr(name).to_str());
+                let value = check_result!(CStr::from_ptr(value).to_str());
 
-                if key == "page_size" {
+                if key.eq_ignore_ascii_case("page_size") {
                     let page_size = check_result!(value.parse::<usize>());
                     if page_size == file.block_size {
                         return SQLITE_OK;
@@ -691,7 +691,9 @@ impl SQLiteIoMethods for RelaxedIdbIoMethods {
                             "page_size cannot be changed".into(),
                         ));
                     }
-                } else if key == "synchronous" && value != "off" {
+                } else if key.eq_ignore_ascii_case("synchronous")
+                    && !value.eq_ignore_ascii_case("off")
+                {
                     return pool.store_err(VfsError::new(
                         SQLITE_ERROR,
                         "relaxed-idb vfs only supports synchronous=off".into(),

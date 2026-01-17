@@ -19,6 +19,7 @@ impl OsCallback for WasmOsCallback {
         while nanos > 0 {
             let amt = core::cmp::min(i64::MAX as u128, nanos);
             let mut x = 0;
+            // memory_atomic_wait32 returns 2 on timeout; loop until elapsed.
             let val = unsafe { core::arch::wasm32::memory_atomic_wait32(&mut x, 0, amt as i64) };
             debug_assert_eq!(val, 2);
             nanos -= amt;
@@ -30,6 +31,7 @@ impl OsCallback for WasmOsCallback {
 
     fn random(buf: &mut [u8]) {
         fn fallback(buf: &mut [u8]) {
+            // Non-cryptographic fallback when crypto.getRandomValues is unavailable.
             for b in buf {
                 *b = (Math::random() * 255000.0) as u32 as u8;
             }
@@ -92,6 +94,7 @@ fn yday_from_date(date: &Date) -> u32 {
 /// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/emscripten_internal.h#L42
 ///
 /// https://github.com/sqlite/sqlite-wasm/blob/7c1b309c3bd07d8e6d92f82344108cebbd14f161/sqlite-wasm/jswasm/sqlite3-bundler-friendly.mjs#L3404
+// Mirrors emscripten/sqlite-wasm localtime handling, including DST logic.
 unsafe fn localtime_js(t: c_time_t, tm: *mut tm) {
     let date = Date::new(&Number::from((t * 1000) as f64).into());
 
@@ -105,15 +108,14 @@ unsafe fn localtime_js(t: c_time_t, tm: *mut tm) {
     (*tm).tm_yday = yday_from_date(&date) as _;
 
     let start = Date::new_with_year_month_day(date.get_full_year(), 0, 1);
+    let tz_offset = date.get_timezone_offset();
     let summer_offset =
         Date::new_with_year_month_day(date.get_full_year(), 6, 1).get_timezone_offset();
     let winter_offset = start.get_timezone_offset();
-    (*tm).tm_isdst = i32::from(
-        summer_offset != winter_offset
-            && date.get_timezone_offset() == winter_offset.min(summer_offset),
-    );
+    (*tm).tm_isdst =
+        i32::from(summer_offset != winter_offset && tz_offset == winter_offset.min(summer_offset));
 
-    (*tm).tm_gmtoff = -(date.get_timezone_offset() * 60.0) as _;
+    (*tm).tm_gmtoff = -(tz_offset * 60.0) as _;
 }
 
 /// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/musl/include/time.h#L40
@@ -179,6 +181,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_abort() {
 /// See <https://github.com/emscripten-core/emscripten/blob/089590d17eeb705424bf32f8a1afe34a034b4682/system/lib/libc/mktime.c#L28>.
 #[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_localtime(t: *const c_time_t) -> *mut tm {
+    // Single shared buffer, matches libc behavior; assumes no concurrent callers.
     static mut TM: tm = tm {
         tm_sec: 0,
         tm_min: 0,
@@ -207,6 +210,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_malloc(size: c_size_t) -> *mut c_void 
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // Store size for free/realloc; pointer returned is offset by ALIGN.
     *ptr.cast::<usize>() = size;
 
     ptr.add(ALIGN).cast()
@@ -214,6 +218,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_malloc(size: c_size_t) -> *mut c_void 
 
 #[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_free(ptr: *mut c_void) {
+    // Only accepts pointers allocated by rust_sqlite_wasm_malloc/realloc.
     let ptr: *mut u8 = ptr.sub(ALIGN).cast();
     let size = *(ptr.cast::<usize>());
 
@@ -226,6 +231,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_realloc(
     ptr: *mut c_void,
     new_size: c_size_t,
 ) -> *mut c_void {
+    // Only accepts pointers allocated by rust_sqlite_wasm_malloc/realloc.
     let ptr: *mut u8 = ptr.sub(ALIGN).cast();
     let size = *(ptr.cast::<usize>());
 
