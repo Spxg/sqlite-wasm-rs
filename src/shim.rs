@@ -112,10 +112,8 @@ unsafe fn localtime_js(t: c_time_t, tm: *mut tm) {
     let summer_offset =
         Date::new_with_year_month_day(date.get_full_year(), 6, 1).get_timezone_offset();
     let winter_offset = start.get_timezone_offset();
-    (*tm).tm_isdst = i32::from(
-        summer_offset != winter_offset
-            && tz_offset == winter_offset.min(summer_offset),
-    );
+    (*tm).tm_isdst =
+        i32::from(summer_offset != winter_offset && tz_offset == winter_offset.min(summer_offset));
 
     (*tm).tm_gmtoff = -(tz_offset * 60.0) as _;
 }
