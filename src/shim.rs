@@ -108,15 +108,16 @@ unsafe fn localtime_js(t: c_time_t, tm: *mut tm) {
     (*tm).tm_yday = yday_from_date(&date) as _;
 
     let start = Date::new_with_year_month_day(date.get_full_year(), 0, 1);
+    let tz_offset = date.get_timezone_offset();
     let summer_offset =
         Date::new_with_year_month_day(date.get_full_year(), 6, 1).get_timezone_offset();
     let winter_offset = start.get_timezone_offset();
     (*tm).tm_isdst = i32::from(
         summer_offset != winter_offset
-            && date.get_timezone_offset() == winter_offset.min(summer_offset),
+            && tz_offset == winter_offset.min(summer_offset),
     );
 
-    (*tm).tm_gmtoff = -(date.get_timezone_offset() * 60.0) as _;
+    (*tm).tm_gmtoff = -(tz_offset * 60.0) as _;
 }
 
 /// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/musl/include/time.h#L40

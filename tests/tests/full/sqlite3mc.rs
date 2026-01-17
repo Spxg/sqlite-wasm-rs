@@ -7,7 +7,7 @@ use crate::full::{check_result, prepare_simple_db};
 
 unsafe fn set_cipher(cipher: &str, db: *mut sqlite3) {
     let set_cipher = format!("PRAGMA cipher = {cipher};");
-    let c_name = CString::new(set_cipher.clone()).unwrap();
+    let c_name = CString::new(set_cipher).unwrap();
     let ret = sqlite3_exec(
         db,
         c_name.as_ptr().cast(),
@@ -32,7 +32,7 @@ unsafe fn test_memvfs_cipher(cipher: &str) {
     let mut db = std::ptr::null_mut();
     let db_name = format!("test_memvfs_vfs_{cipher}.db");
 
-    let c_name = CString::new(db_name.clone()).unwrap();
+    let c_name = CString::new(db_name.as_str()).unwrap();
     let ret = sqlite3_open_v2(
         c_name.as_ptr().cast(),
         &mut db as *mut _,
@@ -55,7 +55,7 @@ unsafe fn test_memvfs_cipher(cipher: &str) {
     let db2 = util.export_db(&new_db_name).unwrap();
     assert_eq!(db1, db2);
 
-    let c_name = CString::new(db_name.clone()).unwrap();
+    let c_name = CString::new(db_name.as_str()).unwrap();
     let ret = sqlite3_open_v2(
         c_name.as_ptr().cast(),
         &mut db as *mut _,
@@ -85,7 +85,7 @@ async unsafe fn test_relaxed_idb_vfs_cipher(cipher: &str) {
     let mut db = std::ptr::null_mut();
     let db_name = format!("test_relaxed_db_vfs_{cipher}.db");
 
-    let c_name = CString::new(db_name.clone()).unwrap();
+    let c_name = CString::new(db_name.as_str()).unwrap();
     let ret = sqlite3_open_v2(
         c_name.as_ptr().cast(),
         &mut db as *mut _,
@@ -110,7 +110,7 @@ async unsafe fn test_relaxed_idb_vfs_cipher(cipher: &str) {
     assert_eq!(db1, db2);
 
     let mut db = std::ptr::null_mut();
-    let c_name = CString::new(new_db_name).unwrap();
+    let c_name = CString::new(new_db_name.as_str()).unwrap();
     let ret = sqlite3_open_v2(
         c_name.as_ptr().cast(),
         &mut db as *mut _,
@@ -141,7 +141,7 @@ async unsafe fn test_opfs_sah_vfs_cipher(cipher: &str) {
     let mut db = std::ptr::null_mut();
     let db_name = format!("test_opfs_sah_vfs_{cipher}.db");
 
-    let c_name = CString::new(db_name.clone()).unwrap();
+    let c_name = CString::new(db_name.as_str()).unwrap();
     let ret = sqlite3_open_v2(
         c_name.as_ptr().cast(),
         &mut db as *mut _,
@@ -163,7 +163,7 @@ async unsafe fn test_opfs_sah_vfs_cipher(cipher: &str) {
     assert_eq!(db1, db2);
 
     let mut db = std::ptr::null_mut();
-    let c_name = CString::new(new_db_name).unwrap();
+    let c_name = CString::new(new_db_name.as_str()).unwrap();
     let ret = sqlite3_open_v2(
         c_name.as_ptr().cast(),
         &mut db as *mut _,

@@ -898,12 +898,7 @@ pub fn check_import_db(bytes: &[u8]) -> Result<usize, ImportDbError> {
         return Err(ImportDbError::InvalidDbSize);
     }
 
-    if SQLITE3_HEADER
-        .as_bytes()
-        .iter()
-        .zip(bytes)
-        .any(|(x, y)| x != y)
-    {
+    if !bytes.starts_with(SQLITE3_HEADER.as_bytes()) {
         return Err(ImportDbError::InvalidHeader);
     }
 
