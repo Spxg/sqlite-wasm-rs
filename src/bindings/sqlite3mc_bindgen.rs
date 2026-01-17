@@ -41,15 +41,15 @@ pub unsafe fn sqlite3_enable_load_extension(
 
 pub const SQLITE3MC_VERSION_MAJOR: i32 = 2;
 pub const SQLITE3MC_VERSION_MINOR: i32 = 2;
-pub const SQLITE3MC_VERSION_RELEASE: i32 = 6;
+pub const SQLITE3MC_VERSION_RELEASE: i32 = 7;
 pub const SQLITE3MC_VERSION_SUBRELEASE: i32 = 0;
-pub const SQLITE3MC_VERSION_STRING: &::core::ffi::CStr = c"SQLite3 Multiple Ciphers 2.2.6";
-pub const SQLITE_VERSION: &::core::ffi::CStr = c"3.51.1";
-pub const SQLITE_VERSION_NUMBER: i32 = 3051001;
-pub const SQLITE_SOURCE_ID: &::core::ffi::CStr = c"2025-11-28 17:28:25 281fc0e9afc38674b9b0991943b9e9d1e64c6cbdb133d35f6f5c87ff6af38a88";
+pub const SQLITE3MC_VERSION_STRING: &::core::ffi::CStr = c"SQLite3 Multiple Ciphers 2.2.7";
+pub const SQLITE_VERSION: &::core::ffi::CStr = c"3.51.2";
+pub const SQLITE_VERSION_NUMBER: i32 = 3051002;
+pub const SQLITE_SOURCE_ID: &::core::ffi::CStr = c"2026-01-09 17:27:48 b270f8339eb13b504d0b2ba154ebca966b7dde08e40c3ed7d559749818cb2075";
 pub const SQLITE_SCM_BRANCH: &::core::ffi::CStr = c"branch-3.51";
-pub const SQLITE_SCM_TAGS: &::core::ffi::CStr = c"release version-3.51.1";
-pub const SQLITE_SCM_DATETIME: &::core::ffi::CStr = c"2025-11-28T17:28:25.933Z";
+pub const SQLITE_SCM_TAGS: &::core::ffi::CStr = c"release version-3.51.2";
+pub const SQLITE_SCM_DATETIME: &::core::ffi::CStr = c"2026-01-09T17:27:48.405Z";
 pub const SQLITE_OK: i32 = 0;
 pub const SQLITE_ERROR: i32 = 1;
 pub const SQLITE_INTERNAL: i32 = 2;
