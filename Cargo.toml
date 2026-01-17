@@ -1,7 +1,7 @@
 [package]
 name = "sqlite-wasm-rs"
 links = "wsqlite3"
-version = "0.5.1"
+version = "0.5.2"
 authors = ["Spxg <unsafe@outlook.es>"]
 repository = "https://github.com/Spxg/sqlite-wasm-rs"
 description = "`wasm32-unknown-unknown` bindings to the libsqlite3 library."
@@ -14,9 +14,9 @@ rust-version.workspace = true
 include.workspace = true
 
 [dependencies]
+rsqlite-vfs = "0.1.0"
 wasm-bindgen = { version = "0.2.104", default-features = false }
 js-sys = { version = "0.3.81", default-features = false }
-rsqlite-vfs = { path = "crates/rsqlite-vfs" }
 
 [features]
 # SQLite3MultipleCiphers

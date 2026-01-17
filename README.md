@@ -38,12 +38,12 @@ fn open_db() {
 
 ```toml
 [dependencies]
-sqlite-wasm-vfs = "0.1"
+sqlite-wasm-vfs = "0.2"
 ```
 
 The following vfs have been implemented:
 
-* [`memory`](./src/vfs/memory.rs): as the default vfs, no additional conditions are required, store the database in memory.
+* [`memory`](./crates/rsqlite-vfs/src/memvfs.rs): as the default vfs, no additional conditions are required, store the database in memory.
 * [`sahpool`](./crates/sqlite-wasm-vfs/src/sahpool.rs): ported from sqlite-wasm, store the database in opfs.
 * [`relaxed-idb`](./crates/sqlite-wasm-vfs/src/relaxed_idb.rs): store the database in blocks in indexed db.
 

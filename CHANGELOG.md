@@ -11,6 +11,22 @@
 
 --------------------------------------------------------------------------------
 
+## [0.5.2](https://github.com/Spxg/sqlite-wasm-rs/compare/0.5.1...0.5.2)
+
+### Added
+
+* Introduced the `rsqlite-vfs` crate.
+  [#156](https://github.com/Spxg/sqlite-wasm-rs/pull/156)
+
+### Fixed
+
+### Changed
+
+* Bump SQLite Version to 3.51.2 and SQLite3MC Version to 2.2.7.
+  [#168](https://github.com/Spxg/sqlite-wasm-rs/pull/168)
+
+--------------------------------------------------------------------------------
+
 ## [0.5.1](https://github.com/Spxg/sqlite-wasm-rs/compare/0.5.0...0.5.1)
 
 ### Added

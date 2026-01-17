@@ -6,6 +6,9 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 include.workspace = true
+keywords = ["sqlite", "vfs"]
+description = "Helping to implement SQLite VFS."
+categories = ["development-tools::ffi", "wasm", "database"]
 
 [dependencies]
 hashbrown = { version = "0.16.1", default-features = false, features = ["default-hasher"] }
