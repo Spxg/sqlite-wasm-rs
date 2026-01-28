@@ -1,7 +1,9 @@
 #[cfg(feature = "sqlite3mc")]
 mod sqlite3mc;
-#[cfg(feature = "uuid")]
-mod uuid_verify;
+#[cfg(feature = "uuid4")]
+mod uuid4_verify;
+#[cfg(feature = "uuid7")]
+mod uuid7_verify;
 mod vfs;
 
 use sqlite_wasm_rs::*;
@@ -115,4 +117,66 @@ pub fn drop_or_create_foo_table(db: *mut sqlite3) -> bool {
     assert_eq!(SQLITE_OK, ret);
 
     true
+}
+
+/// Helper to execute a SQL statement ignoring result rows.
+/// Panics if execution fails.
+///
+/// # Arguments
+/// * `db` - Pointer to the open SQLite database connection.
+/// * `sql` - The SQL statement to execute.
+pub fn exec(db: *mut sqlite3, sql: &str) {
+    let sql_c = std::ffi::CString::new(sql).unwrap();
+    let ret = unsafe {
+        sqlite3_exec(
+            db,
+            sql_c.as_ptr().cast(),
+            None,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(ret, SQLITE_OK, "exec failed for: {}", sql);
+}
+
+/// Helper to prepare a SQL statement.
+/// Returns the raw statement pointer.
+/// Panics if preparation fails.
+///
+/// # Arguments
+/// * `db` - Pointer to the open SQLite database connection.
+/// * `sql` - The SQL statement to prepare.
+pub fn prepare(db: *mut sqlite3, sql: &str) -> *mut sqlite3_stmt {
+    let sql_c = std::ffi::CString::new(sql).unwrap();
+    let mut stmt = std::ptr::null_mut();
+    let ret = unsafe {
+        sqlite3_prepare_v2(
+            db,
+            sql_c.as_ptr().cast(),
+            -1,
+            &mut stmt,
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(ret, SQLITE_OK, "prepare failed for: {}", sql);
+    stmt
+}
+
+/// Helper to read a text column from the current row of a statement.
+/// Returns an empty string if NULL.
+///
+/// # Arguments
+/// * `stmt` - Pointer to the prepared statement.
+/// * `col` - Zero-based index of the column to read.
+pub fn text_from_col(stmt: *mut sqlite3_stmt, col: i32) -> String {
+    unsafe {
+        let ptr = sqlite3_column_text(stmt, col);
+        if ptr.is_null() {
+            String::new()
+        } else {
+            std::ffi::CStr::from_ptr(ptr.cast())
+                .to_string_lossy()
+                .into_owned()
+        }
+    }
 }

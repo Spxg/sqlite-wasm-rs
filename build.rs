@@ -264,8 +264,11 @@ fn compile() {
     #[allow(unused_mut)]
     let mut extensions: Vec<(&str, &str)> = Vec::new();
 
-    #[cfg(feature = "uuid")]
-    extensions.push(("uuid", "sqlite3/ext/uuid.c"));
+    #[cfg(feature = "uuid4")]
+    extensions.push(("uuid4", "sqlite3/ext/uuid4.c"));
+
+    #[cfg(feature = "uuid7")]
+    extensions.push(("uuid7", "sqlite3/ext/uuid7.c"));
 
     for (_feature, source) in &extensions {
         cc.file(source);

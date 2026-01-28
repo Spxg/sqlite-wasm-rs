@@ -2,6 +2,9 @@
 #include <stdint.h>
 #include <time.h>
 
+#define clock_gettime rust_sqlite_wasm_clock_gettime
+int rust_sqlite_wasm_clock_gettime(clockid_t clock_id, struct timespec *tp);
+
 /* string */
 #define strcmp rust_sqlite_wasm_strcmp
 int rust_sqlite_wasm_strcmp(const char *l, const char *r);

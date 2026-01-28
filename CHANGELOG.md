@@ -5,7 +5,8 @@
 
 ### Added
 
-* Added support for the SQLite `uuid` extension, enabled via the `uuid` feature flag.
+* Added support for the SQLite `uuid4` extension, enabled via the `uuid4` feature flag.
+* Added support for the Postgres18 `uuid7` extension, enabled via the `uuid7` feature flag, ported from PostgreSQL implementation.
 
 ### Fixed
 

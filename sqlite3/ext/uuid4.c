@@ -228,7 +228,7 @@ static void sqlite3UuidBlobFunc(
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-int sqlite3_uuid_init(
+int sqlite3_uuid4_init(
   sqlite3 *db,
   char **pzErrMsg,
   const sqlite3_api_routines *pApi

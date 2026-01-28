@@ -11,7 +11,8 @@ wasm-bindgen-test = "0.3.54"
 
 [features]
 sqlite3mc = ["sqlite-wasm-rs/sqlite3mc"]
-uuid = ["sqlite-wasm-rs/uuid"]
+uuid4 = ["sqlite-wasm-rs/uuid4"]
+uuid7 = ["sqlite-wasm-rs/uuid7"]
 
 [[test]]
 name = "integration_tests"

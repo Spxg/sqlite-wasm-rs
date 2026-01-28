@@ -276,6 +276,55 @@ pub unsafe extern "C" fn sqlite3_os_end() -> core::ffi::c_int {
     crate::bindings::SQLITE_OK
 }
 
+/// Polyfill for `clock_gettime` to support UUIDv7 generation.
+///
+/// This function provides a monotonic-ish time source based on `Date::now()` for the C
+/// `uuid7` extension. UUIDv7 requires a timestamp to ensure k-sortable IDs.
+///
+/// # Arguments
+/// * `_clock_id`: Ignored. We always use the JS `Date::now()` time.
+/// * `tp`: Pointer to `struct timespec`.
+///
+/// # Safety
+/// This function is unsafe because it dereferences raw pointers.
+/// It assumes `tp` points to a valid `struct timespec` compatible with the
+/// `musl` definition used during compilation of the C extensions.
+///
+/// # Implementation Details
+/// The assumed `struct timespec` layout for the target `wasm32-unknown-unknown` (via musl) is:
+/// ```c
+/// struct timespec {
+///     long long tv_sec; // 64-bit seconds
+///     long tv_nsec;     // 32-bit nanoseconds
+/// };
+/// ```
+/// Note: Integers align to their size, so `tv_nsec` typically usually follows `tv_sec`
+/// immediately or with padding depending on architecture. Here we treat `tv_sec` as 64-bit
+/// aligned (offset 0) and `tv_nsec` as 32-bit.
+#[no_mangle]
+pub unsafe extern "C" fn rust_sqlite_wasm_clock_gettime(
+    _clock_id: c_int,
+    tp: *mut c_void,
+) -> c_int {
+    let now = Date::now(); // ms
+    let seconds = (now / 1000.0) as i64;
+    let nanoseconds = ((now % 1000.0) * 1_000_000.0) as i32;
+
+    // struct timespec { time_t tv_sec; long tv_nsec; ... }
+    // time_t is 64-bit on musl (generic), long is 32-bit.
+    // Alignment of structure is 8 bytes.
+    let tp = tp as *mut i64;
+    *tp = seconds;
+
+    // Offset by 8 bytes for next field (64-bit integer takes 8 bytes)
+    // We cast to *mut i32 to treat the memory after the 64-bit int as 32-bit ints.
+    // Since `tp` is *mut i64, `tp.offset(1)` moves 8 bytes forward.
+    let tp_nsec = tp.offset(1) as *mut i32;
+    *tp_nsec = nanoseconds;
+
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
