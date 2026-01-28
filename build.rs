@@ -257,5 +257,20 @@ fn compile() {
     #[cfg(feature = "sqlite3mc")]
     cc.flags(SQLITE3_MC_FEATURED);
 
+    // Extensions
+    // Define a list of extensions with their feature flag and source file.
+    // (feature_name, source_file)
+    #[allow(unused_mut)]
+    let mut extensions: Vec<(&str, &str)> = Vec::new();
+
+    #[cfg(feature = "uuid")]
+    extensions.push(("uuid", "sqlite3/ext/uuid.c"));
+
+    for (_feature, source) in &extensions {
+        cc.file(source);
+        // Ensure extensions can find sqlite3ext.h
+        cc.include("sqlite3");
+    }
+
     cc.compile("wsqlite3");
 }

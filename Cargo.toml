@@ -23,6 +23,8 @@ js-sys = { version = "0.3.81", default-features = false }
 # <https://github.com/utelle/SQLite3MultipleCiphers>
 # <https://utelle.github.io/SQLite3MultipleCiphers>
 sqlite3mc = []
+# Link the uuid extension to the library.
+uuid = []
 
 [build-dependencies]
 cc = "1.2.27"

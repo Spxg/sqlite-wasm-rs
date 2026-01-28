@@ -5,6 +5,8 @@
 
 ### Added
 
+* Added support for the SQLite `uuid` extension, enabled via the `uuid` feature flag.
+
 ### Fixed
 
 ### Changed
