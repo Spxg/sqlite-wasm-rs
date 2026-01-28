@@ -18,7 +18,7 @@ jobs:
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - name: Test bundled
       run: |
-        wasm-pack test --node
+        wasm-pack test --node --all-features
     - name: Test use prebuild libsqlite3.a
       if: matrix.os != 'windows-latest'
       run: |
@@ -74,6 +74,7 @@ jobs:
       run: |
         rustup target add wasm32-unknown-unknown
         cargo clippy --no-default-features --target wasm32-unknown-unknown -- -D warnings
+        cargo clippy --all-features --target wasm32-unknown-unknown -- -D warnings
 
   test_implement_a_vfs:
     runs-on: ubuntu-latest
@@ -180,7 +181,7 @@ jobs:
     - name: Test
       run: |
         cd tests
-        wasm-pack test --chrome --headless
+        wasm-pack test --chrome --headless --all-features
         wasm-pack test --chrome --headless --features sqlite3mc
         
   test_vfs_native:
