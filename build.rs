@@ -189,6 +189,7 @@ fn bindgen(output: &std::path::PathBuf) {
     bindings.write_to_file(output).unwrap();
 }
 
+#[allow(clippy::vec_init_then_push)]
 fn compile() {
     const C_SOURCE: [&str; 36] = [
         // string
