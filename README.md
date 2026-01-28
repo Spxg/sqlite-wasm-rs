@@ -82,8 +82,12 @@ The minimal officially supported rustc version is 1.82.0.
 
 ## Extensions
 
+See [ADDING_EXTENSIONS.md](docs/ADDING_EXTENSIONS.md) for instructions on how to add new static extensions.
+
 |Extension|About|
 |-|-|
+|`uuid4`|RFC-4122 UUIDv4 (Random) generation (built-in)|
+|`uuid7`|RFC-9562 UUIDv7 (Time-ordered) generation (built-in)|
 |[sqlite-vec](./extensions/sqlite-vec)|A vector search SQLite extension that runs anywhere!|
 
 Contributions are welcome!
