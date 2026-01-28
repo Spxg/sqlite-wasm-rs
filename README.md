@@ -86,7 +86,8 @@ See [ADDING_EXTENSIONS.md](docs/ADDING_EXTENSIONS.md) for instructions on how to
 
 |Extension|About|
 |-|-|
-|`uuid`|RFC-4122 UUID generation (built-in)|
+|`uuid4`|RFC-4122 UUIDv4 (Random) generation (built-in)|
+|`uuid7`|RFC-9562 UUIDv7 (Time-ordered) generation (built-in)|
 |[sqlite-vec](./extensions/sqlite-vec)|A vector search SQLite extension that runs anywhere!|
 
 Contributions are welcome!
