@@ -1,0 +1,27 @@
+[package]
+name = "sqlite-wasm-uuid7"
+version = "0.1.0"
+edition = "2021"
+authors = ["Spxg <unsafe@outlook.es>"]
+readme = "README.md"
+license = "MIT"
+description = "`wasm32-unknown-unknown` bindings to the `uuid7` extension."
+categories = ["development-tools::ffi", "wasm", "database"]
+keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "uuid7"]
+links = "sqlite_uuid7"
+
+[dependencies]
+wasm-bindgen = "0.2.104"
+
+[build-dependencies]
+cc = "1.2.44"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3.55"
+# rusqlite = { version = "0.38.0", features = ["bundled"] }
+sqlite-wasm-rs = { path = "../../" }
+js-sys = "0.3.77"
+wasm-bindgen = "0.2.100"
+
+[package.metadata.docs.rs]
+targets = ["wasm32-unknown-unknown"]

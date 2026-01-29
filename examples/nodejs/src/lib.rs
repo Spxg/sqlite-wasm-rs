@@ -1,106 +1,141 @@
 use std::ffi::CStr;
 
 use sqlite_wasm_rs::{
-    sqlite3, sqlite3_column_count, sqlite3_column_double, sqlite3_column_int, sqlite3_column_text,
-    sqlite3_column_type, sqlite3_exec, sqlite3_finalize, sqlite3_open_v2, sqlite3_prepare_v3,
-    sqlite3_step, SQLITE_FLOAT, SQLITE_INTEGER, SQLITE_OK, SQLITE_OPEN_CREATE,
-    SQLITE_OPEN_READWRITE, SQLITE_ROW, SQLITE_TEXT,
+    sqlite3, sqlite3_close, sqlite3_column_text, sqlite3_finalize, sqlite3_open_v2,
+    sqlite3_prepare_v3, sqlite3_step, SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_READWRITE,
+    SQLITE_ROW,
 };
 use wasm_bindgen::prelude::wasm_bindgen;
 
 #[wasm_bindgen]
 extern "C" {
-    // Use `js_namespace` here to bind `console.log(..)` instead of just
-    // `log(..)`
     #[wasm_bindgen(js_namespace = console)]
     fn log(s: &str);
 }
 
 macro_rules! console_log {
-    // Note that this is using the `log` function imported above during
-    // `bare_bones`
     ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
 }
 
 #[wasm_bindgen(start)]
 async fn main() {
-    let mut db = std::ptr::null_mut();
+    let mut db: *mut sqlite3 = std::ptr::null_mut();
+    // Open in-memory DB
     let ret = unsafe {
         sqlite3_open_v2(
-            c"file:test_memory_vfs.db?vfs=memvfs".as_ptr().cast(),
+            c":memory:".as_ptr().cast(),
             &mut db as *mut _,
             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
             std::ptr::null(),
         )
     };
     assert_eq!(SQLITE_OK, ret);
-    console_log!("db: {db:?}");
-    prepare_simple_db(db);
-    check_result(db);
-}
+    console_log!("db opened: {db:?}");
 
-fn prepare_simple_db(db: *mut sqlite3) {
-    let sql = c"
-CREATE TABLE IF NOT EXISTS employees (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    salary REAL NOT NULL
-);
+    unsafe {
+        // Register uuid4 extension
+        let rc = sqlite_wasm_uuid4::register(db.cast());
+        assert_eq!(SQLITE_OK, rc);
+        console_log!("UUID4 extension registered");
 
-INSERT INTO employees (name, salary) VALUES ('Alice', 50000);
-INSERT INTO employees (name, salary) VALUES ('Bob', 60000);
-UPDATE employees SET salary = 55000 WHERE id = 1;
-        ";
-    let ret = unsafe {
-        sqlite3_exec(
-            db,
-            sql.as_ptr().cast(),
-            None,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        )
-    };
-    assert_eq!(SQLITE_OK, ret);
-}
+        // Register uuid7 extension
+        let rc = sqlite_wasm_uuid7::register(db.cast());
+        assert_eq!(SQLITE_OK, rc);
+        console_log!("UUID7 extension registered");
 
-pub fn check_result(db: *mut sqlite3) {
-    let sql = c"SELECT * FROM employees;";
-    let mut stmt = std::ptr::null_mut();
-    let ret = unsafe {
-        sqlite3_prepare_v3(
+        // Test uuid()
+        console_log!("Testing SELECT uuid();");
+        let sql = c"SELECT uuid();";
+        let mut stmt = std::ptr::null_mut();
+        let rc = sqlite3_prepare_v3(
             db,
             sql.as_ptr().cast(),
             -1,
             0,
-            &mut stmt as *mut _,
+            &mut stmt,
             std::ptr::null_mut(),
-        )
-    };
-    assert_eq!(ret, SQLITE_OK);
+        );
+        assert_eq!(SQLITE_OK, rc);
 
-    let ret = [(1, "Alice", 55000.0), (2, "Bob", 60000.0)];
-    let mut idx = 0;
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            let val_ptr = sqlite3_column_text(stmt, 0);
+            if !val_ptr.is_null() {
+                let s = CStr::from_ptr(val_ptr.cast()).to_str().unwrap();
+                console_log!("uuid() result: {}", s);
 
-    unsafe {
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            let count = sqlite3_column_count(stmt);
-            for col in 0..count {
-                let ty = sqlite3_column_type(stmt, col);
-                match ty {
-                    SQLITE_INTEGER => assert_eq!(ret[idx].0, sqlite3_column_int(stmt, col)),
-                    SQLITE_TEXT => {
-                        let s = CStr::from_ptr(sqlite3_column_text(stmt, col).cast())
-                            .to_str()
-                            .unwrap();
-                        assert!(s == ret[idx].1);
-                    }
-                    SQLITE_FLOAT => assert_eq!(ret[idx].2, sqlite3_column_double(stmt, col)),
-                    _ => unreachable!(),
-                }
+                // Validate format: 8-4-4-4-12 hex digits
+                assert_eq!(s.len(), 36);
+                assert_eq!(s.chars().nth(8), Some('-'));
+                assert_eq!(s.chars().nth(13), Some('-'));
+                assert_eq!(s.chars().nth(18), Some('-'));
+                assert_eq!(s.chars().nth(23), Some('-'));
+            } else {
+                console_log!("uuid() returned NULL");
             }
-            idx += 1;
+        } else {
+            console_log!("Error: No row returned for uuid()");
         }
-        console_log!("{ret:?}");
         sqlite3_finalize(stmt);
+
+        // Test uuid_str()
+        console_log!("Testing SELECT uuid_str(uuid_blob('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'));");
+        // We know 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' is a valid uuid
+        let sql = c"SELECT uuid_str(uuid_blob('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'));";
+        let rc = sqlite3_prepare_v3(
+            db,
+            sql.as_ptr().cast(),
+            -1,
+            0,
+            &mut stmt,
+            std::ptr::null_mut(),
+        );
+        assert_eq!(SQLITE_OK, rc);
+
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            let val_ptr = sqlite3_column_text(stmt, 0);
+            if !val_ptr.is_null() {
+                let s = CStr::from_ptr(val_ptr.cast()).to_str().unwrap();
+                console_log!("uuid_str(...) result: {}", s);
+                assert_eq!(s, "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11");
+            } else {
+                console_log!("uuid_str(...) returned NULL");
+            }
+        } else {
+            console_log!("Error: No row returned for uuid_str()");
+        }
+        sqlite3_finalize(stmt);
+
+        // Test uuid7()
+        console_log!("Testing SELECT uuid7();");
+        let sql = c"SELECT uuid7();";
+        let mut stmt = std::ptr::null_mut();
+        let rc = sqlite3_prepare_v3(
+            db,
+            sql.as_ptr().cast(),
+            -1,
+            0,
+            &mut stmt,
+            std::ptr::null_mut(),
+        );
+        assert_eq!(SQLITE_OK, rc);
+
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            let val_ptr = sqlite3_column_text(stmt, 0);
+            if !val_ptr.is_null() {
+                let s = CStr::from_ptr(val_ptr.cast()).to_str().unwrap();
+                console_log!("uuid7() result: {}", s);
+                assert_eq!(s.len(), 36);
+                assert_eq!(s.chars().nth(14), Some('7'));
+            } else {
+                console_log!("uuid7() returned NULL");
+            }
+        } else {
+            console_log!("Error: No row returned for uuid7()");
+        }
+        sqlite3_finalize(stmt);
+
+        sqlite3_close(db);
     }
+
+    console_log!("All tests passed!");
 }

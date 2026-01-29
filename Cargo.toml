@@ -23,9 +23,6 @@ js-sys = { version = "0.3.81", default-features = false }
 # <https://github.com/utelle/SQLite3MultipleCiphers>
 # <https://utelle.github.io/SQLite3MultipleCiphers>
 sqlite3mc = []
-# Link the uuid extension to the library.
-uuid4 = []
-uuid7 = []
 
 [build-dependencies]
 cc = "1.2.27"
@@ -45,6 +42,8 @@ members = [
   "crates/sqlite-wasm-libc",
   "crates/sqlite-wasm-vfs",
   "extensions/sqlite-vec",
+  "extensions/uuid4",
+  "extensions/uuid7",
   "examples/implement-a-vfs",
   "examples/nodejs",
   "examples/use-prebuild-lib",

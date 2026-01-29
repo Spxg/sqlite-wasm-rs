@@ -189,7 +189,6 @@ fn bindgen(output: &std::path::PathBuf) {
     bindings.write_to_file(output).unwrap();
 }
 
-#[allow(clippy::vec_init_then_push)]
 fn compile() {
     const C_SOURCE: [&str; 36] = [
         // string
@@ -257,24 +256,6 @@ fn compile() {
     cc.flags(FULL_FEATURED);
     #[cfg(feature = "sqlite3mc")]
     cc.flags(SQLITE3_MC_FEATURED);
-
-    // Extensions
-    // Define a list of extensions with their feature flag and source file.
-    // (feature_name, source_file)
-    #[allow(unused_mut)]
-    let mut extensions: Vec<(&str, &str)> = Vec::new();
-
-    #[cfg(feature = "uuid4")]
-    extensions.push(("uuid4", "sqlite3/ext/uuid4.c"));
-
-    #[cfg(feature = "uuid7")]
-    extensions.push(("uuid7", "sqlite3/ext/uuid7.c"));
-
-    for (_feature, source) in &extensions {
-        cc.file(source);
-        // Ensure extensions can find sqlite3ext.h
-        cc.include("sqlite3");
-    }
 
     cc.compile("wsqlite3");
 }
