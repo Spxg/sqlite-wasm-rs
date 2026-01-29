@@ -155,6 +155,35 @@ jobs:
         cd extensions/sqlite-vec
         wasm-pack test --node
 
+  test_sqlite_wasm_uuid4:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install wasm-pack
+      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+    - name: Test
+      run: |
+        cd extensions/uuid4
+        wasm-pack test --node
+
+  test_sqlite_wasm_uuid7:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install wasm-pack
+      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+    - name: Test
+      run: |
+        cd extensions/uuid7
+        wasm-pack test --node
+
+
   test_sqlite_wasm_vfs:
     strategy:
       matrix:

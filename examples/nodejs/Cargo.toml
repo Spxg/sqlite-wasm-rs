@@ -9,6 +9,9 @@ sqlite-wasm-rs = { path = "../.." }
 sqlite-wasm-uuid4 = { path = "../../extensions/uuid4" }
 sqlite-wasm-uuid7 = { path = "../../extensions/uuid7" }
 wasm-bindgen-futures = "0.4.54"
+uuid = { version = "1.20.0", features = ["js"] }
+getrandom = { version = "0.2", features = ["js"] }
+console_error_panic_hook = "0.1.7"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]

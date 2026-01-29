@@ -92,6 +92,22 @@ See [ADDING_EXTENSIONS.md](docs/ADDING_EXTENSIONS.md) for instructions on how to
 
 Contributions are welcome!
 
+## Testing
+
+To run tests for the workspace or specific extensions, use `wasm-pack test --node`. 
+
+Extensions (like `extensions/uuid4` or `extensions/uuid7`) are configured to run within a NodeJS environment.
+
+```bash
+# Test uuid4 extension
+cd extensions/uuid4
+wasm-pack test --node
+
+# Test uuid7 extension
+cd extensions/uuid7
+wasm-pack test --node
+```
+
 ## Related Project
 
 * [`diesel`](https://github.com/diesel-rs/diesel): A safe, extensible ORM and Query Builder for Rust.

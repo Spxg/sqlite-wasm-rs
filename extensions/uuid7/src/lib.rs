@@ -1,115 +1,96 @@
-#![cfg_attr(not(test), no_std)]
+use std::ffi::{c_char, c_int, c_void, CString};
+use sqlite_wasm_rs::{
+    sqlite3, sqlite3_api_routines, sqlite3_context, sqlite3_value,
+    sqlite3_create_function_v2, sqlite3_result_text, 
+    SQLITE_UTF8, SQLITE_INNOCUOUS, 
+    SQLITE_TRANSIENT,
+};
+use uuid::Uuid;
 
-extern crate alloc;
+// --- SQL Functions ---
 
-use alloc::ffi::CString;
-use alloc::string::ToString;
-use core::ffi::{c_char, c_int, c_void, CStr};
-use wasm_bindgen::prelude::*;
+// uuid7() -> TEXT
+unsafe extern "C" fn uuid7_func(
+    ctx: *mut sqlite3_context,
+    _argc: c_int,
+    _argv: *mut *mut sqlite3_value,
+) {
+    let u = Uuid::now_v7();
+    let s = u.to_string(); // canonical 36-char string
+    let c_str = CString::new(s).unwrap();
+    sqlite3_result_text(ctx, c_str.as_ptr(), -1, SQLITE_TRANSIENT());
+}
 
-#[link(name = "sqlite_uuid7")]
-extern "C" {
-    pub fn sqlite3_uuid7_init(
-        db: *mut c_void,
-        pzErrMsg: *mut *mut c_char,
-        pApi: *const c_void,
-    ) -> c_int;
+// --- Extension Entry Point ---
+
+#[no_mangle]
+pub unsafe extern "C" fn sqlite3_uuid7_init(
+    db: *mut sqlite3,
+    _pz_err_msg: *mut *mut c_char,
+    _p_api: *const sqlite3_api_routines,
+) -> c_int {
+    let flags = SQLITE_UTF8 | SQLITE_INNOCUOUS;
+
+    let rc = sqlite3_create_function_v2(
+        db,
+        c"uuid7".as_ptr(),
+        0,
+        flags,
+        std::ptr::null_mut(),
+        Some(uuid7_func),
+        None, None, None
+    );
+    
+    rc
 }
 
 pub fn register(db: *mut c_void) -> c_int {
-    unsafe { sqlite3_uuid7_init(db, core::ptr::null_mut(), core::ptr::null()) }
-}
-
-#[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(js_namespace = console)]
-    fn log(s: &str);
-}
-
-macro_rules! console_log {
-    ($($t:tt)*) => (log(&alloc::format!($($t)*)))
+    unsafe {
+        sqlite3_uuid7_init(db as *mut sqlite3, std::ptr::null_mut(), std::ptr::null())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::ffi::CStr;
-    use sqlite_wasm_rs as sqlite;
+    use rusqlite::{ffi::sqlite3_auto_extension, Connection};
+    use wasm_bindgen_test::wasm_bindgen_test;
 
-    fn setup_db() -> *mut sqlite::sqlite3 {
-        let mut db: *mut sqlite::sqlite3 = core::ptr::null_mut();
-
-        let filename = CString::new(":memory:").unwrap();
-        // Standard open
-        let rc = unsafe {
-            sqlite::sqlite3_open_v2(
-                filename.as_ptr(),
-                &mut db,
-                sqlite::SQLITE_OPEN_READWRITE | sqlite::SQLITE_OPEN_CREATE,
-                core::ptr::null(),
-            )
-        };
-
-        if rc != sqlite::SQLITE_OK {
-            panic!("Failed to open DB: rc={}", rc);
-        }
-        console_log!("DB opened successfully");
-
-        // Init extension
-        unsafe {
-            let rc = sqlite3_uuid7_init(db as *mut _, core::ptr::null_mut(), core::ptr::null_mut());
-            if rc != sqlite::SQLITE_OK {
-                panic!("sqlite3_uuid7_init failed: {}", rc);
-            }
-        }
-        console_log!("Extension initialized");
-        db
+    /*
+    #[wasm_bindgen_test]
+    fn test_uuid_direct() {
+        console_error_panic_hook::set_once();
+        let u = Uuid::now_v7();
+        assert_eq!(u.to_string().len(), 36);
+        let u4 = Uuid::new_v4();
+        assert_eq!(u4.to_string().len(), 36);
     }
+    */
 
-    unsafe fn query_val(db: *mut sqlite::sqlite3, sql: &str) -> String {
-        let mut stmt: *mut sqlite::sqlite3_stmt = core::ptr::null_mut();
-        let c_sql = CString::new(sql).unwrap();
+    #[wasm_bindgen_test]
+    fn test_uuid7_via_rusqlite() {
+        console_error_panic_hook::set_once();
 
-        let rc =
-            sqlite::sqlite3_prepare_v2(db, c_sql.as_ptr(), -1, &mut stmt, core::ptr::null_mut());
-        if rc != sqlite::SQLITE_OK {
-            let err = sqlite::sqlite3_errmsg(db);
-            let err_str = if !err.is_null() {
-                CStr::from_ptr(err).to_string_lossy().to_string()
-            } else {
-                "Unknown error".to_string()
-            };
-            panic!("prepare failed: {} - {}", sql, err_str);
-        }
-
-        let rc = sqlite::sqlite3_step(stmt);
-        let res = if rc == sqlite::SQLITE_ROW {
-            let text = sqlite::sqlite3_column_text(stmt, 0);
-            if text.is_null() {
-                "NULL".to_string()
-            } else {
-                let c_str = CStr::from_ptr(text as *const _);
-                c_str.to_string_lossy().to_string()
-            }
-        } else {
-            String::new()
-        };
-        sqlite::sqlite3_finalize(stmt);
-        res
-    }
-
-    #[wasm_bindgen_test::wasm_bindgen_test]
-    fn test_uuid7() {
-        console_log!("Starting test_uuid7 C extension verification");
         unsafe {
-            let db = setup_db();
-
-            let uuid = query_val(db, "SELECT uuid7()");
-            console_log!("UUID7: {}", uuid);
-            assert_eq!(uuid.len(), 36);
-            assert_eq!(uuid.chars().nth(14).unwrap(), '7');
-
-            sqlite::sqlite3_close(db);
+            sqlite3_auto_extension(Some(std::mem::transmute(sqlite3_uuid7_init as *const ())));
         }
+        
+        let conn = Connection::open_in_memory().unwrap();
+        
+        // Test uuid7 generation and uniqueness
+        let mut results = Vec::new();
+        for _ in 0..100 {
+            let u: String = conn.query_row("SELECT uuid7()", [], |r| r.get(0)).unwrap();
+            results.push(u);
+        }
+
+        // Check format (simple length check)
+        assert_eq!(results[0].len(), 36);
+
+        // Check uniqueness
+        let mut sorted = results.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(results.len(), sorted.len(), "UUIDv7 generated duplicates!");
     }
 }

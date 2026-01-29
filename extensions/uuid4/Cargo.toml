@@ -8,18 +8,18 @@ license = "MIT"
 description = "`wasm32-unknown-unknown` bindings to the `uuid4` extension."
 categories = ["development-tools::ffi", "wasm", "database"]
 keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "uuid4"]
-links = "sqlite_uuid4"
 
 [dependencies]
+uuid = { version = "1.20.0", features = ["v4", "v7", "js", "macro-diagnostics"] }
+getrandom = { version = "0.2", features = ["js"] }
 wasm-bindgen = "0.2.104"
-
-[build-dependencies]
-cc = "1.2.44"
+sqlite-wasm-rs = { path = "../../" }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.55"
 sqlite-wasm-rs = { path = "../../" }
 js-sys = "0.3.81"
+rusqlite = "0.38.0"
 
 [package.metadata.docs.rs]
 targets = ["wasm32-unknown-unknown"]
