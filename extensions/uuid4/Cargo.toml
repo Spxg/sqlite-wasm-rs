@@ -1,0 +1,22 @@
+[package]
+name = "sqlite-wasm-uuid4"
+authors = ["Spxg <unsafe@outlook.es>"]
+description = "`wasm32-unknown-unknown` bindings to the `uuid4` extension."
+categories = ["development-tools::ffi", "wasm", "database"]
+keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "uuid4"]
+version.workspace = true
+readme.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+uuid.workspace = true
+wasm-bindgen.workspace = true
+sqlite-wasm-rs.workspace = true
+
+[dev-dependencies]
+wasm-bindgen-test.workspace = true
+rusqlite.workspace = true
+
+[package.metadata.docs.rs]
+targets = ["wasm32-unknown-unknown"]

@@ -1,106 +1,165 @@
+use std::collections::HashSet;
 use std::ffi::CStr;
 
 use sqlite_wasm_rs::{
-    sqlite3, sqlite3_column_count, sqlite3_column_double, sqlite3_column_int, sqlite3_column_text,
-    sqlite3_column_type, sqlite3_exec, sqlite3_finalize, sqlite3_open_v2, sqlite3_prepare_v3,
-    sqlite3_step, SQLITE_FLOAT, SQLITE_INTEGER, SQLITE_OK, SQLITE_OPEN_CREATE,
-    SQLITE_OPEN_READWRITE, SQLITE_ROW, SQLITE_TEXT,
+    sqlite3, sqlite3_close, sqlite3_column_text, sqlite3_finalize, sqlite3_open_v2,
+    sqlite3_prepare_v3, sqlite3_step, SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_READWRITE,
+    SQLITE_ROW,
 };
+use uuid::{Uuid, Version};
 use wasm_bindgen::prelude::wasm_bindgen;
 
 #[wasm_bindgen]
 extern "C" {
-    // Use `js_namespace` here to bind `console.log(..)` instead of just
-    // `log(..)`
     #[wasm_bindgen(js_namespace = console)]
     fn log(s: &str);
 }
 
 macro_rules! console_log {
-    // Note that this is using the `log` function imported above during
-    // `bare_bones`
     ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
+}
+
+unsafe fn query_uuid(db: *mut sqlite3, sql_stmt: *const std::ffi::c_char) -> String {
+    let mut stmt = std::ptr::null_mut();
+    let rc = sqlite3_prepare_v3(db, sql_stmt, -1, 0, &mut stmt, std::ptr::null_mut());
+    assert_eq!(SQLITE_OK, rc, "Failed to prepare statement");
+
+    let mut res = String::new();
+    if sqlite3_step(stmt) == SQLITE_ROW {
+        let val_ptr = sqlite3_column_text(stmt, 0);
+        if !val_ptr.is_null() {
+            res = CStr::from_ptr(val_ptr.cast()).to_str().unwrap().to_string();
+        } else {
+            panic!("Returned NULL for UUID query");
+        }
+    } else {
+        panic!("No row returned for UUID query");
+    }
+    sqlite3_finalize(stmt);
+    res
 }
 
 #[wasm_bindgen(start)]
 async fn main() {
-    let mut db = std::ptr::null_mut();
+    console_error_panic_hook::set_once();
+    let mut db: *mut sqlite3 = std::ptr::null_mut();
+    // Open in-memory DB
     let ret = unsafe {
         sqlite3_open_v2(
-            c"file:test_memory_vfs.db?vfs=memvfs".as_ptr().cast(),
+            c":memory:".as_ptr().cast(),
             &mut db as *mut _,
             SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
             std::ptr::null(),
         )
     };
     assert_eq!(SQLITE_OK, ret);
-    console_log!("db: {db:?}");
-    prepare_simple_db(db);
-    check_result(db);
-}
-
-fn prepare_simple_db(db: *mut sqlite3) {
-    let sql = c"
-CREATE TABLE IF NOT EXISTS employees (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    salary REAL NOT NULL
-);
-
-INSERT INTO employees (name, salary) VALUES ('Alice', 50000);
-INSERT INTO employees (name, salary) VALUES ('Bob', 60000);
-UPDATE employees SET salary = 55000 WHERE id = 1;
-        ";
-    let ret = unsafe {
-        sqlite3_exec(
-            db,
-            sql.as_ptr().cast(),
-            None,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        )
-    };
-    assert_eq!(SQLITE_OK, ret);
-}
-
-pub fn check_result(db: *mut sqlite3) {
-    let sql = c"SELECT * FROM employees;";
-    let mut stmt = std::ptr::null_mut();
-    let ret = unsafe {
-        sqlite3_prepare_v3(
-            db,
-            sql.as_ptr().cast(),
-            -1,
-            0,
-            &mut stmt as *mut _,
-            std::ptr::null_mut(),
-        )
-    };
-    assert_eq!(ret, SQLITE_OK);
-
-    let ret = [(1, "Alice", 55000.0), (2, "Bob", 60000.0)];
-    let mut idx = 0;
+    console_log!("db opened");
 
     unsafe {
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            let count = sqlite3_column_count(stmt);
-            for col in 0..count {
-                let ty = sqlite3_column_type(stmt, col);
-                match ty {
-                    SQLITE_INTEGER => assert_eq!(ret[idx].0, sqlite3_column_int(stmt, col)),
-                    SQLITE_TEXT => {
-                        let s = CStr::from_ptr(sqlite3_column_text(stmt, col).cast())
-                            .to_str()
-                            .unwrap();
-                        assert!(s == ret[idx].1);
-                    }
-                    SQLITE_FLOAT => assert_eq!(ret[idx].2, sqlite3_column_double(stmt, col)),
-                    _ => unreachable!(),
+        // Register extensions
+        let rc = sqlite_wasm_uuid4::register(db.cast());
+        assert_eq!(SQLITE_OK, rc);
+        console_log!("UUID4 extension registered");
+
+        let rc = sqlite_wasm_uuid7::register(db.cast());
+        assert_eq!(SQLITE_OK, rc);
+        console_log!("UUID7 extension registered");
+
+        // --- UUID4 Test ---
+        console_log!("Generating 1000 UUIDv4...");
+        let mut v4_results = Vec::with_capacity(1000);
+        let sql = c"SELECT uuid();";
+
+        for _ in 0..1000 {
+            v4_results.push(query_uuid(db, sql.as_ptr()));
+        }
+
+        // Check uniqueness
+        let set: HashSet<_> = v4_results.iter().cloned().collect();
+        assert_eq!(set.len(), 1000, "All UUIDv4 must be unique");
+        console_log!("Unique check passed for UUIDv4");
+
+        // Check version & parsing
+        for (i, s) in v4_results.iter().enumerate() {
+            let u = Uuid::parse_str(s)
+                .unwrap_or_else(|e| panic!("Failed to parse UUIDv4 at index {}: {} - {}", i, s, e));
+            assert_eq!(
+                u.get_version(),
+                Some(Version::Random),
+                "UUID at index {} is not v4: {}",
+                i,
+                s
+            );
+        }
+        console_log!("Version check passed for UUIDv4");
+
+        // --- UUID7 Test ---
+        console_log!("Generating 1000 UUIDv7...");
+        let mut v7_results = Vec::with_capacity(1000);
+        let sql = c"SELECT uuid7();";
+
+        for _ in 0..1000 {
+            v7_results.push(query_uuid(db, sql.as_ptr()));
+        }
+
+        // Check uniqueness
+        let set: HashSet<_> = v7_results.iter().cloned().collect();
+        assert_eq!(set.len(), 1000, "All UUIDv7 must be unique");
+        console_log!("Unique check passed for UUIDv7");
+
+        // Check sorting (Monotonicity)
+        // Since UUIDv7 is time-ordered, later generations should generally be greater than previous ones.
+        // However, if generated in the same millisecond, the random component decides order.
+        // Strict monotonicity isn't guaranteed across all implementations unless they share state,
+        // but uuid::Uuid::now_v7() generally attempts internally to be monotonic if called rapidly.
+        // Wait, the Rust `uuid` crate documentation says `now_v7` guarantees monotonicity for same-process calls if the feature is enabled?
+        // Actually `Uuid::now_v7()` uses `context::Context` thread-locally if available, or just random.
+        // The implementation in extensions/uuid7 uses `Uuid::now_v7()`.
+        // Let's check if the list is sorted.
+
+        let mut sorted_v7 = v7_results.clone();
+        sorted_v7.sort();
+
+        // This assertion might be flaky if the clock goes backwards or multiple threads (not in WASM mostly).
+        // But for a single thread tight loop, it should be strictly monotonic or at least non-decreasing.
+        // Since we assert uniqueness, non-decreasing + unique = strictly increasing.
+
+        if v7_results != sorted_v7 {
+            console_log!("Warning: UUIDv7 results were not strictly monotonic.");
+            // Find first violation
+            for i in 0..999 {
+                if v7_results[i] > v7_results[i + 1] {
+                    console_log!(
+                        "Violation at index {}: {} > {}",
+                        i,
+                        v7_results[i],
+                        v7_results[i + 1]
+                    );
+                    // Allow slight harmless reordering if any, but UUIDv7 SHOULD be monotonic.
+                    // The user asked to "check they are unique and sorted".
+                    // So I will assert it.
                 }
             }
-            idx += 1;
+            panic!("UUIDv7 results are not sorted!");
         }
-        console_log!("{ret:?}");
-        sqlite3_finalize(stmt);
+        console_log!("Sort order check passed for UUIDv7");
+
+        // Check version
+        for (i, s) in v7_results.iter().enumerate() {
+            let u = Uuid::parse_str(s)
+                .unwrap_or_else(|e| panic!("Failed to parse UUIDv7 at index {}: {} - {}", i, s, e));
+            assert_eq!(
+                u.get_version(),
+                Some(Version::SortRand),
+                "UUID at index {} is not v7: {}",
+                i,
+                s
+            );
+        }
+        console_log!("Version check passed for UUIDv7");
+
+        sqlite3_close(db);
     }
+
+    console_log!("All tests passed!");
 }

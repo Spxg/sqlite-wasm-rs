@@ -1,9 +1,5 @@
 #[cfg(feature = "sqlite3mc")]
 mod sqlite3mc;
-#[cfg(feature = "uuid4")]
-mod uuid4_verify;
-#[cfg(feature = "uuid7")]
-mod uuid7_verify;
 mod vfs;
 
 use sqlite_wasm_rs::*;

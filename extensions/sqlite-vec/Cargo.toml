@@ -17,8 +17,8 @@ keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "sqlite-vec"]
 cc = "1.2.44"
 
 [dev-dependencies]
-wasm-bindgen-test = "0.3.55"
-rusqlite = "0.38.0"
+wasm-bindgen-test.workspace = true
+rusqlite.workspace = true
 
 [package.metadata.docs.rs]
 targets = ["wasm32-unknown-unknown"]

@@ -39,35 +39,3 @@ pub use bindings::*;
 pub use self::shim::WasmOsCallback;
 /// In-memory VFS implementation.
 pub use rsqlite_vfs::memvfs::{MemVfsError, MemVfsUtil};
-
-#[cfg(feature = "uuid4")]
-extern "C" {
-    pub fn sqlite3_uuid4_init(
-        db: *mut sqlite3,
-        pzErrMsg: *mut *mut core::ffi::c_char,
-        pApi: *const sqlite3_api_routines,
-    ) -> core::ffi::c_int;
-}
-
-#[cfg(feature = "uuid4")]
-pub fn register_uuid4_extension() {
-    unsafe {
-        sqlite3_auto_extension(Some(sqlite3_uuid4_init));
-    }
-}
-
-#[cfg(feature = "uuid7")]
-extern "C" {
-    pub fn sqlite3_uuid7_init(
-        db: *mut sqlite3,
-        pzErrMsg: *mut *mut core::ffi::c_char,
-        pApi: *const sqlite3_api_routines,
-    ) -> core::ffi::c_int;
-}
-
-#[cfg(feature = "uuid7")]
-pub fn register_uuid7_extension() {
-    unsafe {
-        sqlite3_auto_extension(Some(sqlite3_uuid7_init));
-    }
-}

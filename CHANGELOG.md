@@ -5,8 +5,7 @@
 
 ### Added
 
-* Added support for the SQLite `uuid4` extension, enabled via the `uuid4` feature flag.
-* Added support for the Postgres18 `uuid7` extension, enabled via the `uuid7` feature flag, ported from PostgreSQL implementation.
+* Integrated the [`uuid`](https://docs.rs/uuid/latest/uuid/) rust crate to provide functionality to generate UUIDs in the `uuid4` and `uuid7` extensions inside SQLite.
 
 ### Fixed
 
