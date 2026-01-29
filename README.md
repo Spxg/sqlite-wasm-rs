@@ -94,18 +94,18 @@ Contributions are welcome!
 
 ## Testing
 
-To run tests for the workspace or specific extensions, use `wasm-pack test --node`. 
+To run tests for the workspace or specific extensions, use `wasm-pack test --headless --firefox`. 
 
-Extensions (like `extensions/uuid4` or `extensions/uuid7`) are configured to run within a NodeJS environment.
+Extensions (like `extensions/uuid4` or `extensions/uuid7`) are configured to run within a browser environment.
 
 ```bash
 # Test uuid4 extension
 cd extensions/uuid4
-wasm-pack test --node
+wasm-pack test --headless --firefox
 
 # Test uuid7 extension
 cd extensions/uuid7
-wasm-pack test --node
+wasm-pack test --headless --firefox
 ```
 
 ## Related Project

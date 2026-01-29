@@ -1,7 +1,6 @@
 [package]
 name = "sqlite-wasm-rs"
 links = "wsqlite3"
-version = "0.5.2"
 authors = ["Spxg <unsafe@outlook.es>"]
 repository = "https://github.com/Spxg/sqlite-wasm-rs"
 description = "`wasm32-unknown-unknown` bindings to the libsqlite3 library."
@@ -10,12 +9,13 @@ keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "javascript"]
 readme.workspace = true
 edition.workspace = true
 license.workspace = true
+version.workspace = true
 rust-version.workspace = true
 include.workspace = true
 
 [dependencies]
 rsqlite-vfs = "0.1.0"
-wasm-bindgen = { version = "0.2.104", default-features = false }
+wasm-bindgen.workspace = true
 js-sys = { version = "0.3.81", default-features = false }
 
 [features]
@@ -29,7 +29,7 @@ cc = "1.2.27"
 bindgen = { version = "0.72", optional = true }
 
 [dev-dependencies]
-wasm-bindgen-test = "0.3.54"
+wasm-bindgen-test.workspace = true
 
 [package.metadata.docs.rs]
 targets = ["wasm32-unknown-unknown"]
@@ -51,22 +51,30 @@ members = [
 
 [workspace.package]
 readme = "README.md"
+version = "0.5.2"
 edition = "2021"
 license = "MIT"
 rust-version = "1.82.0"
 include = [
-    'src/**/*.rs',
-    'build.rs',
-    'sqlite3/**/*.c',
-    'sqlite3/**/*.h',
-    'sqlite3mc/**/*.c',
-    'sqlite3mc/**/*.h',
-    'shim/**/*.h',
-    'shim/**/*.c',
-    'Cargo.toml',
-    '/README.md',
-    'LICENSE',
+  'src/**/*.rs',
+  'build.rs',
+  'sqlite3/**/*.c',
+  'sqlite3/**/*.h',
+  'sqlite3mc/**/*.c',
+  'sqlite3mc/**/*.h',
+  'shim/**/*.h',
+  'shim/**/*.c',
+  'Cargo.toml',
+  '/README.md',
+  'LICENSE',
 ]
+
+[workspace.dependencies]
+sqlite-wasm-rs = { path = "./", version = "0.5.2" }
+wasm-bindgen = { version = "0.2.104", default-features = false }
+wasm-bindgen-test = "0.3.54"
+rusqlite = "0.38.0"
+uuid = { version = "1.20.0", features = ["v4", "v7", "js"] }
 
 [patch.crates-io]
 rsqlite-vfs = { path = "./crates/rsqlite-vfs" }

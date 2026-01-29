@@ -167,7 +167,7 @@ jobs:
     - name: Test
       run: |
         cd extensions/uuid4
-        wasm-pack test --node
+        wasm-pack test --chrome --headless
 
   test_sqlite_wasm_uuid7:
     strategy:
@@ -181,7 +181,7 @@ jobs:
     - name: Test
       run: |
         cd extensions/uuid7
-        wasm-pack test --node
+        wasm-pack test --chrome --headless
 
 
   test_sqlite_wasm_vfs:
