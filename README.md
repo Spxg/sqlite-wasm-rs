@@ -82,8 +82,6 @@ The minimal officially supported rustc version is 1.82.0.
 
 ## Extensions
 
-See [ADDING_EXTENSIONS.md](docs/ADDING_EXTENSIONS.md) for instructions on how to add new static extensions.
-
 |Extension|About|
 |-|-|
 |`uuid4`|RFC-4122 UUIDv4 (Random) generation (built-in)|
