@@ -84,27 +84,11 @@ The minimal officially supported rustc version is 1.82.0.
 
 |Extension|About|
 |-|-|
-|`uuid4`|RFC-4122 UUIDv4 (Random) generation (built-in)|
-|`uuid7`|RFC-9562 UUIDv7 (Time-ordered) generation (built-in)|
+|[`uuid4`](./extensions/uuid4)|RFC-4122 UUIDv4 (Random) generation|
+|[`uuid7`](./extensions/uuid7)|RFC-9562 UUIDv7 (Time-ordered) generation|
 |[sqlite-vec](./extensions/sqlite-vec)|A vector search SQLite extension that runs anywhere!|
 
 Contributions are welcome!
-
-## Testing
-
-To run tests for the workspace or specific extensions, use `wasm-pack test --headless --firefox`. 
-
-Extensions (like `extensions/uuid4` or `extensions/uuid7`) are configured to run within a browser environment.
-
-```bash
-# Test uuid4 extension
-cd extensions/uuid4
-wasm-pack test --headless --firefox
-
-# Test uuid7 extension
-cd extensions/uuid7
-wasm-pack test --headless --firefox
-```
 
 ## Related Project
 
