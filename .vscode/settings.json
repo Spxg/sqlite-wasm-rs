@@ -1,9 +1,0 @@
-{
-  "rust-analyzer.cargo.target": "wasm32-unknown-unknown",
-  "rust-analyzer.cargo.features": [
-    "bindgen"
-  ],
-  "chat.tools.terminal.autoApprove": {
-    "wasm-pack": true
-  }
-}
