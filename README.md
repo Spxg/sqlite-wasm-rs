@@ -6,14 +6,14 @@
 
 ```toml
 [dependencies]
-sqlite-wasm-rs = "0.5"
+sqlite-wasm-rs = "0.5.2"
 ```
 
 ```toml
 [dependencies]
 # Encryption is supported by SQLite3MultipleCiphers
 # See <https://utelle.github.io/SQLite3MultipleCiphers>
-sqlite-wasm-rs = { version = "0.5", features = ["sqlite3mc"] }
+sqlite-wasm-rs = { version = "0.5.2", features = ["sqlite3mc"] }
 ```
 
 ```rust
@@ -38,6 +38,8 @@ fn open_db() {
 
 ```toml
 [dependencies]
+# It requires sqlite-wasm-rs 0.5.2 or higher to be used,
+# for version 0.5.1, use version 0.1 instead.
 sqlite-wasm-vfs = "0.2"
 ```
 
