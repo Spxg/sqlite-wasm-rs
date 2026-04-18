@@ -1,6 +1,7 @@
 # `sqlite-wasm-rs` Change Log
 --------------------------------------------------------------------------------
 
+
 ## Unreleased
 
 ### Added
@@ -8,6 +9,19 @@
 ### Fixed
 
 ### Changed
+
+--------------------------------------------------------------------------------
+
+## [0.5.3](https://github.com/Spxg/sqlite-wasm-rs/compare/0.5.2...0.5.3)
+
+### Added
+
+### Fixed
+
+### Changed
+
+* Bump SQLite Version to 3.53.0 and SQLite3MC Version to 2.3.3
+  [#171](https://github.com/Spxg/sqlite-wasm-rs/pull/171)
 
 --------------------------------------------------------------------------------
 
