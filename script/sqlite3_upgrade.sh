@@ -1,4 +1,4 @@
-SQLITE=sqlite-amalgamation-3510200
+SQLITE=sqlite-amalgamation-3530000
 curl -O https://sqlite.org/2026/$SQLITE.zip
 unzip -p "$SQLITE.zip" "$SQLITE/sqlite3.c" > "sqlite3/sqlite3.c"
 unzip -p "$SQLITE.zip" "$SQLITE/sqlite3.h" > "sqlite3/sqlite3.h"
