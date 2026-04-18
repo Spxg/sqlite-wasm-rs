@@ -6,14 +6,14 @@
 
 ```toml
 [dependencies]
-sqlite-wasm-rs = "0.5.2"
+sqlite-wasm-rs = "0.5"
 ```
 
 ```toml
 [dependencies]
 # Encryption is supported by SQLite3MultipleCiphers
 # See <https://utelle.github.io/SQLite3MultipleCiphers>
-sqlite-wasm-rs = { version = "0.5.2", features = ["sqlite3mc"] }
+sqlite-wasm-rs = { version = "0.5", features = ["sqlite3mc"] }
 ```
 
 ```rust
