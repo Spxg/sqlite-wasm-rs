@@ -527,9 +527,8 @@ pub struct sqlite3_file {
 #[derive(Debug, Copy, Clone)]
 pub struct sqlite3_io_methods {
     pub iVersion: ::core::ffi::c_int,
-    pub xClose: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut sqlite3_file) -> ::core::ffi::c_int,
-    >,
+    pub xClose:
+        ::core::option::Option<unsafe extern "C" fn(arg1: *mut sqlite3_file) -> ::core::ffi::c_int>,
     pub xRead: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut sqlite3_file,
@@ -547,10 +546,7 @@ pub struct sqlite3_io_methods {
         ) -> ::core::ffi::c_int,
     >,
     pub xTruncate: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *mut sqlite3_file,
-            size: sqlite3_int64,
-        ) -> ::core::ffi::c_int,
+        unsafe extern "C" fn(arg1: *mut sqlite3_file, size: sqlite3_int64) -> ::core::ffi::c_int,
     >,
     pub xSync: ::core::option::Option<
         unsafe extern "C" fn(
@@ -589,12 +585,10 @@ pub struct sqlite3_io_methods {
             pArg: *mut ::core::ffi::c_void,
         ) -> ::core::ffi::c_int,
     >,
-    pub xSectorSize: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut sqlite3_file) -> ::core::ffi::c_int,
-    >,
-    pub xDeviceCharacteristics: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut sqlite3_file) -> ::core::ffi::c_int,
-    >,
+    pub xSectorSize:
+        ::core::option::Option<unsafe extern "C" fn(arg1: *mut sqlite3_file) -> ::core::ffi::c_int>,
+    pub xDeviceCharacteristics:
+        ::core::option::Option<unsafe extern "C" fn(arg1: *mut sqlite3_file) -> ::core::ffi::c_int>,
     pub xShmMap: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut sqlite3_file,
@@ -612,9 +606,7 @@ pub struct sqlite3_io_methods {
             flags: ::core::ffi::c_int,
         ) -> ::core::ffi::c_int,
     >,
-    pub xShmBarrier: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut sqlite3_file),
-    >,
+    pub xShmBarrier: ::core::option::Option<unsafe extern "C" fn(arg1: *mut sqlite3_file)>,
     pub xShmUnmap: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut sqlite3_file,
@@ -722,10 +714,7 @@ pub struct sqlite3_vfs {
         ) -> ::core::ffi::c_int,
     >,
     pub xCurrentTime: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *mut sqlite3_vfs,
-            arg2: *mut f64,
-        ) -> ::core::ffi::c_int,
+        unsafe extern "C" fn(arg1: *mut sqlite3_vfs, arg2: *mut f64) -> ::core::ffi::c_int,
     >,
     pub xGetLastError: ::core::option::Option<
         unsafe extern "C" fn(
@@ -761,17 +750,17 @@ pub struct sqlite3_vfs {
     >,
 }
 
-unsafe extern "C" {
+extern "C" {
     pub fn sqlite3_vfs_find(zVfsName: *const ::core::ffi::c_char) -> *mut sqlite3_vfs;
 }
 
-unsafe extern "C" {
+extern "C" {
     pub fn sqlite3_vfs_register(
         arg1: *mut sqlite3_vfs,
         makeDflt: ::core::ffi::c_int,
     ) -> ::core::ffi::c_int;
 }
 
-unsafe extern "C" {
+extern "C" {
     pub fn sqlite3_vfs_unregister(arg1: *mut sqlite3_vfs) -> ::core::ffi::c_int;
 }

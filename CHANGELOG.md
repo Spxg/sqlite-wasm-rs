@@ -10,6 +10,9 @@
 
 ### Changed
 
+* Make crates compile on 1.81.0.
+  [#172](https://github.com/Spxg/sqlite-wasm-rs/pull/172)
+
 --------------------------------------------------------------------------------
 
 ## [0.5.3](https://github.com/Spxg/sqlite-wasm-rs/compare/0.5.2...0.5.3)
@@ -20,7 +23,7 @@
 
 ### Changed
 
-* Bump SQLite Version to 3.53.0 and SQLite3MC Version to 2.3.3
+* Bump SQLite Version to 3.53.0 and SQLite3MC Version to 2.3.3.
   [#171](https://github.com/Spxg/sqlite-wasm-rs/pull/171)
 
 --------------------------------------------------------------------------------
