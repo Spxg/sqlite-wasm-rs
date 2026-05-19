@@ -1,12 +1,17 @@
 # `sqlite-wasm-rs` Change Log
 --------------------------------------------------------------------------------
 
-
 ## Unreleased
 
 ### Added
 
 ### Fixed
+
+### Changed
+
+--------------------------------------------------------------------------------
+
+## [0.5.4](https://github.com/Spxg/sqlite-wasm-rs/compare/0.5.3...0.5.4)
 
 ### Changed
 
@@ -16,10 +21,6 @@
 --------------------------------------------------------------------------------
 
 ## [0.5.3](https://github.com/Spxg/sqlite-wasm-rs/compare/0.5.2...0.5.3)
-
-### Added
-
-### Fixed
 
 ### Changed
 
@@ -35,8 +36,6 @@
 * Introduced the `rsqlite-vfs` crate.
   [#156](https://github.com/Spxg/sqlite-wasm-rs/pull/156)
 
-### Fixed
-
 ### Changed
 
 * Bump SQLite Version to 3.51.2 and SQLite3MC Version to 2.2.7.
@@ -45,10 +44,6 @@
 --------------------------------------------------------------------------------
 
 ## [0.5.1](https://github.com/Spxg/sqlite-wasm-rs/compare/0.5.0...0.5.1)
-
-### Added
-
-### Fixed
 
 ### Changed
 
@@ -66,8 +61,6 @@
 
 * Added `no_std` support for `sqlite-wasm-rs`.
   [#149](https://github.com/Spxg/sqlite-wasm-rs/pull/149)
-
-### Fixed
 
 ### Changed
 
