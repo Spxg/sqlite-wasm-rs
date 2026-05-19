@@ -1,6 +1,6 @@
 [package]
 name = "rsqlite-vfs"
-version = "0.1.0"
+version = "0.1.1"
 readme.workspace = true
 edition.workspace = true
 license.workspace = true
