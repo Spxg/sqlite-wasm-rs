@@ -80,7 +80,7 @@ More see [`use-prebuild-lib`](./examples/use-prebuild-lib) example.
 
 ## Minimum supported Rust version (MSRV)
 
-The minimal officially supported rustc version is 1.82.0.
+The minimal officially supported rustc version is 1.81.0.
 
 ## Extensions
 
