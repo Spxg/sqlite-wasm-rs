@@ -9,6 +9,9 @@
 
 ### Changed
 
+* Minimal `cc` version.
+  [#175](https://github.com/Spxg/sqlite-wasm-rs/pull/175)
+
 --------------------------------------------------------------------------------
 
 ## [0.5.4](https://github.com/Spxg/sqlite-wasm-rs/compare/0.5.3...0.5.4)
