@@ -253,9 +253,14 @@ fn compile() {
         .flag("-include")
         .flag("shim/wasm-shim.h");
 
-    cc.flags(FULL_FEATURED);
+    for flag in FULL_FEATURED {
+        cc.flag(flag);
+    }
+
     #[cfg(feature = "sqlite3mc")]
-    cc.flags(SQLITE3_MC_FEATURED);
+    for flag in SQLITE3_MC_FEATURED {
+        cc.flag(flag);
+    }
 
     cc.compile("wsqlite3");
 }
