@@ -1,8 +1,10 @@
 [![Crates.io](https://img.shields.io/crates/v/sqlite-wasm-rs.svg)](https://crates.io/crates/sqlite-wasm-rs)
 
-`wasm32-unknown-unknown` bindings to the libsqlite3 library.
+`wasm32-unknown-unknown` bindings to the libsqlite3 library. 
 
-## Usage
+`rusqlite` and `diesel` have already been integrated with this crate, you can now use sqlite out of the box.
+
+## Usage 
 
 ```toml
 [dependencies]
