@@ -11,7 +11,7 @@ description = "Helping to implement SQLite VFS."
 categories = ["development-tools::ffi", "wasm", "database"]
 
 [dependencies]
-hashbrown = { version = "0.16.1", default-features = false, features = ["default-hasher"] }
+hashbrown = { version = ">=0.16.1, <0.18", default-features = false, features = ["default-hasher"] }
 thiserror = { version = "2.0.12", default-features = false }
 
 [dev-dependencies]
