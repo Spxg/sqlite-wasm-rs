@@ -750,17 +750,17 @@ pub struct sqlite3_vfs {
     >,
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn sqlite3_vfs_find(zVfsName: *const ::core::ffi::c_char) -> *mut sqlite3_vfs;
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn sqlite3_vfs_register(
         arg1: *mut sqlite3_vfs,
         makeDflt: ::core::ffi::c_int,
     ) -> ::core::ffi::c_int;
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn sqlite3_vfs_unregister(arg1: *mut sqlite3_vfs) -> ::core::ffi::c_int;
 }

@@ -25,8 +25,8 @@
 use crate::ffi as bindings;
 
 use crate::{
-    check_import_db, ImportDbError, MemChunksFile, OsCallback, SQLiteIoMethods, SQLiteVfs,
-    SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
+    ImportDbError, MemChunksFile, OsCallback, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile,
+    VfsAppData, VfsError, VfsFile, VfsResult, VfsStore, check_import_db,
 };
 
 use alloc::boxed::Box;
@@ -317,24 +317,26 @@ where
 ///
 /// This requires a valid SQLite global context
 pub unsafe fn install<C: OsCallback>() -> &'static VfsAppData<MemAppData> {
-    let vfs = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
+    unsafe {
+        let vfs = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
 
-    let vfs = if vfs.is_null() {
-        let vfs = Box::leak(Box::new(MemVfs::<C>::vfs(
-            VFS_NAME.as_ptr(),
-            VfsAppData::new(MemAppData::default()).leak(),
-        )));
-        assert_eq!(
-            bindings::sqlite3_vfs_register(vfs, 1),
-            bindings::SQLITE_OK,
-            "failed to register memvfs"
-        );
-        vfs as *mut bindings::sqlite3_vfs
-    } else {
-        vfs
-    };
+        let vfs = if vfs.is_null() {
+            let vfs = Box::leak(Box::new(MemVfs::<C>::vfs(
+                VFS_NAME.as_ptr(),
+                VfsAppData::new(MemAppData::default()).leak(),
+            )));
+            assert_eq!(
+                bindings::sqlite3_vfs_register(vfs, 1),
+                bindings::SQLITE_OK,
+                "failed to register memvfs"
+            );
+            vfs as *mut bindings::sqlite3_vfs
+        } else {
+            vfs
+        };
 
-    MemStore::app_data(vfs)
+        MemStore::app_data(vfs)
+    }
 }
 
 /// Uninstall the memory VFS from the SQLite context
@@ -346,27 +348,29 @@ pub unsafe fn install<C: OsCallback>() -> &'static VfsAppData<MemAppData> {
 /// This should only be called if you previously registered the memory VFS with the SQLite context
 /// Otherwise this requires a valid SQLite global context
 pub unsafe fn uninstall() {
-    let vfs = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
+    unsafe {
+        let vfs = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
 
-    if !vfs.is_null() {
-        assert_eq!(
-            bindings::sqlite3_vfs_unregister(vfs),
-            bindings::SQLITE_OK,
-            "failed to unregister memvfs"
-        );
-        drop(VfsAppData::<MemAppData>::from_raw(
-            (*vfs).pAppData as *mut _,
-        ));
-        drop(Box::from_raw(vfs));
+        if !vfs.is_null() {
+            assert_eq!(
+                bindings::sqlite3_vfs_unregister(vfs),
+                bindings::SQLITE_OK,
+                "failed to unregister memvfs"
+            );
+            drop(VfsAppData::<MemAppData>::from_raw(
+                (*vfs).pAppData as *mut _,
+            ));
+            drop(Box::from_raw(vfs));
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{
+        VfsAppData,
         memvfs::{MemAppData, MemFile, MemStore},
         test_suite::test_vfs_store,
-        VfsAppData,
     };
 
     #[test]

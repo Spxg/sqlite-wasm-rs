@@ -100,7 +100,7 @@ fn bindgen(output: &std::path::PathBuf) {
     bindings = bindings
         .blocklist_function("sqlite3_auto_extension")
         .raw_line(
-            r#"extern "C" {
+            r#"unsafe extern "C" {
     pub fn sqlite3_auto_extension(
         xEntryPoint: ::core::option::Option<
             unsafe extern "C" fn(
@@ -114,7 +114,7 @@ fn bindgen(output: &std::path::PathBuf) {
         )
         .blocklist_function("sqlite3_cancel_auto_extension")
         .raw_line(
-            r#"extern "C" {
+            r#"unsafe extern "C" {
     pub fn sqlite3_cancel_auto_extension(
         xEntryPoint: ::core::option::Option<
             unsafe extern "C" fn(

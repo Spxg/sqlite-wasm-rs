@@ -118,7 +118,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@1.82.0
+    - uses: dtolnay/rust-toolchain@1.85.0
       with:
         targets: wasm32-unknown-unknown
         components: rust-src
