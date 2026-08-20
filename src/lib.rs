@@ -18,9 +18,9 @@ pub mod utils {
     #[doc(inline)]
     pub use rsqlite_vfs::{
         ImportDbError, MemChunksFile, OsCallback, RegisterVfsError, SQLITE3_HEADER,
-        SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult,
-        VfsStore, bail, check_db_and_page_size, check_import_db, check_option, check_result,
-        random_name, register_vfs, registered_vfs,
+        SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsFile64,
+        VfsResult, VfsStore, bail, check_db_and_page_size, check_import_db, check_option,
+        check_result, random_name, register_vfs, registered_vfs,
     };
 
     pub use rsqlite_vfs::ffi;

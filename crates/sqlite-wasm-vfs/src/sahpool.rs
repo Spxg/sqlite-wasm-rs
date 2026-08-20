@@ -41,7 +41,7 @@ use rsqlite_vfs::{
         SQLITE_OPEN_MAIN_JOURNAL, SQLITE_OPEN_SUPER_JOURNAL, SQLITE_OPEN_WAL,
     },
     register_vfs, registered_vfs, ImportDbError, OsCallback, RegisterVfsError, SQLiteIoMethods,
-    SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
+    SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile64, VfsResult, VfsStore,
 };
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -64,7 +64,7 @@ const HEADER_MAX_FILENAME_SIZE: usize = 512;
 const HEADER_FLAGS_SIZE: usize = 4;
 const HEADER_CORPUS_SIZE: usize = HEADER_MAX_FILENAME_SIZE + HEADER_FLAGS_SIZE;
 const HEADER_OFFSET_FLAGS: usize = HEADER_MAX_FILENAME_SIZE;
-const HEADER_OFFSET_DATA: usize = SECTOR_SIZE;
+const HEADER_OFFSET_DATA: u64 = SECTOR_SIZE as u64;
 
 const PERSISTENT_FILE_TYPES: i32 =
     SQLITE_OPEN_MAIN_DB | SQLITE_OPEN_MAIN_JOURNAL | SQLITE_OPEN_SUPER_JOURNAL | SQLITE_OPEN_WAL;
@@ -530,8 +530,8 @@ impl OpfsSAHPool {
     }
 }
 
-impl VfsFile for SyncAccessFile {
-    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<bool> {
+impl VfsFile64 for SyncAccessFile {
+    fn read(&self, buf: &mut [u8], offset: u64) -> VfsResult<bool> {
         let n_read = self
             .handle
             .read_with_u8_array_and_options(
@@ -549,7 +549,7 @@ impl VfsFile for SyncAccessFile {
         Ok(true)
     }
 
-    fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()> {
+    fn write(&mut self, buf: &[u8], offset: u64) -> VfsResult<()> {
         let n_write = self
             .handle
             .write_with_u8_array_and_options(
@@ -566,7 +566,7 @@ impl VfsFile for SyncAccessFile {
         Ok(())
     }
 
-    fn truncate(&mut self, size: usize) -> VfsResult<()> {
+    fn truncate(&mut self, size: u64) -> VfsResult<()> {
         self.handle
             .truncate_with_f64((HEADER_OFFSET_DATA + size) as f64)
             .map_err(OpfsSAHError::Truncate)
@@ -579,12 +579,12 @@ impl VfsFile for SyncAccessFile {
             .map_err(|err| err.vfs_err(SQLITE_IOERR))
     }
 
-    fn size(&self) -> VfsResult<usize> {
+    fn size(&self) -> VfsResult<u64> {
         Ok(self
             .handle
             .get_size()
             .map_err(OpfsSAHError::GetSize)
-            .map_err(|err| err.vfs_err(SQLITE_IOERR))? as usize
+            .map_err(|err| err.vfs_err(SQLITE_IOERR))? as u64
             - HEADER_OFFSET_DATA)
     }
 }

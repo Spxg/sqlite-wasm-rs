@@ -426,6 +426,50 @@ pub trait VfsFile {
     fn size(&self) -> VfsResult<usize>;
 }
 
+/// A file interface for VFS implementations that support 64-bit file positions.
+pub trait VfsFile64 {
+    /// Abstraction of `xRead`, returns true for `SQLITE_OK` and false for `SQLITE_IOERR_SHORT_READ`
+    fn read(&self, buf: &mut [u8], offset: u64) -> VfsResult<bool>;
+    /// Abstraction of `xWrite`
+    fn write(&mut self, buf: &[u8], offset: u64) -> VfsResult<()>;
+    /// Abstraction of `xTruncate`
+    fn truncate(&mut self, size: u64) -> VfsResult<()>;
+    /// Abstraction of `xSync`
+    fn flush(&mut self) -> VfsResult<()>;
+    /// Abstraction of `xFileSize`
+    fn size(&self) -> VfsResult<u64>;
+}
+
+impl<T: VfsFile + ?Sized> VfsFile64 for T {
+    fn read(&self, buf: &mut [u8], offset: u64) -> VfsResult<bool> {
+        let Ok(offset) = usize::try_from(offset) else {
+            buf.fill(0);
+            return Ok(false);
+        };
+        VfsFile::read(self, buf, offset)
+    }
+
+    fn write(&mut self, buf: &[u8], offset: u64) -> VfsResult<()> {
+        let offset = usize::try_from(offset)
+            .map_err(|_| VfsError::new(SQLITE_FULL, "file offset exceeds address space".into()))?;
+        VfsFile::write(self, buf, offset)
+    }
+
+    fn truncate(&mut self, size: u64) -> VfsResult<()> {
+        let size = usize::try_from(size)
+            .map_err(|_| VfsError::new(SQLITE_FULL, "file size exceeds address space".into()))?;
+        VfsFile::truncate(self, size)
+    }
+
+    fn flush(&mut self) -> VfsResult<()> {
+        VfsFile::flush(self)
+    }
+
+    fn size(&self) -> VfsResult<u64> {
+        Ok(VfsFile::size(self)? as u64)
+    }
+}
+
 /// Make changes to files
 pub trait VfsStore<File, AppData> {
     /// Convert pAppData to the type we need
@@ -697,7 +741,7 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
 /// A trait that abstracts the `sqlite3_io_methods` struct, allowing for a more idiomatic Rust implementation.
 #[allow(clippy::missing_safety_doc)]
 pub trait SQLiteIoMethods {
-    type File: VfsFile;
+    type File: VfsFile64;
     type AppData: 'static;
     type Store: VfsStore<Self::File, Self::AppData>;
 
@@ -758,7 +802,7 @@ pub trait SQLiteIoMethods {
 
             let f = |file: &Self::File| {
                 let size = iAmt as usize;
-                let offset = iOfst as usize;
+                let offset = iOfst as u64;
                 let slice = core::slice::from_raw_parts_mut(zBuf.cast::<u8>(), size);
                 let code = if file.read(slice, offset)? {
                     SQLITE_OK
@@ -786,7 +830,7 @@ pub trait SQLiteIoMethods {
             let app_data = Self::Store::app_data(vfs_file.vfs);
 
             let f = |file: &mut Self::File| {
-                let (offset, size) = (iOfst as usize, iAmt as usize);
+                let (offset, size) = (iOfst as u64, iAmt as usize);
                 let slice = core::slice::from_raw_parts(zBuf.cast::<u8>(), size);
                 file.write(slice, offset)?;
                 Ok(SQLITE_OK)
@@ -808,7 +852,7 @@ pub trait SQLiteIoMethods {
             let app_data = Self::Store::app_data(vfs_file.vfs);
 
             let f = |file: &mut Self::File| {
-                file.truncate(size as usize)?;
+                file.truncate(size as u64)?;
                 Ok(SQLITE_OK)
             };
 
@@ -965,11 +1009,11 @@ pub mod test_suite {
 
     use super::{
         SQLITE_IOERR, SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_MAIN_DB, SQLITE_OPEN_READWRITE,
-        SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore, sqlite3_file,
+        SQLiteVfsFile, VfsAppData, VfsError, VfsFile64, VfsResult, VfsStore, sqlite3_file,
         sqlite3_vfs,
     };
 
-    fn test_vfs_file<File: VfsFile>(file: &mut File) -> VfsResult<i32> {
+    fn test_vfs_file<File: VfsFile64>(file: &mut File) -> VfsResult<i32> {
         let base_offset = 1024 * 1024;
 
         let mut write_buffer = vec![42; 64 * 1024];
@@ -987,15 +1031,15 @@ pub mod test_suite {
         {
             Err(VfsError::new(SQLITE_IOERR, "incorrect buffer data".into()))?;
         }
-        if file.size()? != write_buffer.len() {
+        if file.size()? != write_buffer.len() as u64 {
             Err(VfsError::new(
                 SQLITE_IOERR,
                 "incorrect buffer length".into(),
             ))?;
         }
 
-        file.write(&write_buffer, base_offset)?;
-        if file.size()? != base_offset + write_buffer.len() {
+        file.write(&write_buffer, base_offset as u64)?;
+        if file.size()? != (base_offset + write_buffer.len()) as u64 {
             Err(VfsError::new(
                 SQLITE_IOERR,
                 "incorrect buffer length".into(),
@@ -1020,7 +1064,7 @@ pub mod test_suite {
         Ok(SQLITE_OK)
     }
 
-    pub fn test_vfs_store<AppData, File: VfsFile, Store: VfsStore<File, AppData>>(
+    pub fn test_vfs_store<AppData, File: VfsFile64, Store: VfsStore<File, AppData>>(
         vfs_data: VfsAppData<AppData>,
     ) -> VfsResult<()> {
         let layout = core::alloc::Layout::new::<sqlite3_vfs>();
