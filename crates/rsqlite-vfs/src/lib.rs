@@ -145,17 +145,20 @@ impl VfsFile for MemChunksFile {
             return Ok(false);
         }
 
-        if chunk_size == buf.len() && offset % chunk_size == 0 {
+        if chunk_size == buf.len()
+            && offset % chunk_size == 0
+            && self.file_size - offset >= buf.len()
+        {
             buf.copy_from_slice(&self.chunks[offset / chunk_size]);
             Ok(true)
         } else {
-            let mut size = buf.len();
+            let mut size = core::cmp::min(buf.len(), self.file_size - offset);
             let chunk_idx = offset / chunk_size;
             let mut remaining_idx = offset % chunk_size;
             let mut offset = 0;
 
             for chunk in &self.chunks[chunk_idx..] {
-                let n = core::cmp::min(chunk_size.min(self.file_size) - remaining_idx, size);
+                let n = core::cmp::min(chunk_size - remaining_idx, size);
                 buf[offset..offset + n].copy_from_slice(&chunk[remaining_idx..remaining_idx + n]);
                 offset += n;
                 size -= n;
@@ -1139,6 +1142,26 @@ mod tests {
         file.truncate(0).unwrap();
         assert!(file.size().unwrap() == 0);
         assert!(file.chunks.len() == 0);
+    }
+
+    #[test]
+    fn test_chunks_file_read_past_eof() {
+        let mut file = MemChunksFile::new(512);
+
+        file.write(&[41, 42], 511).unwrap();
+
+        file.chunks[1][1..].fill(0xAA);
+
+        let mut buf = [99; 512];
+        let ret = file.read(&mut buf, 512).unwrap();
+        assert_eq!(ret, false);
+        assert_eq!(buf[0], 42);
+        assert_eq!(&buf[1..], &[0; 511]);
+
+        let mut buf = [99; 3];
+        let ret = file.read(&mut buf, 511).unwrap();
+        assert_eq!(ret, false);
+        assert_eq!(buf, [41, 42, 0]);
     }
 
     #[test]
