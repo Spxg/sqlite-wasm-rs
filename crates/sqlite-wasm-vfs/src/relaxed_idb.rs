@@ -54,11 +54,10 @@ use rsqlite_vfs::{
     register_vfs, registered_vfs, ImportDbError, MemChunksFile, OsCallback, RegisterVfsError,
     SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
 };
+#[cfg(feature = "test-util")]
+use std::cell::Cell;
 use std::time::Duration;
-use std::{
-    cell::{Cell, RefCell},
-    marker::PhantomData,
-};
+use std::{cell::RefCell, marker::PhantomData};
 
 use indexed_db_futures::database::Database;
 use indexed_db_futures::prelude::*;
@@ -130,6 +129,7 @@ struct IdbCommit {
     notify: Option<tokio::sync::oneshot::Sender<Result<()>>>,
 }
 
+#[derive(Clone)]
 enum IdbCommitOp {
     Sync(String),
     Delete(String),
@@ -363,12 +363,13 @@ struct RelaxedIdb {
     idb: Database,
     name2file: RefCell<HashMap<String, IdbFile>>,
     tx: UnboundedSender<IdbCommit>,
-    commit_error: RefCell<Option<CommitFailure>>,
+    commit_errors: RefCell<Vec<CommitFailure>>,
     #[cfg(feature = "test-util")]
     fail_next_commit: Cell<bool>,
 }
 
 struct CommitFailure {
+    op: IdbCommitOp,
     message: String,
     count: u32,
 }
@@ -394,7 +395,7 @@ impl RelaxedIdb {
             idb: indexed_db,
             name2file: RefCell::new(name2file),
             tx,
-            commit_error: RefCell::new(None),
+            commit_errors: RefCell::new(Vec::new()),
             #[cfg(feature = "test-util")]
             fail_next_commit: Cell::new(false),
         })
@@ -647,6 +648,7 @@ impl RelaxedIdb {
         while let Some(commit) = rx.recv().await {
             let IdbCommit { op, notify } = commit;
             let is_barrier = matches!(&op, IdbCommitOp::Barrier(_));
+            let failed_op = op.clone();
             let ret = if !is_barrier && self.should_fail_next_commit() {
                 Err(RelaxedIdbError::Generic("injected commit failure".into()))
             } else {
@@ -659,7 +661,7 @@ impl RelaxedIdb {
             };
             if !is_barrier {
                 if let Err(error) = &ret {
-                    self.record_commit_error(error);
+                    self.record_commit_error(failed_op, error);
                 }
             }
             if let Some(notify) = notify {
@@ -675,44 +677,88 @@ impl RelaxedIdb {
         self.fail_next_commit.replace(false)
     }
 
-    fn record_commit_error(&self, error: &RelaxedIdbError) {
-        let mut pending = self.commit_error.borrow_mut();
-        match pending.as_mut() {
-            Some(failure) => failure.count = failure.count.saturating_add(1),
-            None => {
-                *pending = Some(CommitFailure {
+    #[cfg(not(feature = "test-util"))]
+    fn should_fail_next_commit(&self) -> bool {
+        false
+    }
+
+    fn record_commit_error(&self, op: IdbCommitOp, error: &RelaxedIdbError) {
+        let mut pending = self.commit_errors.borrow_mut();
+        if let Some(failure) = pending.iter_mut().find(|failure| same_op(&failure.op, &op)) {
+            failure.count = failure.count.saturating_add(1);
+        } else if pending.len() < 32 {
+            pending.push(CommitFailure {
+                op,
+                message: error.to_string(),
+                count: 1,
+            });
+        } else if let Some(failure) = pending.last_mut() {
+            failure.count = failure.count.saturating_add(1);
+        }
+    }
+
+    fn retry_operation<'a>(
+        &'a self,
+        op: &'a IdbCommitOp,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + 'a>> {
+        Box::pin(async move {
+            match op {
+                IdbCommitOp::Sync(file) => self.sync_db_impl(file).await,
+                IdbCommitOp::Delete(file) => self.delete_db_impl(file).await,
+                IdbCommitOp::Clear => clear_impl(&self.idb).await,
+                IdbCommitOp::Barrier(_) => Ok(()),
+            }
+        })
+    }
+
+    async fn barrier_impl(&self, file: &str) -> Result<()> {
+        let pending = std::mem::take(&mut *self.commit_errors.borrow_mut());
+        let mut unresolved = Vec::new();
+        let mut reported = None;
+        for failure in pending {
+            match self.retry_operation(&failure.op).await {
+                Ok(()) => reported = Some(failure.message),
+                Err(error) => unresolved.push(CommitFailure {
+                    op: failure.op,
+                    message: format!("{}; retry failed: {error}", failure.message),
+                    count: failure.count,
+                }),
+            }
+        }
+        let mut files = self.name2file.borrow().keys().cloned().collect::<Vec<_>>();
+        if !files.iter().any(|name| name == file) {
+            files.push(file.to_string());
+        }
+        for name in files {
+            if let Err(error) = self.sync_db_impl(&name).await {
+                unresolved.push(CommitFailure {
+                    op: IdbCommitOp::Sync(name),
                     message: error.to_string(),
                     count: 1,
                 });
             }
         }
-    }
-
-    async fn barrier_impl(&self, file: &str) -> Result<()> {
-        let retry = self.sync_db_impl(file).await;
-        let pending = self.commit_error.borrow_mut().take();
-        match (pending, retry) {
-            (None, Ok(())) => Ok(()),
-            (None, Err(error)) => {
-                self.record_commit_error(&error);
-                Err(error)
-            }
-            (Some(failure), Ok(())) => Err(RelaxedIdbError::Generic(format!(
-                "an earlier IndexedDB commit failed ({} occurrence{}): {}",
-                failure.count,
-                if failure.count == 1 { "" } else { "s" },
-                failure.message
-            ))),
-            (Some(failure), Err(error)) => {
-                self.record_commit_error(&error);
-                Err(RelaxedIdbError::Generic(format!(
-                    "an earlier IndexedDB commit failed ({} occurrence{}): {}; retry failed: {error}",
-                    failure.count,
-                    if failure.count == 1 { "" } else { "s" },
-                    failure.message
-                )))
-            }
+        if !unresolved.is_empty() {
+            let message = unresolved
+                .first()
+                .map(|failure| failure.message.clone())
+                .unwrap_or_else(|| "IndexedDB commit failed".into());
+            *self.commit_errors.borrow_mut() = unresolved;
+            return Err(RelaxedIdbError::Generic(message));
         }
+        if let Some(message) = reported {
+            return Err(RelaxedIdbError::Generic(message));
+        }
+        Ok(())
+    }
+}
+
+fn same_op(left: &IdbCommitOp, right: &IdbCommitOp) -> bool {
+    match (left, right) {
+        (IdbCommitOp::Sync(a), IdbCommitOp::Sync(b))
+        | (IdbCommitOp::Delete(a), IdbCommitOp::Delete(b)) => a == b,
+        (IdbCommitOp::Clear, IdbCommitOp::Clear) => true,
+        _ => false,
     }
 }
 
@@ -1058,6 +1104,11 @@ impl RelaxedIdbUtil {
     #[cfg(feature = "test-util")]
     pub fn fail_next_commit(&self) {
         self.pool.fail_next_commit.set(true);
+    }
+
+    #[cfg(feature = "test-util")]
+    pub fn forget_memory_file(&self, filename: &str) {
+        self.pool.name2file.borrow_mut().remove(filename);
     }
 
     /// Delete all database, make sure that all database is closed.
