@@ -130,6 +130,7 @@ enum IdbCommitOp {
     Sync(String),
     Delete(String),
     Clear,
+    Barrier,
 }
 
 enum IdbFile {
@@ -325,6 +326,7 @@ struct RelaxedIdb {
     idb: Database,
     name2file: RefCell<HashMap<String, IdbFile>>,
     tx: UnboundedSender<IdbCommit>,
+    commit_errors: RefCell<Vec<String>>,
 }
 
 impl RelaxedIdb {
@@ -348,6 +350,7 @@ impl RelaxedIdb {
             idb: indexed_db,
             name2file: RefCell::new(name2file),
             tx,
+            commit_errors: RefCell::new(Vec::new()),
         })
     }
 
@@ -372,6 +375,10 @@ impl RelaxedIdb {
             ));
         }
         Ok(WaitCommit(rx))
+    }
+
+    fn barrier(&self) -> Result<WaitCommit> {
+        self.send_task_with_notify(IdbCommitOp::Barrier)
     }
 
     async fn preload_db(&self, files: Vec<String>) -> Result<()> {
@@ -491,25 +498,32 @@ impl RelaxedIdb {
     // already drop
     #[allow(clippy::await_holding_refcell_ref)]
     async fn sync_db_impl(&self, file: &str) -> Result<()> {
-        let mut name2file = self.name2file.borrow_mut();
-        let Some(idb_file) = name2file.get_mut(file) else {
-            return Ok(());
-        };
-
-        let IdbFile::Main(idb_blocks) = idb_file else {
-            return Ok(());
-        };
-
-        idb_blocks.sync_notified = false;
-
-        let file_size = idb_blocks.file_size;
-        let mut truncated_offset = idb_blocks.file_size;
-        while idb_blocks.blocks.remove(&truncated_offset).is_some() {
-            truncated_offset += idb_blocks.block_size;
+        if let Some(IdbFile::Main(idb_blocks)) = self.name2file.borrow_mut().get_mut(file) {
+            idb_blocks.sync_notified = false;
         }
 
-        let tx_blocks = std::mem::take(&mut idb_blocks.tx_blocks);
-        if tx_blocks.is_empty() && file_size == truncated_offset {
+        let (file_size, tx_blocks, blocks_to_put, has_truncation) = {
+            let name2file = self.name2file.borrow();
+            let Some(IdbFile::Main(idb_blocks)) = name2file.get(file) else {
+                return Ok(());
+            };
+
+            let file_size = idb_blocks.file_size;
+            let tx_blocks: Vec<_> = idb_blocks.tx_blocks.iter().copied().collect();
+            let blocks_to_put: Vec<_> = tx_blocks
+                .iter()
+                .filter_map(|offset| {
+                    idb_blocks
+                        .blocks
+                        .get(offset)
+                        .map(|buffer| (*offset, buffer.clone()))
+                })
+                .collect();
+            let has_truncation = idb_blocks.blocks.keys().any(|offset| *offset >= file_size);
+            (file_size, tx_blocks, blocks_to_put, has_truncation)
+        };
+
+        if blocks_to_put.is_empty() && !has_truncation {
             // no need to put or delete
             return Ok(());
         }
@@ -524,17 +538,22 @@ impl RelaxedIdb {
 
         let store = transaction.object_store("blocks")?;
 
-        for offset in tx_blocks {
-            if let Some(buffer) = idb_blocks.blocks.get(&offset) {
-                store.put(&set_block(&path, offset, buffer)).build()?;
-            }
+        for (offset, buffer) in &blocks_to_put {
+            store.put(&set_block(&path, *offset, buffer)).build()?;
         }
         store.delete(key_range(file, file_size)).build()?;
-
-        // The `RefMut` from `name2file` is explicitly dropped here to avoid holding the borrow across an `.await` point.
-        drop(name2file);
-
         transaction.commit().await?;
+
+        let mut name2file = self.name2file.borrow_mut();
+        if let Some(IdbFile::Main(idb_blocks)) = name2file.get_mut(file) {
+            idb_blocks
+                .blocks
+                .retain(|offset, _| *offset < idb_blocks.file_size);
+            for offset in tx_blocks {
+                idb_blocks.tx_blocks.remove(&offset);
+            }
+            idb_blocks.sync_notified = false;
+        }
 
         Ok(())
     }
@@ -542,11 +561,28 @@ impl RelaxedIdb {
     async fn commit_loop(&self, mut rx: UnboundedReceiver<IdbCommit>) {
         while let Some(commit) = rx.recv().await {
             let IdbCommit { op, notify } = commit;
+            let is_barrier = matches!(&op, IdbCommitOp::Barrier);
             let ret = match op {
                 IdbCommitOp::Sync(file) => self.sync_db_impl(&file).await,
                 IdbCommitOp::Delete(file) => self.delete_db_impl(&file).await,
                 IdbCommitOp::Clear => clear_impl(&self.idb).await,
+                IdbCommitOp::Barrier => {
+                    let errors = std::mem::take(&mut *self.commit_errors.borrow_mut());
+                    if errors.is_empty() {
+                        Ok(())
+                    } else {
+                        Err(RelaxedIdbError::Generic(format!(
+                            "one or more IndexedDB commits failed: {}",
+                            errors.join("; ")
+                        )))
+                    }
+                }
             };
+            if !is_barrier {
+                if let Err(error) = &ret {
+                    self.commit_errors.borrow_mut().push(error.to_string());
+                }
+            }
             if let Some(notify) = notify {
                 // An unsuccessful send would be one where the corresponding receiver
                 // has already been deallocated.
@@ -883,6 +919,16 @@ impl RelaxedIdbUtil {
     /// Delete the specified database, make sure that the database is closed.
     pub fn delete_db(&self, filename: &str) -> Result<WaitCommit> {
         self.pool.delete_db(filename)
+    }
+
+    /// Wait until every commit queued before this call has completed.
+    ///
+    /// SQLite's synchronous commit callback cannot await IndexedDB, so ordinary
+    /// VFS sync notifications are intentionally fire-and-forget. This barrier
+    /// is ordered on the same queue and reports every earlier failure, including
+    /// failures whose original notification had no receiver.
+    pub fn barrier(&self) -> Result<WaitCommit> {
+        self.pool.barrier()
     }
 
     /// Delete all database, make sure that all database is closed.

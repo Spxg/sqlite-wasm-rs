@@ -111,6 +111,8 @@ async fn test_idb_vfs_utils() {
         sqlite3_close(db);
     };
 
+    util.barrier().unwrap().await.unwrap();
+
     // export and import to new.db
     let db = util.export_db("test_idb_vfs_utils.db").unwrap();
     util.import_db("new.db", &db).unwrap().await.unwrap();
