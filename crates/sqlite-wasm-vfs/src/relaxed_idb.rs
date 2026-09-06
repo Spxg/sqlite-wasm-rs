@@ -55,6 +55,8 @@ use rsqlite_vfs::{
     SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
 };
 use std::time::Duration;
+#[cfg(feature = "test-util")]
+use std::{cell::Cell, rc::Rc};
 use std::{cell::RefCell, marker::PhantomData};
 
 use indexed_db_futures::database::Database;
@@ -68,6 +70,7 @@ use std::task::{Context, Poll};
 use std::{
     collections::HashMap,
     ffi::{c_char, CStr},
+    sync::atomic::{AtomicU64, Ordering},
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use wasm_bindgen::JsValue;
@@ -126,10 +129,12 @@ struct IdbCommit {
     notify: Option<tokio::sync::oneshot::Sender<Result<()>>>,
 }
 
+#[derive(Clone)]
 enum IdbCommitOp {
     Sync(String),
     Delete(String),
     Clear,
+    Barrier(String),
 }
 
 enum IdbFile {
@@ -147,13 +152,31 @@ impl IdbFile {
     }
 }
 
-#[derive(Default)]
 struct IdbPageFile {
+    incarnation: u64,
     file_size: usize,
     block_size: usize,
     blocks: HashMap<usize, Uint8Array>,
+    block_generation: HashMap<usize, u64>,
     tx_blocks: HashSet<usize>,
     sync_notified: bool,
+}
+
+static NEXT_FILE_INCARNATION: AtomicU64 = AtomicU64::new(1);
+static NEXT_BLOCK_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+impl Default for IdbPageFile {
+    fn default() -> Self {
+        Self {
+            incarnation: NEXT_FILE_INCARNATION.fetch_add(1, Ordering::Relaxed),
+            file_size: 0,
+            block_size: 0,
+            blocks: HashMap::new(),
+            block_generation: HashMap::new(),
+            tx_blocks: HashSet::new(),
+            sync_notified: false,
+        }
+    }
 }
 
 impl VfsFile for IdbPageFile {
@@ -176,6 +199,8 @@ impl VfsFile for IdbPageFile {
         for fill in (self.file_size..offset).step_by(page_size) {
             self.blocks
                 .insert(fill, Uint8Array::new_with_length(page_size as u32));
+            self.block_generation
+                .insert(fill, NEXT_BLOCK_GENERATION.fetch_add(1, Ordering::Relaxed));
             self.tx_blocks.insert(fill);
         }
 
@@ -185,6 +210,10 @@ impl VfsFile for IdbPageFile {
             self.blocks.insert(offset, Uint8Array::new_from_slice(buf));
         }
 
+        self.block_generation.insert(
+            offset,
+            NEXT_BLOCK_GENERATION.fetch_add(1, Ordering::Relaxed),
+        );
         self.tx_blocks.insert(offset);
         self.block_size = page_size;
         self.file_size = self.file_size.max(offset + page_size);
@@ -285,12 +314,21 @@ async fn preload_db_impl(
                 };
                 db.file_size += db.block_size;
                 db.blocks.insert(offset, data);
+                db.block_generation.insert(
+                    offset,
+                    NEXT_BLOCK_GENERATION.fetch_add(1, Ordering::Relaxed),
+                );
             }
             hash_map::Entry::Vacant(vacant_entry) => {
                 vacant_entry.insert(IdbFile::Main(IdbPageFile {
+                    incarnation: NEXT_FILE_INCARNATION.fetch_add(1, Ordering::Relaxed),
                     file_size: data.length() as _,
                     block_size: data.length() as _,
                     blocks: HashMap::from([(offset, data)]),
+                    block_generation: HashMap::from([(
+                        offset,
+                        NEXT_BLOCK_GENERATION.fetch_add(1, Ordering::Relaxed),
+                    )]),
                     tx_blocks: HashSet::new(),
                     sync_notified: false,
                 }));
@@ -325,6 +363,19 @@ struct RelaxedIdb {
     idb: Database,
     name2file: RefCell<HashMap<String, IdbFile>>,
     tx: UnboundedSender<IdbCommit>,
+    commit_errors: RefCell<Vec<CommitFailure>>,
+    fatal_error: RefCell<Option<String>>,
+    #[cfg(feature = "test-util")]
+    fail_commits: Cell<u32>,
+    #[cfg(feature = "test-util")]
+    pause_after_snapshot: RefCell<Option<(Rc<tokio::sync::Semaphore>, Rc<tokio::sync::Notify>)>>,
+}
+
+struct CommitFailure {
+    op: IdbCommitOp,
+    incarnation: Option<u64>,
+    message: String,
+    count: u32,
 }
 
 impl RelaxedIdb {
@@ -348,6 +399,12 @@ impl RelaxedIdb {
             idb: indexed_db,
             name2file: RefCell::new(name2file),
             tx,
+            commit_errors: RefCell::new(Vec::new()),
+            fatal_error: RefCell::new(None),
+            #[cfg(feature = "test-util")]
+            fail_commits: Cell::new(0),
+            #[cfg(feature = "test-util")]
+            pause_after_snapshot: RefCell::new(None),
         })
     }
 
@@ -372,6 +429,10 @@ impl RelaxedIdb {
             ));
         }
         Ok(WaitCommit(rx))
+    }
+
+    fn barrier(&self, filename: &str) -> Result<WaitCommit> {
+        self.send_task_with_notify(IdbCommitOp::Barrier(filename.into()))
     }
 
     async fn preload_db(&self, files: Vec<String>) -> Result<()> {
@@ -420,13 +481,24 @@ impl RelaxedIdb {
         }
 
         let tx_blocks = blocks.keys().copied().collect();
+        let block_generation = blocks
+            .keys()
+            .map(|offset| {
+                (
+                    *offset,
+                    NEXT_BLOCK_GENERATION.fetch_add(1, Ordering::Relaxed),
+                )
+            })
+            .collect();
 
         self.name2file.borrow_mut().insert(
             filename.into(),
             IdbFile::Main(IdbPageFile {
+                incarnation: NEXT_FILE_INCARNATION.fetch_add(1, Ordering::Relaxed),
                 file_size: blocks.len() * page_size,
                 block_size: page_size,
                 blocks,
+                block_generation,
                 tx_blocks,
                 sync_notified: false,
             }),
@@ -488,30 +560,59 @@ impl RelaxedIdb {
         Ok(())
     }
 
-    // already drop
-    #[allow(clippy::await_holding_refcell_ref)]
     async fn sync_db_impl(&self, file: &str) -> Result<()> {
-        let mut name2file = self.name2file.borrow_mut();
-        let Some(idb_file) = name2file.get_mut(file) else {
-            return Ok(());
-        };
-
-        let IdbFile::Main(idb_blocks) = idb_file else {
-            return Ok(());
-        };
-
-        idb_blocks.sync_notified = false;
-
-        let file_size = idb_blocks.file_size;
-        let mut truncated_offset = idb_blocks.file_size;
-        while idb_blocks.blocks.remove(&truncated_offset).is_some() {
-            truncated_offset += idb_blocks.block_size;
+        if let Some(IdbFile::Main(idb_blocks)) = self.name2file.borrow_mut().get_mut(file) {
+            idb_blocks.sync_notified = false;
         }
 
-        let tx_blocks = std::mem::take(&mut idb_blocks.tx_blocks);
-        if tx_blocks.is_empty() && file_size == truncated_offset {
+        let (incarnation, file_size, tx_blocks, blocks_to_put, has_truncation) = {
+            let name2file = self.name2file.borrow();
+            let Some(IdbFile::Main(idb_blocks)) = name2file.get(file) else {
+                return Ok(());
+            };
+
+            let incarnation = idb_blocks.incarnation;
+            let file_size = idb_blocks.file_size;
+            let tx_blocks: Vec<_> = idb_blocks.tx_blocks.iter().copied().collect();
+            let blocks_to_put: Vec<_> = tx_blocks
+                .iter()
+                .filter_map(|offset| {
+                    let buffer = idb_blocks.blocks.get(offset)?;
+                    if *offset >= file_size {
+                        return None;
+                    }
+                    let mut bytes = vec![0; buffer.length() as usize];
+                    buffer.copy_to(&mut bytes);
+                    Some((
+                        *offset,
+                        idb_blocks
+                            .block_generation
+                            .get(offset)
+                            .copied()
+                            .unwrap_or(0),
+                        Uint8Array::new_from_slice(&bytes),
+                    ))
+                })
+                .collect();
+            let has_truncation = idb_blocks.blocks.keys().any(|offset| *offset >= file_size);
+            (
+                incarnation,
+                file_size,
+                tx_blocks,
+                blocks_to_put,
+                has_truncation,
+            )
+        };
+
+        if blocks_to_put.is_empty() && !has_truncation {
             // no need to put or delete
             return Ok(());
+        }
+
+        #[cfg(feature = "test-util")]
+        if let Some((gate, entered)) = self.pause_after_snapshot.borrow_mut().take() {
+            entered.notify_one();
+            gate.acquire().await.expect("snapshot test gate").forget();
         }
 
         let path = JsValue::from(file);
@@ -524,17 +625,34 @@ impl RelaxedIdb {
 
         let store = transaction.object_store("blocks")?;
 
-        for offset in tx_blocks {
-            if let Some(buffer) = idb_blocks.blocks.get(&offset) {
-                store.put(&set_block(&path, offset, buffer)).build()?;
-            }
+        for (offset, _, buffer) in &blocks_to_put {
+            store.put(&set_block(&path, *offset, buffer)).build()?;
         }
         store.delete(key_range(file, file_size)).build()?;
-
-        // The `RefMut` from `name2file` is explicitly dropped here to avoid holding the borrow across an `.await` point.
-        drop(name2file);
-
         transaction.commit().await?;
+
+        let mut name2file = self.name2file.borrow_mut();
+        if let Some(IdbFile::Main(idb_blocks)) = name2file.get_mut(file) {
+            if idb_blocks.incarnation == incarnation {
+                for (offset, generation, _) in &blocks_to_put {
+                    if idb_blocks.block_generation.get(offset) == Some(generation) {
+                        idb_blocks.tx_blocks.remove(offset);
+                    }
+                }
+                if idb_blocks.file_size == file_size {
+                    idb_blocks.blocks.retain(|offset, _| *offset < file_size);
+                    idb_blocks
+                        .block_generation
+                        .retain(|offset, _| *offset < file_size);
+                    for offset in tx_blocks {
+                        if offset >= file_size {
+                            idb_blocks.tx_blocks.remove(&offset);
+                        }
+                    }
+                }
+            }
+            idb_blocks.sync_notified = false;
+        }
 
         Ok(())
     }
@@ -542,17 +660,187 @@ impl RelaxedIdb {
     async fn commit_loop(&self, mut rx: UnboundedReceiver<IdbCommit>) {
         while let Some(commit) = rx.recv().await {
             let IdbCommit { op, notify } = commit;
-            let ret = match op {
-                IdbCommitOp::Sync(file) => self.sync_db_impl(&file).await,
-                IdbCommitOp::Delete(file) => self.delete_db_impl(&file).await,
-                IdbCommitOp::Clear => clear_impl(&self.idb).await,
+            let is_barrier = matches!(&op, IdbCommitOp::Barrier(_));
+            let failed_op = op.clone();
+            let ret = if !is_barrier && self.should_fail_next_commit() {
+                Err(RelaxedIdbError::Generic("injected commit failure".into()))
+            } else {
+                match op {
+                    IdbCommitOp::Sync(file) => self.sync_db_impl(&file).await,
+                    IdbCommitOp::Delete(file) => self.delete_db_impl(&file).await,
+                    IdbCommitOp::Clear => clear_impl(&self.idb).await,
+                    IdbCommitOp::Barrier(file) => self.barrier_impl(&file).await,
+                }
             };
+            if !is_barrier {
+                if let Err(error) = &ret {
+                    self.record_commit_error(failed_op, error);
+                }
+            }
             if let Some(notify) = notify {
                 // An unsuccessful send would be one where the corresponding receiver
                 // has already been deallocated.
                 let _ = notify.send(ret);
             }
         }
+    }
+
+    #[cfg(feature = "test-util")]
+    fn should_fail_next_commit(&self) -> bool {
+        let remaining = self.fail_commits.get();
+        self.fail_commits.set(remaining.saturating_sub(1));
+        remaining > 0
+    }
+
+    #[cfg(not(feature = "test-util"))]
+    fn should_fail_next_commit(&self) -> bool {
+        false
+    }
+
+    fn record_commit_error(&self, op: IdbCommitOp, error: &RelaxedIdbError) {
+        if matches!(op, IdbCommitOp::Delete(_) | IdbCommitOp::Clear) {
+            let mut fatal = self.fatal_error.borrow_mut();
+            if fatal.is_none() {
+                *fatal = Some(error.to_string());
+            }
+            return;
+        }
+        let incarnation = match &op {
+            IdbCommitOp::Sync(file) => self.file_incarnation(file),
+            _ => None,
+        };
+        let mut pending = self.commit_errors.borrow_mut();
+        if let Some(failure) = pending.iter_mut().find(|failure| same_op(&failure.op, &op)) {
+            failure.count = failure.count.saturating_add(1);
+        } else if pending.len() < 32 {
+            pending.push(CommitFailure {
+                op,
+                incarnation,
+                message: error.to_string(),
+                count: 1,
+            });
+        } else if let Some(failure) = pending.last_mut() {
+            failure.count = failure.count.saturating_add(1);
+            *self.fatal_error.borrow_mut() = Some("too many distinct IndexedDB failures".into());
+        }
+    }
+
+    fn file_incarnation(&self, file: &str) -> Option<u64> {
+        self.name2file
+            .borrow()
+            .get(file)
+            .and_then(|entry| match entry {
+                IdbFile::Main(file) => Some(file.incarnation),
+                IdbFile::Temp(_) => None,
+            })
+    }
+
+    fn retain_unresolved(&self, unresolved: &mut Vec<CommitFailure>, failure: CommitFailure) {
+        if let Some(existing) = unresolved
+            .iter_mut()
+            .find(|existing| same_op(&existing.op, &failure.op))
+        {
+            existing.count = existing.count.saturating_add(failure.count);
+        } else if unresolved.len() < 32 {
+            unresolved.push(failure);
+        } else {
+            *self.fatal_error.borrow_mut() = Some("too many unresolved IndexedDB failures".into());
+        }
+    }
+
+    fn retry_operation<'a>(
+        &'a self,
+        op: &'a IdbCommitOp,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + 'a>> {
+        Box::pin(async move {
+            match op {
+                IdbCommitOp::Sync(file) => self.sync_db_impl(file).await,
+                IdbCommitOp::Delete(_) | IdbCommitOp::Clear | IdbCommitOp::Barrier(_) => Err(
+                    RelaxedIdbError::Generic("destructive commit failure cannot be retried".into()),
+                ),
+            }
+        })
+    }
+
+    async fn barrier_impl(&self, file: &str) -> Result<()> {
+        if let Some(error) = self.fatal_error.borrow().clone() {
+            return Err(RelaxedIdbError::Generic(error));
+        }
+        let pending = std::mem::take(&mut *self.commit_errors.borrow_mut());
+        let mut unresolved = Vec::new();
+        let mut reported = None;
+        for failure in pending {
+            let Some(failed_file) = op_file(&failure.op) else {
+                *self.fatal_error.borrow_mut() = Some(failure.message.clone());
+                return Err(RelaxedIdbError::Generic(failure.message));
+            };
+            if self.file_incarnation(failed_file) != failure.incarnation {
+                *self.fatal_error.borrow_mut() = Some(failure.message.clone());
+                return Err(RelaxedIdbError::Generic(failure.message));
+            }
+            match self.retry_operation(&failure.op).await {
+                Ok(()) => reported = Some(failure.message),
+                Err(_error) => self.retain_unresolved(
+                    &mut unresolved,
+                    CommitFailure {
+                        op: failure.op,
+                        incarnation: failure.incarnation,
+                        message: failure.message,
+                        count: failure.count.saturating_add(1),
+                    },
+                ),
+            }
+        }
+        let mut files = self.name2file.borrow().keys().cloned().collect::<Vec<_>>();
+        if !files.iter().any(|name| name == file) {
+            files.push(file.to_string());
+        }
+        for name in files {
+            if let Err(error) = self.sync_db_impl(&name).await {
+                let incarnation = self.file_incarnation(&name);
+                if incarnation.is_none() {
+                    *self.fatal_error.borrow_mut() = Some(error.to_string());
+                    return Err(error);
+                }
+                self.retain_unresolved(
+                    &mut unresolved,
+                    CommitFailure {
+                        op: IdbCommitOp::Sync(name),
+                        incarnation,
+                        message: error.to_string(),
+                        count: 1,
+                    },
+                );
+            }
+        }
+        if !unresolved.is_empty() {
+            let message = unresolved
+                .first()
+                .map(|failure| failure.message.clone())
+                .unwrap_or_else(|| "IndexedDB commit failed".into());
+            *self.commit_errors.borrow_mut() = unresolved;
+            return Err(RelaxedIdbError::Generic(message));
+        }
+        if let Some(message) = reported {
+            return Err(RelaxedIdbError::Generic(message));
+        }
+        Ok(())
+    }
+}
+
+fn op_file(op: &IdbCommitOp) -> Option<&str> {
+    match op {
+        IdbCommitOp::Sync(file) => Some(file),
+        _ => None,
+    }
+}
+
+fn same_op(left: &IdbCommitOp, right: &IdbCommitOp) -> bool {
+    match (left, right) {
+        (IdbCommitOp::Sync(a), IdbCommitOp::Sync(b))
+        | (IdbCommitOp::Delete(a), IdbCommitOp::Delete(b)) => a == b,
+        (IdbCommitOp::Clear, IdbCommitOp::Clear) => true,
+        _ => false,
     }
 }
 
@@ -883,6 +1171,40 @@ impl RelaxedIdbUtil {
     /// Delete the specified database, make sure that the database is closed.
     pub fn delete_db(&self, filename: &str) -> Result<WaitCommit> {
         self.pool.delete_db(filename)
+    }
+
+    /// Wait until every commit queued before this call has completed.
+    ///
+    /// SQLite's synchronous commit callback cannot await IndexedDB, so ordinary
+    /// VFS sync notifications are intentionally fire-and-forget. This barrier
+    /// is ordered on the same queue and reports every earlier failure, including
+    /// failures whose original notification had no receiver.
+    pub fn barrier(&self, filename: &str) -> Result<WaitCommit> {
+        self.pool.barrier(filename)
+    }
+
+    #[cfg(feature = "test-util")]
+    pub fn fail_next_commit(&self) {
+        self.pool.fail_commits.set(1);
+    }
+
+    #[cfg(feature = "test-util")]
+    pub fn fail_commits(&self, count: u32) {
+        self.pool.fail_commits.set(count);
+    }
+
+    #[cfg(feature = "test-util")]
+    pub fn pause_after_snapshot(&self) -> (Rc<tokio::sync::Semaphore>, Rc<tokio::sync::Notify>) {
+        let gate = Rc::new(tokio::sync::Semaphore::new(0));
+        let entered = Rc::new(tokio::sync::Notify::new());
+        *self.pool.pause_after_snapshot.borrow_mut() =
+            Some((Rc::clone(&gate), Rc::clone(&entered)));
+        (gate, entered)
+    }
+
+    #[cfg(feature = "test-util")]
+    pub fn forget_memory_file(&self, filename: &str) {
+        self.pool.name2file.borrow_mut().remove(filename);
     }
 
     /// Delete all database, make sure that all database is closed.
