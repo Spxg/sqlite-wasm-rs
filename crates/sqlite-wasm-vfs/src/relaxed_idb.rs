@@ -366,7 +366,7 @@ struct RelaxedIdb {
     commit_errors: RefCell<Vec<CommitFailure>>,
     fatal_error: RefCell<Option<String>>,
     #[cfg(feature = "test-util")]
-    fail_next_commit: Cell<bool>,
+    fail_commits: Cell<u32>,
 }
 
 struct CommitFailure {
@@ -400,7 +400,7 @@ impl RelaxedIdb {
             commit_errors: RefCell::new(Vec::new()),
             fatal_error: RefCell::new(None),
             #[cfg(feature = "test-util")]
-            fail_next_commit: Cell::new(false),
+            fail_commits: Cell::new(0),
         })
     }
 
@@ -677,7 +677,9 @@ impl RelaxedIdb {
 
     #[cfg(feature = "test-util")]
     fn should_fail_next_commit(&self) -> bool {
-        self.fail_next_commit.replace(false)
+        let remaining = self.fail_commits.get();
+        self.fail_commits.set(remaining.saturating_sub(1));
+        remaining > 0
     }
 
     #[cfg(not(feature = "test-util"))]
@@ -723,6 +725,19 @@ impl RelaxedIdb {
             })
     }
 
+    fn retain_unresolved(&self, unresolved: &mut Vec<CommitFailure>, failure: CommitFailure) {
+        if let Some(existing) = unresolved
+            .iter_mut()
+            .find(|existing| same_op(&existing.op, &failure.op))
+        {
+            existing.count = existing.count.saturating_add(failure.count);
+        } else if unresolved.len() < 32 {
+            unresolved.push(failure);
+        } else {
+            *self.fatal_error.borrow_mut() = Some("too many unresolved IndexedDB failures".into());
+        }
+    }
+
     fn retry_operation<'a>(
         &'a self,
         op: &'a IdbCommitOp,
@@ -755,12 +770,15 @@ impl RelaxedIdb {
             }
             match self.retry_operation(&failure.op).await {
                 Ok(()) => reported = Some(failure.message),
-                Err(error) => unresolved.push(CommitFailure {
-                    op: failure.op,
-                    incarnation: failure.incarnation,
-                    message: format!("{}; retry failed: {error}", failure.message),
-                    count: failure.count,
-                }),
+                Err(_error) => self.retain_unresolved(
+                    &mut unresolved,
+                    CommitFailure {
+                        op: failure.op,
+                        incarnation: failure.incarnation,
+                        message: failure.message,
+                        count: failure.count.saturating_add(1),
+                    },
+                ),
             }
         }
         let mut files = self.name2file.borrow().keys().cloned().collect::<Vec<_>>();
@@ -774,12 +792,15 @@ impl RelaxedIdb {
                     *self.fatal_error.borrow_mut() = Some(error.to_string());
                     return Err(error);
                 }
-                unresolved.push(CommitFailure {
-                    op: IdbCommitOp::Sync(name),
-                    incarnation,
-                    message: error.to_string(),
-                    count: 1,
-                });
+                self.retain_unresolved(
+                    &mut unresolved,
+                    CommitFailure {
+                        op: IdbCommitOp::Sync(name),
+                        incarnation,
+                        message: error.to_string(),
+                        count: 1,
+                    },
+                );
             }
         }
         if !unresolved.is_empty() {
@@ -1154,7 +1175,12 @@ impl RelaxedIdbUtil {
 
     #[cfg(feature = "test-util")]
     pub fn fail_next_commit(&self) {
-        self.pool.fail_next_commit.set(true);
+        self.pool.fail_commits.set(1);
+    }
+
+    #[cfg(feature = "test-util")]
+    pub fn fail_commits(&self, count: u32) {
+        self.pool.fail_commits.set(count);
     }
 
     #[cfg(feature = "test-util")]
