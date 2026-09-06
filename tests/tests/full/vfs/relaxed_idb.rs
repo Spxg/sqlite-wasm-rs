@@ -111,7 +111,10 @@ async fn test_idb_vfs_utils() {
         sqlite3_close(db);
     };
 
-    util.barrier().unwrap().await.unwrap();
+    util.barrier("test_idb_vfs_utils.db")
+        .unwrap()
+        .await
+        .unwrap();
 
     // export and import to new.db
     let db = util.export_db("test_idb_vfs_utils.db").unwrap();
@@ -140,6 +143,48 @@ async fn test_idb_vfs_utils() {
         .await
         .unwrap();
     util.delete_db("new.db").unwrap().await.unwrap();
+}
+
+#[wasm_bindgen_test]
+async fn test_idb_vfs_barrier_reports_failure_before_retrying_dirty_blocks() {
+    let util = install_idb_vfs(
+        &RelaxedIdbCfgBuilder::new()
+            .vfs_name("relaxed-idb-barrier-failure")
+            .clear_on_init(true)
+            .preload(Preload::None)
+            .build(),
+        true,
+    )
+    .await
+    .unwrap();
+    util.preload_db(vec!["test_idb_vfs_barrier_failure.db".into()])
+        .await
+        .unwrap();
+
+    let mut db = std::ptr::null_mut();
+    let ret = unsafe {
+        sqlite3_open_v2(
+            c"test_idb_vfs_barrier_failure.db".as_ptr(),
+            &mut db as *mut _,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(SQLITE_OK, ret);
+    prepare_simple_db(db);
+    unsafe { sqlite3_close(db) };
+
+    util.fail_next_commit();
+    assert!(util
+        .barrier("test_idb_vfs_barrier_failure.db")
+        .unwrap()
+        .await
+        .is_err());
+    assert!(util
+        .barrier("test_idb_vfs_barrier_failure.db")
+        .unwrap()
+        .await
+        .is_ok());
 }
 
 #[wasm_bindgen_test]

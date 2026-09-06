@@ -31,6 +31,9 @@ web-sys = { version = "0.3.81", features = [
 ]}
 indexed_db_futures = "0.6.4"
 
+[features]
+test-util = []
+
 [dev-dependencies]
 wasm-bindgen-test = "0.3.54"
 sqlite-wasm-rs = { version = "0.5.1", default-features = false }
