@@ -364,12 +364,14 @@ struct RelaxedIdb {
     name2file: RefCell<HashMap<String, IdbFile>>,
     tx: UnboundedSender<IdbCommit>,
     commit_errors: RefCell<Vec<CommitFailure>>,
+    fatal_error: RefCell<Option<String>>,
     #[cfg(feature = "test-util")]
     fail_next_commit: Cell<bool>,
 }
 
 struct CommitFailure {
     op: IdbCommitOp,
+    incarnation: Option<u64>,
     message: String,
     count: u32,
 }
@@ -396,6 +398,7 @@ impl RelaxedIdb {
             name2file: RefCell::new(name2file),
             tx,
             commit_errors: RefCell::new(Vec::new()),
+            fatal_error: RefCell::new(None),
             #[cfg(feature = "test-util")]
             fail_next_commit: Cell::new(false),
         })
@@ -683,18 +686,41 @@ impl RelaxedIdb {
     }
 
     fn record_commit_error(&self, op: IdbCommitOp, error: &RelaxedIdbError) {
+        if matches!(op, IdbCommitOp::Delete(_) | IdbCommitOp::Clear) {
+            let mut fatal = self.fatal_error.borrow_mut();
+            if fatal.is_none() {
+                *fatal = Some(error.to_string());
+            }
+            return;
+        }
+        let incarnation = match &op {
+            IdbCommitOp::Sync(file) => self.file_incarnation(file),
+            _ => None,
+        };
         let mut pending = self.commit_errors.borrow_mut();
         if let Some(failure) = pending.iter_mut().find(|failure| same_op(&failure.op, &op)) {
             failure.count = failure.count.saturating_add(1);
         } else if pending.len() < 32 {
             pending.push(CommitFailure {
                 op,
+                incarnation,
                 message: error.to_string(),
                 count: 1,
             });
         } else if let Some(failure) = pending.last_mut() {
             failure.count = failure.count.saturating_add(1);
+            *self.fatal_error.borrow_mut() = Some("too many distinct IndexedDB failures".into());
         }
+    }
+
+    fn file_incarnation(&self, file: &str) -> Option<u64> {
+        self.name2file
+            .borrow()
+            .get(file)
+            .and_then(|entry| match entry {
+                IdbFile::Main(file) => Some(file.incarnation),
+                IdbFile::Temp(_) => None,
+            })
     }
 
     fn retry_operation<'a>(
@@ -704,22 +730,34 @@ impl RelaxedIdb {
         Box::pin(async move {
             match op {
                 IdbCommitOp::Sync(file) => self.sync_db_impl(file).await,
-                IdbCommitOp::Delete(file) => self.delete_db_impl(file).await,
-                IdbCommitOp::Clear => clear_impl(&self.idb).await,
-                IdbCommitOp::Barrier(_) => Ok(()),
+                IdbCommitOp::Delete(_) | IdbCommitOp::Clear | IdbCommitOp::Barrier(_) => Err(
+                    RelaxedIdbError::Generic("destructive commit failure cannot be retried".into()),
+                ),
             }
         })
     }
 
     async fn barrier_impl(&self, file: &str) -> Result<()> {
+        if let Some(error) = self.fatal_error.borrow().clone() {
+            return Err(RelaxedIdbError::Generic(error));
+        }
         let pending = std::mem::take(&mut *self.commit_errors.borrow_mut());
         let mut unresolved = Vec::new();
         let mut reported = None;
         for failure in pending {
+            let Some(failed_file) = op_file(&failure.op) else {
+                *self.fatal_error.borrow_mut() = Some(failure.message.clone());
+                return Err(RelaxedIdbError::Generic(failure.message));
+            };
+            if self.file_incarnation(failed_file) != failure.incarnation {
+                *self.fatal_error.borrow_mut() = Some(failure.message.clone());
+                return Err(RelaxedIdbError::Generic(failure.message));
+            }
             match self.retry_operation(&failure.op).await {
                 Ok(()) => reported = Some(failure.message),
                 Err(error) => unresolved.push(CommitFailure {
                     op: failure.op,
+                    incarnation: failure.incarnation,
                     message: format!("{}; retry failed: {error}", failure.message),
                     count: failure.count,
                 }),
@@ -731,8 +769,14 @@ impl RelaxedIdb {
         }
         for name in files {
             if let Err(error) = self.sync_db_impl(&name).await {
+                let incarnation = self.file_incarnation(&name);
+                if incarnation.is_none() {
+                    *self.fatal_error.borrow_mut() = Some(error.to_string());
+                    return Err(error);
+                }
                 unresolved.push(CommitFailure {
                     op: IdbCommitOp::Sync(name),
+                    incarnation,
                     message: error.to_string(),
                     count: 1,
                 });
@@ -750,6 +794,13 @@ impl RelaxedIdb {
             return Err(RelaxedIdbError::Generic(message));
         }
         Ok(())
+    }
+}
+
+fn op_file(op: &IdbCommitOp) -> Option<&str> {
+    match op {
+        IdbCommitOp::Sync(file) => Some(file),
+        _ => None,
     }
 }
 

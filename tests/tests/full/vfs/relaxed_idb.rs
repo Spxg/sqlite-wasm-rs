@@ -234,11 +234,23 @@ async fn test_idb_vfs_barrier_retries_failed_delete() {
         .unwrap()
         .await
         .is_err());
+    let mut db = std::ptr::null_mut();
+    let ret = unsafe {
+        sqlite3_open_v2(
+            c"test_idb_vfs_barrier_delete.db".as_ptr(),
+            &mut db as *mut _,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(SQLITE_OK, ret);
+    prepare_simple_db(db);
+    unsafe { sqlite3_close(db) };
     assert!(util
         .barrier("test_idb_vfs_barrier_delete.db")
         .unwrap()
         .await
-        .is_ok());
+        .is_err());
 }
 
 #[wasm_bindgen_test]
