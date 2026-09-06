@@ -196,7 +196,7 @@ async fn test_idb_vfs_barrier_reports_failure_before_retrying_dirty_blocks() {
 }
 
 #[wasm_bindgen_test]
-async fn test_idb_vfs_barrier_retries_failed_delete() {
+async fn test_idb_vfs_barrier_poisoned_after_failed_delete() {
     let util = install_idb_vfs(
         &RelaxedIdbCfgBuilder::new()
             .vfs_name("relaxed-idb-barrier-delete")
