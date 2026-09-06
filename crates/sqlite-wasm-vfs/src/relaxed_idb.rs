@@ -54,9 +54,9 @@ use rsqlite_vfs::{
     register_vfs, registered_vfs, ImportDbError, MemChunksFile, OsCallback, RegisterVfsError,
     SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
 };
-#[cfg(feature = "test-util")]
-use std::cell::Cell;
 use std::time::Duration;
+#[cfg(feature = "test-util")]
+use std::{cell::Cell, rc::Rc};
 use std::{cell::RefCell, marker::PhantomData};
 
 use indexed_db_futures::database::Database;
@@ -367,6 +367,8 @@ struct RelaxedIdb {
     fatal_error: RefCell<Option<String>>,
     #[cfg(feature = "test-util")]
     fail_commits: Cell<u32>,
+    #[cfg(feature = "test-util")]
+    pause_after_snapshot: RefCell<Option<(Rc<tokio::sync::Semaphore>, Rc<tokio::sync::Notify>)>>,
 }
 
 struct CommitFailure {
@@ -401,6 +403,8 @@ impl RelaxedIdb {
             fatal_error: RefCell::new(None),
             #[cfg(feature = "test-util")]
             fail_commits: Cell::new(0),
+            #[cfg(feature = "test-util")]
+            pause_after_snapshot: RefCell::new(None),
         })
     }
 
@@ -603,6 +607,12 @@ impl RelaxedIdb {
         if blocks_to_put.is_empty() && !has_truncation {
             // no need to put or delete
             return Ok(());
+        }
+
+        #[cfg(feature = "test-util")]
+        if let Some((gate, entered)) = self.pause_after_snapshot.borrow_mut().take() {
+            entered.notify_one();
+            gate.acquire().await.expect("snapshot test gate").forget();
         }
 
         let path = JsValue::from(file);
@@ -1181,6 +1191,15 @@ impl RelaxedIdbUtil {
     #[cfg(feature = "test-util")]
     pub fn fail_commits(&self, count: u32) {
         self.pool.fail_commits.set(count);
+    }
+
+    #[cfg(feature = "test-util")]
+    pub fn pause_after_snapshot(&self) -> (Rc<tokio::sync::Semaphore>, Rc<tokio::sync::Notify>) {
+        let gate = Rc::new(tokio::sync::Semaphore::new(0));
+        let entered = Rc::new(tokio::sync::Notify::new());
+        *self.pool.pause_after_snapshot.borrow_mut() =
+            Some((Rc::clone(&gate), Rc::clone(&entered)));
+        (gate, entered)
     }
 
     #[cfg(feature = "test-util")]
