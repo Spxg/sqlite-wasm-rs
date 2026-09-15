@@ -10,6 +10,11 @@ description = "some experimental VFS implementations."
 categories = ["development-tools::ffi", "wasm", "database"]
 keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "javascript"]
 
+[features]
+default = ["sahpool", "relaxed-idb"]
+sahpool = ["dep:web-sys"]
+relaxed-idb = ["dep:indexed_db_futures"]
+
 [dependencies]
 rsqlite-vfs = "0.1"
 
@@ -18,7 +23,7 @@ js-sys = "0.3.81"
 wasm-bindgen-futures = "0.4.54"
 tokio = { version = "1.45.1", features = ["sync"] }
 thiserror = "2.0.12"
-web-sys = { version = "0.3.81", features = [
+web-sys = { version = "0.3.81", optional = true, features = [
   "StorageManager",
   "FileSystemSyncAccessHandle",
   "FileSystemDirectoryHandle",
@@ -29,7 +34,7 @@ web-sys = { version = "0.3.81", features = [
   "FileSystemGetFileOptions",
   "FileSystemFileHandle",
 ]}
-indexed_db_futures = "0.6.4"
+indexed_db_futures = { version = "0.6.4", optional = true }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.54"

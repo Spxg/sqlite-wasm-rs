@@ -160,15 +160,25 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
+        features:
+          - ""
+          - "--no-default-features"
+          - "--no-default-features --features sahpool"
+          - "--no-default-features --features relaxed-idb"
+          - "--all-features"
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+    - name: Check library without dev-dependencies
+      run: |
+        rustup target add wasm32-unknown-unknown
+        cargo check -p sqlite-wasm-vfs --lib --target wasm32-unknown-unknown ${{ matrix.features }}
     - name: Test
       run: |
         cd crates/sqlite-wasm-vfs
-        wasm-pack test --node
+        wasm-pack test --chrome --headless ${{ matrix.features }}
 
   test_sqlite_wasm_tests:
     strategy:

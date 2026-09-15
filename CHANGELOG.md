@@ -5,6 +5,10 @@
 
 ### Added
 
+* Added independent `sahpool` and `relaxed-idb` features to `sqlite-wasm-vfs`, so
+  unused VFS implementations and their implementation-specific dependencies can
+  be disabled. Both features remain enabled by default.
+
 ### Fixed
 
 ### Changed

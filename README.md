@@ -43,6 +43,18 @@ fn open_db() {
 sqlite-wasm-vfs = "0.2"
 ```
 
+Both `sqlite-wasm-vfs` implementations are enabled by default. To use only the
+OPFS SAH pool, without the IndexedDB dependency:
+
+```toml
+[dependencies]
+sqlite-wasm-vfs = { version = "0.2", default-features = false, features = ["sahpool"] }
+```
+
+Use `features = ["relaxed-idb"]` instead for IndexedDB only. See the
+[`sqlite-wasm-vfs` feature documentation](./crates/sqlite-wasm-vfs/README.md#features)
+for details.
+
 The following vfs have been implemented:
 
 * [`memory`](./crates/rsqlite-vfs/src/memvfs.rs): as the default vfs, no additional conditions are required, store the database in memory.
