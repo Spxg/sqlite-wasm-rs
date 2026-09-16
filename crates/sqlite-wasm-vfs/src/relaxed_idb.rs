@@ -321,10 +321,23 @@ async fn preload_db_impl(
     Ok(name2file)
 }
 
+/// Test-only fault injection for the IndexedDB commits performed by
+/// [`RelaxedIdb::sync_db_impl`].
+#[cfg(test)]
+#[derive(Default)]
+struct SyncFaults {
+    /// How many upcoming commits should be aborted instead of committed.
+    fail_next: usize,
+    /// How many commits have actually been aborted by fault injection.
+    failures: usize,
+}
+
 struct RelaxedIdb {
     idb: Database,
     name2file: RefCell<HashMap<String, IdbFile>>,
     tx: UnboundedSender<IdbCommit>,
+    #[cfg(test)]
+    sync_faults: RefCell<SyncFaults>,
 }
 
 impl RelaxedIdb {
@@ -348,6 +361,8 @@ impl RelaxedIdb {
             idb: indexed_db,
             name2file: RefCell::new(name2file),
             tx,
+            #[cfg(test)]
+            sync_faults: RefCell::new(SyncFaults::default()),
         })
     }
 
@@ -372,6 +387,20 @@ impl RelaxedIdb {
             ));
         }
         Ok(WaitCommit(rx))
+    }
+
+    /// Arrange for the next `count` IndexedDB commits to be aborted instead of
+    /// committed, as the browser itself would abort them when the storage quota is
+    /// exhausted or the connection is going away.
+    #[cfg(test)]
+    fn fail_next_commits(&self, count: usize) {
+        self.sync_faults.borrow_mut().fail_next += count;
+    }
+
+    /// How many IndexedDB commits have been aborted by fault injection so far.
+    #[cfg(test)]
+    fn injected_commit_failures(&self) -> usize {
+        self.sync_faults.borrow().failures
     }
 
     async fn preload_db(&self, files: Vec<String>) -> Result<()> {
@@ -533,6 +562,20 @@ impl RelaxedIdb {
 
         // The `RefMut` from `name2file` is explicitly dropped here to avoid holding the borrow across an `.await` point.
         drop(name2file);
+
+        #[cfg(test)]
+        {
+            let mut faults = self.sync_faults.borrow_mut();
+            if faults.fail_next > 0 {
+                faults.fail_next -= 1;
+                faults.failures += 1;
+                drop(faults);
+                transaction.abort().await?;
+                return Err(RelaxedIdbError::Generic(
+                    "injected IndexedDB commit failure".into(),
+                ));
+            }
+        }
 
         transaction.commit().await?;
 
@@ -939,9 +982,207 @@ pub async fn install<C: OsCallback>(
 
 #[cfg(test)]
 mod tests {
-    use super::{IdbFile, RelaxedIdb, RelaxedIdbCfgBuilder, RelaxedIdbStore};
-    use rsqlite_vfs::{test_suite::test_vfs_store, VfsAppData};
+    use super::*;
+    use rsqlite_vfs::test_suite::test_vfs_store;
+    use sqlite_wasm_rs as ffi;
+    use std::collections::BTreeSet;
+    use std::ffi::CString;
+    use std::task::Waker;
     use wasm_bindgen_test::wasm_bindgen_test;
+
+    const OPEN_RW: i32 = ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE;
+
+    /// A file name which is never created, used to synchronise with the commit loop.
+    const BARRIER_FILE: &str = "__commit_barrier__";
+
+    /// 128 rows of a kilobyte each: enough to allocate pages of its own, so that a
+    /// transaction writing this is distinguishable from one writing a single row.
+    const INSERT_MANY_ROWS: &CStr = c"WITH RECURSIVE counter(x) AS (
+             VALUES(1) UNION ALL SELECT x + 1 FROM counter WHERE x < 128
+         )
+         INSERT INTO a(v) SELECT zeroblob(1000) FROM counter;";
+
+    /// The number of rows [`INSERT_MANY_ROWS`] inserts.
+    const MANY_ROWS: i64 = 128;
+
+    fn errmsg(db: *mut ffi::sqlite3) -> String {
+        unsafe {
+            CStr::from_ptr(ffi::sqlite3_errmsg(db).cast())
+                .to_string_lossy()
+                .into_owned()
+        }
+    }
+
+    fn exec(db: *mut ffi::sqlite3, sql: &CStr) -> i32 {
+        unsafe {
+            ffi::sqlite3_exec(
+                db,
+                sql.as_ptr().cast(),
+                None,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        }
+    }
+
+    #[track_caller]
+    fn exec_ok(db: *mut ffi::sqlite3, sql: &CStr) {
+        let ret = exec(db, sql);
+        assert_eq!(ffi::SQLITE_OK, ret, "{sql:?} failed: {}", errmsg(db));
+    }
+
+    /// Run a query which yields at least one row, and read its first column.
+    #[track_caller]
+    fn query<T>(
+        db: *mut ffi::sqlite3,
+        sql: &CStr,
+        read: impl FnOnce(*mut ffi::sqlite3_stmt) -> T,
+    ) -> T {
+        let mut stmt = std::ptr::null_mut();
+        let ret = unsafe {
+            ffi::sqlite3_prepare_v3(
+                db,
+                sql.as_ptr().cast(),
+                -1,
+                0,
+                &mut stmt as *mut _,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(
+            ffi::SQLITE_OK,
+            ret,
+            "preparing {sql:?} failed: {}",
+            errmsg(db)
+        );
+
+        let ret = unsafe { ffi::sqlite3_step(stmt) };
+        assert_eq!(
+            ffi::SQLITE_ROW,
+            ret,
+            "{sql:?} returned no row: {}",
+            errmsg(db)
+        );
+
+        let value = read(stmt);
+        unsafe { ffi::sqlite3_finalize(stmt) };
+        value
+    }
+
+    #[track_caller]
+    fn query_i64(db: *mut ffi::sqlite3, sql: &CStr) -> i64 {
+        query(db, sql, |stmt| unsafe {
+            ffi::sqlite3_column_int64(stmt, 0)
+        })
+    }
+
+    #[track_caller]
+    fn query_text(db: *mut ffi::sqlite3, sql: &CStr) -> String {
+        query(db, sql, |stmt| unsafe {
+            CStr::from_ptr(ffi::sqlite3_column_text(stmt, 0).cast())
+                .to_string_lossy()
+                .into_owned()
+        })
+    }
+
+    #[track_caller]
+    fn open_db(file: &CStr, vfs_name: &str, flags: i32) -> *mut ffi::sqlite3 {
+        let vfs = CString::new(vfs_name).unwrap();
+        let mut db = std::ptr::null_mut();
+        let ret = unsafe {
+            ffi::sqlite3_open_v2(
+                file.as_ptr().cast(),
+                &mut db as *mut _,
+                flags,
+                vfs.as_ptr().cast(),
+            )
+        };
+        assert_eq!(ffi::SQLITE_OK, ret, "opening {file:?} failed");
+        db
+    }
+
+    /// Register a `relaxed-idb` VFS named `name`, backed by a freshly emptied
+    /// IndexedDB database of the same name.
+    async fn install_vfs(name: &str) -> RelaxedIdbUtil {
+        install::<ffi::WasmOsCallback>(
+            &RelaxedIdbCfgBuilder::new()
+                .vfs_name(name)
+                .clear_on_init(true)
+                .build(),
+            false,
+        )
+        .await
+        .unwrap()
+    }
+
+    /// Wait until every task queued before this call has been processed.
+    ///
+    /// The VFS only *queues* sync tasks; they are carried out by
+    /// [`RelaxedIdb::commit_loop`] on a separate task, so a test has to yield to the
+    /// event loop before it can observe the result of a sync. The barrier is a sync
+    /// request for a file which does not exist, which the commit loop resolves as a
+    /// no-op: waiting for it therefore never writes anything itself, while the
+    /// channel's ordering guarantees every earlier task has already run.
+    async fn drain_commits(pool: &RelaxedIdb) {
+        pool.send_task_with_notify(IdbCommitOp::Sync(BARRIER_FILE.into()))
+            .unwrap()
+            .await
+            .unwrap();
+    }
+
+    /// Sync `file` and report whether the IndexedDB commit succeeded.
+    async fn sync(pool: &RelaxedIdb, file: &str) -> Result<()> {
+        pool.send_task_with_notify(IdbCommitOp::Sync(file.into()))
+            .unwrap()
+            .await
+    }
+
+    /// The offsets of the blocks `pool` holds for `file`.
+    fn block_offsets(pool: &RelaxedIdb, file: &str) -> BTreeSet<usize> {
+        match pool.name2file.borrow().get(file) {
+            Some(IdbFile::Main(main)) => main.blocks.keys().copied().collect(),
+            _ => BTreeSet::new(),
+        }
+    }
+
+    /// A second, independent view of an IndexedDB database, preloaded with whatever
+    /// is durably stored there and registered as a SQLite VFS of its own.
+    ///
+    /// This goes through the same code a page load does, so it shows what a reader
+    /// which has never seen the writer's in-memory state would find.
+    struct Reloaded {
+        vfs_name: String,
+        pool: &'static VfsAppData<RelaxedIdb>,
+    }
+
+    impl Reloaded {
+        async fn from_idb(idb_name: &str, vfs_name: &str) -> Self {
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            let pool = RelaxedIdb::new(&RelaxedIdbCfgBuilder::new().vfs_name(idb_name).build(), tx)
+                .await
+                .unwrap();
+
+            let vfs = register_vfs::<RelaxedIdbIoMethods, RelaxedIdbVfs<ffi::WasmOsCallback>>(
+                vfs_name, pool, false,
+            )
+            .unwrap();
+            let pool = unsafe { RelaxedIdbStore::app_data(vfs) };
+            wasm_bindgen_futures::spawn_local(pool.commit_loop(rx));
+
+            Self {
+                vfs_name: vfs_name.into(),
+                pool,
+            }
+        }
+
+        fn open(&self, file: &CStr) -> *mut ffi::sqlite3 {
+            open_db(file, &self.vfs_name, ffi::SQLITE_OPEN_READONLY)
+        }
+
+        fn block_offsets(&self, file: &str) -> BTreeSet<usize> {
+            block_offsets(self.pool, file)
+        }
+    }
 
     #[wasm_bindgen_test]
     async fn test_relaxed_idb_vfs_store() {
@@ -959,5 +1200,261 @@ mod tests {
         .unwrap();
 
         wasm_bindgen_futures::spawn_local(async move { while let Some(_) = rx.recv().await {} });
+    }
+
+    /// The blocks a failed sync could not write stay queued, so a later sync makes
+    /// the transaction durable after all.
+    ///
+    /// The two transactions here touch disjoint pages: if the first one's blocks
+    /// were dropped when its sync failed, the second one's successful sync would
+    /// store an image which mixes pages from before the first transaction with pages
+    /// from after the second, which corresponds to no state the database was ever
+    /// in.
+    #[wasm_bindgen_test]
+    async fn failed_sync_does_not_lose_committed_rows() {
+        const IDB: &str = "test-idb-failed-sync-rows";
+
+        let util = install_vfs(IDB).await;
+        let db = open_db(c"rows.db", IDB, OPEN_RW);
+
+        exec_ok(db, c"CREATE TABLE a(v BLOB NOT NULL);");
+        exec_ok(db, c"CREATE TABLE b(v BLOB NOT NULL);");
+        drain_commits(util.pool).await;
+
+        // A transaction committed while IndexedDB is failing.
+        util.pool.fail_next_commits(1);
+        exec_ok(db, INSERT_MANY_ROWS);
+        drain_commits(util.pool).await;
+        assert_eq!(
+            1,
+            util.pool.injected_commit_failures(),
+            "the test did not exercise a failed sync"
+        );
+
+        // The failure is reported to the first write which follows it, so the next
+        // transaction fails once.
+        let ret = exec(db, c"INSERT INTO b(v) VALUES (x'01');");
+        assert_eq!(
+            ffi::SQLITE_IOERR,
+            ret & 0xff,
+            "expected the failed sync to be reported, got {ret}: {}",
+            errmsg(db)
+        );
+
+        // Retried, it succeeds, and its sync stores the earlier transaction's blocks
+        // along with its own.
+        exec_ok(db, c"INSERT INTO b(v) VALUES (x'01');");
+        drain_commits(util.pool).await;
+
+        let reloaded = Reloaded::from_idb(IDB, "test-idb-failed-sync-rows-reloaded").await;
+        let reloaded_db = reloaded.open(c"rows.db");
+        assert_eq!("ok", query_text(reloaded_db, c"PRAGMA integrity_check;"));
+        assert_eq!(
+            MANY_ROWS,
+            query_i64(reloaded_db, c"SELECT count(*) FROM a;")
+        );
+        assert_eq!(1, query_i64(reloaded_db, c"SELECT count(*) FROM b;"));
+    }
+
+    /// Deleting the blocks past the end of the file is part of a sync too, and it
+    /// is just as much at risk as writing the dirty ones: a sync consumes the file's
+    /// new length while preparing its IndexedDB transaction, so a sync which fails
+    /// after that point leaves IndexedDB holding blocks the database no longer has,
+    /// and leaves no record that they need deleting.
+    ///
+    /// Unlike the test above, nothing writes to the database after the failure here,
+    /// so the retry is the only chance to store the shrunk database.
+    #[wasm_bindgen_test]
+    async fn failed_sync_does_not_lose_truncation() {
+        const IDB: &str = "test-idb-failed-sync-truncation";
+        const FILE: &str = "truncation.db";
+
+        let util = install_vfs(IDB).await;
+        let db = open_db(c"truncation.db", IDB, OPEN_RW);
+
+        exec_ok(db, c"CREATE TABLE a(v BLOB NOT NULL);");
+        exec_ok(db, INSERT_MANY_ROWS);
+        drain_commits(util.pool).await;
+        let grown = block_offsets(util.pool, FILE);
+
+        // Shrink the database while IndexedDB is failing.
+        util.pool.fail_next_commits(1);
+        exec_ok(db, c"DELETE FROM a;");
+        exec_ok(db, c"VACUUM;");
+        drain_commits(util.pool).await;
+        assert_eq!(
+            1,
+            util.pool.injected_commit_failures(),
+            "the test did not exercise a failed sync"
+        );
+
+        let live = block_offsets(util.pool, FILE);
+        assert!(
+            live.len() < grown.len(),
+            "the database should have shrunk: {} blocks before, {} after",
+            grown.len(),
+            live.len()
+        );
+
+        // The next sync has to finish what the failed one started.
+        sync(util.pool, FILE).await.unwrap();
+
+        let reloaded = Reloaded::from_idb(IDB, "test-idb-failed-sync-truncation-reloaded").await;
+        assert_eq!(
+            live,
+            reloaded.block_offsets(FILE),
+            "IndexedDB should hold exactly the blocks the database has"
+        );
+
+        let reloaded_db = reloaded.open(c"truncation.db");
+        assert_eq!("ok", query_text(reloaded_db, c"PRAGMA integrity_check;"));
+        assert_eq!(0, query_i64(reloaded_db, c"SELECT count(*) FROM a;"));
+    }
+
+    /// A sync has work to do even when no block is dirty, because a truncation
+    /// leaves blocks to delete from IndexedDB.
+    ///
+    /// SQLite always dirties the header page when it shrinks a database, so the
+    /// truncation is prepared here through the same [`VfsFile`] interface
+    /// `xTruncate` uses, with nothing else pending. The database is left corrupt by
+    /// that, which is why only the stored blocks are checked and not their contents.
+    #[wasm_bindgen_test]
+    async fn truncation_alone_is_synced() {
+        const IDB: &str = "test-idb-truncation-alone";
+        const FILE: &str = "truncation-alone.db";
+        const DROPPED_PAGES: usize = 4;
+
+        let util = install_vfs(IDB).await;
+        let db = open_db(c"truncation-alone.db", IDB, OPEN_RW);
+
+        exec_ok(db, c"CREATE TABLE a(v BLOB NOT NULL);");
+        exec_ok(db, INSERT_MANY_ROWS);
+        drain_commits(util.pool).await;
+        let grown = block_offsets(util.pool, FILE);
+
+        {
+            let mut name2file = util.pool.name2file.borrow_mut();
+            let Some(IdbFile::Main(main)) = name2file.get_mut(FILE) else {
+                panic!("{FILE} is not a main database file");
+            };
+            assert!(
+                main.tx_blocks.is_empty(),
+                "the truncation should be the only work the next sync has"
+            );
+
+            let size = main.file_size - DROPPED_PAGES * main.block_size;
+            main.truncate(size).unwrap();
+        }
+
+        sync(util.pool, FILE).await.unwrap();
+
+        let live = block_offsets(util.pool, FILE);
+        assert_eq!(grown.len(), live.len() + DROPPED_PAGES);
+
+        let reloaded = Reloaded::from_idb(IDB, "test-idb-truncation-alone-reloaded").await;
+        assert_eq!(
+            live,
+            reloaded.block_offsets(FILE),
+            "IndexedDB should hold exactly the blocks the database has"
+        );
+    }
+
+    /// SQLite keeps running while an IndexedDB commit is in flight, so blocks can be
+    /// dirtied after a sync has collected the ones it is going to write. When that
+    /// commit fails, the retry covers both sets.
+    ///
+    /// This test drives [`RelaxedIdb::sync_db_impl`] itself instead of letting the
+    /// commit loop do it, so that it can run SQL at the one moment that matters:
+    /// after the sync has handed its blocks to IndexedDB, but before the commit has
+    /// resolved.
+    #[wasm_bindgen_test]
+    async fn failed_sync_keeps_blocks_dirtied_while_it_was_in_flight() {
+        const IDB: &str = "test-idb-failed-sync-in-flight";
+        const FILE: &str = "in-flight.db";
+
+        // The commit loop is deliberately not spawned; `_rx` keeps the channel open
+        // so that the sync requests the VFS makes on its own are simply ignored.
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let pool = RelaxedIdb::new(
+            &RelaxedIdbCfgBuilder::new()
+                .vfs_name(IDB)
+                .clear_on_init(true)
+                .build(),
+            tx,
+        )
+        .await
+        .unwrap();
+        let vfs = register_vfs::<RelaxedIdbIoMethods, RelaxedIdbVfs<ffi::WasmOsCallback>>(
+            IDB, pool, false,
+        )
+        .unwrap();
+        let pool = unsafe { RelaxedIdbStore::app_data(vfs) };
+
+        let db = open_db(c"in-flight.db", IDB, OPEN_RW);
+        exec_ok(db, c"CREATE TABLE a(v BLOB NOT NULL);");
+        exec_ok(db, c"CREATE TABLE b(v BLOB NOT NULL);");
+        pool.sync_db_impl(FILE).await.unwrap();
+
+        // Start a sync which is going to fail, and hold it at the point where the
+        // commit is in flight.
+        pool.fail_next_commits(1);
+        exec_ok(db, INSERT_MANY_ROWS);
+        let mut sync = Box::pin(pool.sync_db_impl(FILE));
+        assert!(
+            sync.as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending(),
+            "the IndexedDB commit should still be in flight"
+        );
+
+        // Dirty further blocks, then let the failing commit resolve.
+        exec_ok(db, c"INSERT INTO b(v) VALUES (x'01');");
+        assert!(sync.await.is_err(), "the injected commit failure was lost");
+        assert_eq!(1, pool.injected_commit_failures());
+
+        // One successful sync now has to store both transactions.
+        pool.sync_db_impl(FILE).await.unwrap();
+
+        let reloaded = Reloaded::from_idb(IDB, "test-idb-failed-sync-in-flight-reloaded").await;
+        let reloaded_db = reloaded.open(c"in-flight.db");
+        assert_eq!("ok", query_text(reloaded_db, c"PRAGMA integrity_check;"));
+        assert_eq!(
+            MANY_ROWS,
+            query_i64(reloaded_db, c"SELECT count(*) FROM a;")
+        );
+        assert_eq!(1, query_i64(reloaded_db, c"SELECT count(*) FROM b;"));
+    }
+
+    /// A sync failure cannot be reported to SQLite as it happens: the IndexedDB
+    /// transaction only resolves after the synchronous VFS call which queued it has
+    /// long returned. It is reported at the next opportunity instead, so that an
+    /// application which never looks at the VFS still finds out that its data is not
+    /// being stored.
+    #[wasm_bindgen_test]
+    async fn failed_sync_is_reported_to_sqlite() {
+        const IDB: &str = "test-idb-failed-sync-reported";
+
+        let util = install_vfs(IDB).await;
+        let db = open_db(c"reported.db", IDB, OPEN_RW);
+
+        exec_ok(db, c"CREATE TABLE a(v BLOB NOT NULL);");
+        drain_commits(util.pool).await;
+
+        util.pool.fail_next_commits(1);
+        exec_ok(db, c"INSERT INTO a(v) VALUES (x'01');");
+        drain_commits(util.pool).await;
+        assert_eq!(
+            1,
+            util.pool.injected_commit_failures(),
+            "the test did not exercise a failed sync"
+        );
+
+        let ret = exec(db, c"INSERT INTO a(v) VALUES (x'02');");
+        assert_eq!(
+            ffi::SQLITE_IOERR,
+            ret & 0xff,
+            "expected an I/O error once a sync had failed, got {ret}: {}",
+            errmsg(db)
+        );
     }
 }
