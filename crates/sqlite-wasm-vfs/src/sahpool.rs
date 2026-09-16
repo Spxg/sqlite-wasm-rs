@@ -36,9 +36,10 @@ use rsqlite_vfs::{
     check_import_db,
     ffi::{
         sqlite3_file, sqlite3_filename, sqlite3_vfs, sqlite3_vfs_register, sqlite3_vfs_unregister,
-        SQLITE_CANTOPEN, SQLITE_ERROR, SQLITE_IOCAP_UNDELETABLE_WHEN_OPEN, SQLITE_IOERR,
-        SQLITE_IOERR_DELETE, SQLITE_OK, SQLITE_OPEN_DELETEONCLOSE, SQLITE_OPEN_MAIN_DB,
-        SQLITE_OPEN_MAIN_JOURNAL, SQLITE_OPEN_SUPER_JOURNAL, SQLITE_OPEN_WAL,
+        SQLITE_CANTOPEN, SQLITE_ERROR, SQLITE_FCNTL_SIZE_HINT, SQLITE_IOCAP_UNDELETABLE_WHEN_OPEN,
+        SQLITE_IOERR, SQLITE_IOERR_DELETE, SQLITE_IOERR_TRUNCATE, SQLITE_NOTFOUND, SQLITE_OK,
+        SQLITE_OPEN_DELETEONCLOSE, SQLITE_OPEN_MAIN_DB, SQLITE_OPEN_MAIN_JOURNAL,
+        SQLITE_OPEN_SUPER_JOURNAL, SQLITE_OPEN_WAL,
     },
     register_vfs, registered_vfs, ImportDbError, OsCallback, RegisterVfsError, SQLiteIoMethods,
     SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
@@ -80,6 +81,23 @@ fn read_write_options(at: f64) -> FileSystemReadWriteOptions {
 struct SyncAccessFile {
     handle: FileSystemSyncAccessHandle,
     opaque: String,
+}
+
+impl SyncAccessFile {
+    /// Pre-extends files because growing OPFS once is cheaper than growing per page.
+    fn apply_size_hint(&mut self, hint: i64) -> VfsResult<()> {
+        if hint <= 0 || hint as u64 <= self.size()? as u64 {
+            return Ok(());
+        }
+
+        let size = usize::try_from(hint).map_err(|_| {
+            VfsError::new(
+                SQLITE_IOERR_TRUNCATE,
+                format!("size hint {hint} exceeds the platform's file size limit"),
+            )
+        })?;
+        self.truncate(size)
+    }
 }
 
 struct OpfsSAHPool {
@@ -570,7 +588,7 @@ impl VfsFile for SyncAccessFile {
         self.handle
             .truncate_with_f64((HEADER_OFFSET_DATA + size) as f64)
             .map_err(OpfsSAHError::Truncate)
-            .map_err(|err| err.vfs_err(SQLITE_IOERR))
+            .map_err(|err| err.vfs_err(SQLITE_IOERR_TRUNCATE))
     }
 
     fn flush(&mut self) -> VfsResult<()> {
@@ -642,6 +660,29 @@ impl SQLiteIoMethods for SyncAccessHandleIoMethods {
     type Store = SyncAccessHandleStore;
 
     const VERSION: ::std::os::raw::c_int = 1;
+
+    unsafe extern "C" fn xFileControl(
+        pFile: *mut sqlite3_file,
+        op: ::std::os::raw::c_int,
+        pArg: *mut ::std::os::raw::c_void,
+    ) -> ::std::os::raw::c_int {
+        if op != SQLITE_FCNTL_SIZE_HINT {
+            return SQLITE_NOTFOUND;
+        }
+
+        let vfs_file = SQLiteVfsFile::from_file(pFile);
+        let app_data = Self::Store::app_data(vfs_file.vfs);
+        let hint = *pArg.cast::<i64>();
+        let apply_hint = |file: &mut SyncAccessFile| {
+            file.apply_size_hint(hint)?;
+            Ok(SQLITE_OK)
+        };
+
+        match Self::Store::with_file_mut(vfs_file, apply_hint) {
+            Ok(code) => code,
+            Err(err) => app_data.store_err(err),
+        }
+    }
 
     unsafe extern "C" fn xSectorSize(_pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
         SECTOR_SIZE as i32
@@ -979,11 +1020,39 @@ pub async fn install<C: OsCallback>(
 #[cfg(test)]
 mod tests {
     use super::{
-        OpfsSAHPool, OpfsSAHPoolCfgBuilder, SyncAccessFile, SyncAccessHandleAppData,
+        OpfsSAHError, OpfsSAHPool, OpfsSAHPoolCfgBuilder, SyncAccessFile, SyncAccessHandleAppData,
         SyncAccessHandleStore,
     };
-    use rsqlite_vfs::{test_suite::test_vfs_store, VfsAppData};
+    use rsqlite_vfs::{ffi::SQLITE_OPEN_MAIN_DB, test_suite::test_vfs_store, VfsAppData, VfsFile};
     use wasm_bindgen_test::wasm_bindgen_test;
+
+    #[wasm_bindgen_test]
+    async fn size_hint_grows_but_does_not_shrink_file() {
+        let pool = OpfsSAHPool::new::<sqlite_wasm_rs::WasmOsCallback>(
+            &OpfsSAHPoolCfgBuilder::new()
+                .directory("test_opfs_size_hint")
+                .clear_on_init(true)
+                .build(),
+        )
+        .await
+        .unwrap();
+        pool.with_new_file("size-hint.db", SQLITE_OPEN_MAIN_DB, |_| {
+            Ok::<(), OpfsSAHError>(())
+        })
+        .unwrap()
+        .unwrap();
+
+        pool.with_file_mut("size-hint.db", |file| -> rsqlite_vfs::VfsResult<()> {
+            file.apply_size_hint(2 * 8192)?;
+            assert_eq!(file.size()?, 2 * 8192);
+
+            file.apply_size_hint(8192)?;
+            assert_eq!(file.size()?, 2 * 8192);
+            Ok(())
+        })
+        .unwrap()
+        .unwrap();
+    }
 
     #[wasm_bindgen_test]
     async fn test_opfs_vfs_store() {
