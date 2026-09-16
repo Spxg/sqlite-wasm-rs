@@ -48,8 +48,8 @@ use rsqlite_vfs::{
     bail, check_db_and_page_size, check_import_db, check_option, check_result,
     ffi::{
         sqlite3_file, sqlite3_vfs, SQLITE_ERROR, SQLITE_FCNTL_COMMIT_PHASETWO, SQLITE_FCNTL_PRAGMA,
-        SQLITE_FCNTL_SYNC, SQLITE_IOERR, SQLITE_IOERR_DELETE, SQLITE_NOTFOUND, SQLITE_OK,
-        SQLITE_OPEN_MAIN_DB,
+        SQLITE_FCNTL_SYNC, SQLITE_IOERR, SQLITE_IOERR_DELETE, SQLITE_IOERR_FSYNC, SQLITE_NOTFOUND,
+        SQLITE_OK, SQLITE_OPEN_MAIN_DB,
     },
     register_vfs, registered_vfs, ImportDbError, MemChunksFile, OsCallback, RegisterVfsError,
     SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
@@ -153,7 +153,12 @@ struct IdbPageFile {
     block_size: usize,
     blocks: HashMap<usize, Uint8Array>,
     tx_blocks: HashSet<usize>,
+    /// Whether blocks past the end of the file still have to be deleted from
+    /// IndexedDB. Cleared only once a sync has actually stored the shorter file.
+    tx_truncate: bool,
     sync_notified: bool,
+    /// A commit failure which has not been reported to SQLite yet.
+    unreported_err: Option<(i32, String)>,
 }
 
 impl VfsFile for IdbPageFile {
@@ -192,6 +197,22 @@ impl VfsFile for IdbPageFile {
     }
 
     fn truncate(&mut self, size: usize) -> VfsResult<()> {
+        if size < self.file_size {
+            // The blocks past the new end of the file are gone as far as the
+            // database is concerned, and IndexedDB has to be told to delete them.
+            // Dropping them here is not enough on its own: the deletion is carried
+            // out by a sync, and a sync can fail, so the obligation is recorded
+            // separately and outlives any single attempt at it.
+            self.tx_truncate = true;
+
+            if self.block_size > 0 {
+                let mut offset = size;
+                while self.blocks.remove(&offset).is_some() {
+                    offset += self.block_size;
+                }
+            }
+        }
+
         self.file_size = size;
         Ok(())
     }
@@ -292,7 +313,9 @@ async fn preload_db_impl(
                     block_size: data.length() as _,
                     blocks: HashMap::from([(offset, data)]),
                     tx_blocks: HashSet::new(),
+                    tx_truncate: false,
                     sync_notified: false,
+                    unreported_err: None,
                 }));
             }
         }
@@ -330,6 +353,21 @@ struct SyncFaults {
     fail_next: usize,
     /// How many commits have actually been aborted by fault injection.
     failures: usize,
+}
+
+/// Everything one sync is responsible for storing in IndexedDB.
+///
+/// It is moved out of the file while the sync is in flight, so that blocks dirtied
+/// in the meantime accumulate separately instead of being mistaken for blocks the
+/// sync has already stored, and is handed back if the commit fails.
+struct SyncWork {
+    /// Offsets of the blocks to write.
+    blocks: HashSet<usize>,
+    /// Whether blocks past the end of the file have to be deleted.
+    truncate: bool,
+    /// The length of the file when this work was claimed. Blocks at or past it are
+    /// the ones to delete.
+    file_size: usize,
 }
 
 struct RelaxedIdb {
@@ -403,6 +441,18 @@ impl RelaxedIdb {
         self.sync_faults.borrow().failures
     }
 
+    /// Whether the commit about to be made should be aborted instead.
+    #[cfg(test)]
+    fn take_injected_failure(&self) -> bool {
+        let mut faults = self.sync_faults.borrow_mut();
+        let inject = faults.fail_next > 0;
+        if inject {
+            faults.fail_next -= 1;
+            faults.failures += 1;
+        }
+        inject
+    }
+
     async fn preload_db(&self, files: Vec<String>) -> Result<()> {
         let preload = {
             let name2file = self.name2file.borrow();
@@ -457,7 +507,9 @@ impl RelaxedIdb {
                 block_size: page_size,
                 blocks,
                 tx_blocks,
+                tx_truncate: false,
                 sync_notified: false,
+                unreported_err: None,
             }),
         );
 
@@ -517,32 +569,46 @@ impl RelaxedIdb {
         Ok(())
     }
 
-    // already drop
-    #[allow(clippy::await_holding_refcell_ref)]
-    async fn sync_db_impl(&self, file: &str) -> Result<()> {
+    /// Claim the work the next sync of `file` is responsible for, leaving the file
+    /// with a fresh, empty set of dirty blocks.
+    ///
+    /// Returns `None` when there is nothing to put or delete.
+    fn take_sync_work(&self, file: &str) -> Option<SyncWork> {
         let mut name2file = self.name2file.borrow_mut();
-        let Some(idb_file) = name2file.get_mut(file) else {
-            return Ok(());
-        };
-
-        let IdbFile::Main(idb_blocks) = idb_file else {
-            return Ok(());
+        let IdbFile::Main(idb_blocks) = name2file.get_mut(file)? else {
+            return None;
         };
 
         idb_blocks.sync_notified = false;
 
-        let file_size = idb_blocks.file_size;
-        let mut truncated_offset = idb_blocks.file_size;
-        while idb_blocks.blocks.remove(&truncated_offset).is_some() {
-            truncated_offset += idb_blocks.block_size;
-        }
-
-        let tx_blocks = std::mem::take(&mut idb_blocks.tx_blocks);
-        if tx_blocks.is_empty() && file_size == truncated_offset {
+        if idb_blocks.tx_blocks.is_empty() && !idb_blocks.tx_truncate {
             // no need to put or delete
-            return Ok(());
+            return None;
         }
 
+        Some(SyncWork {
+            blocks: std::mem::take(&mut idb_blocks.tx_blocks),
+            truncate: std::mem::take(&mut idb_blocks.tx_truncate),
+            file_size: idb_blocks.file_size,
+        })
+    }
+
+    /// Hand `work` back to `file` after a failed commit, merged with whatever was
+    /// dirtied while that commit was in flight, so that the next sync carries both.
+    fn restore_sync_work(&self, file: &str, work: SyncWork) {
+        let mut name2file = self.name2file.borrow_mut();
+        // The file may have been deleted while the commit was in flight, in which
+        // case there is nothing left to store.
+        let Some(IdbFile::Main(idb_blocks)) = name2file.get_mut(file) else {
+            return;
+        };
+
+        idb_blocks.tx_blocks.extend(work.blocks);
+        idb_blocks.tx_truncate |= work.truncate;
+    }
+
+    /// Write `work` to IndexedDB in a single transaction.
+    async fn commit_sync_work(&self, file: &str, work: &SyncWork) -> Result<()> {
         let path = JsValue::from(file);
 
         let transaction = self
@@ -553,28 +619,29 @@ impl RelaxedIdb {
 
         let store = transaction.object_store("blocks")?;
 
-        for offset in tx_blocks {
-            if let Some(buffer) = idb_blocks.blocks.get(&offset) {
-                store.put(&set_block(&path, offset, buffer)).build()?;
+        {
+            // Borrowed only while the requests are issued, never across the commit
+            // below: SQLite goes on writing to the file while that is in flight.
+            let name2file = self.name2file.borrow();
+            if let Some(IdbFile::Main(idb_blocks)) = name2file.get(file) {
+                for &offset in &work.blocks {
+                    if let Some(buffer) = idb_blocks.blocks.get(&offset) {
+                        store.put(&set_block(&path, offset, buffer)).build()?;
+                    }
+                }
             }
         }
-        store.delete(key_range(file, file_size)).build()?;
 
-        // The `RefMut` from `name2file` is explicitly dropped here to avoid holding the borrow across an `.await` point.
-        drop(name2file);
+        // Unconditional, so that blocks left past the end of the file by an earlier
+        // failure are cleaned up even when this sync only has blocks to write.
+        store.delete(key_range(file, work.file_size)).build()?;
 
         #[cfg(test)]
-        {
-            let mut faults = self.sync_faults.borrow_mut();
-            if faults.fail_next > 0 {
-                faults.fail_next -= 1;
-                faults.failures += 1;
-                drop(faults);
-                transaction.abort().await?;
-                return Err(RelaxedIdbError::Generic(
-                    "injected IndexedDB commit failure".into(),
-                ));
-            }
+        if self.take_injected_failure() {
+            transaction.abort().await?;
+            return Err(RelaxedIdbError::Generic(
+                "injected IndexedDB commit failure".into(),
+            ));
         }
 
         transaction.commit().await?;
@@ -582,18 +649,97 @@ impl RelaxedIdb {
         Ok(())
     }
 
+    async fn sync_db_impl(&self, file: &str) -> Result<()> {
+        let Some(work) = self.take_sync_work(file) else {
+            return Ok(());
+        };
+
+        match self.commit_sync_work(file, &work).await {
+            Ok(()) => {
+                // Whatever went wrong before, the file is stored now, so an earlier
+                // failure is no longer worth reporting.
+                self.clear_unreported_err(file);
+                Ok(())
+            }
+            Err(err) => {
+                self.restore_sync_work(file, work);
+                Err(err)
+            }
+        }
+    }
+
+    /// Record a commit failure for SQLite to report at the next write to `file`.
+    ///
+    /// A commit resolves long after the synchronous VFS call which queued it has
+    /// returned, so there is no operation left to fail at the time the failure
+    /// happens.
+    ///
+    /// A failure whose file is already gone goes unreported, which in practice means
+    /// every failed deletion, a file being removed before its blocks are. The only
+    /// file left to report such a failure against is an unrelated database whose own
+    /// writes were stored perfectly well, and failing one of its operations would say
+    /// something quite untrue about it. A deletion is rare, and a caller which
+    /// asked for one is in a good position to notice that it did not happen and ask
+    /// again; `RelaxedIdbUtil::delete_db` tells its caller outright.
+    fn record_unreported_err(&self, file: &str, code: i32, message: String) {
+        if let Some(IdbFile::Main(idb_blocks)) = self.name2file.borrow_mut().get_mut(file) {
+            idb_blocks.unreported_err = Some((code, message));
+        }
+    }
+
+    /// Take the failure to report against `file`, if there is one.
+    ///
+    /// Taking it as it is reported, rather than latching it, is what keeps the write
+    /// path open: the operation SQLite retries after the error is the one which
+    /// gives the failed sync's blocks another chance of being stored.
+    fn take_unreported_err(&self, file: &str) -> Option<VfsError> {
+        let mut name2file = self.name2file.borrow_mut();
+        let Some(IdbFile::Main(idb_blocks)) = name2file.get_mut(file) else {
+            return None;
+        };
+
+        idb_blocks
+            .unreported_err
+            .take()
+            .map(|(code, message)| VfsError::new(code, message))
+    }
+
+    fn clear_unreported_err(&self, file: &str) {
+        if let Some(IdbFile::Main(idb_blocks)) = self.name2file.borrow_mut().get_mut(file) {
+            idb_blocks.unreported_err = None;
+        }
+    }
+
     async fn commit_loop(&self, mut rx: UnboundedReceiver<IdbCommit>) {
         while let Some(commit) = rx.recv().await {
             let IdbCommit { op, notify } = commit;
-            let ret = match op {
-                IdbCommitOp::Sync(file) => self.sync_db_impl(&file).await,
-                IdbCommitOp::Delete(file) => self.delete_db_impl(&file).await,
-                IdbCommitOp::Clear => clear_impl(&self.idb).await,
+            // Alongside the result, the file a failure would be reported against
+            // and the code to report it as. Clearing concerns every file at once, so
+            // there is nothing specific enough to report it against.
+            let (ret, report_against) = match op {
+                IdbCommitOp::Sync(file) => (
+                    self.sync_db_impl(&file).await,
+                    Some((file, SQLITE_IOERR_FSYNC)),
+                ),
+                IdbCommitOp::Delete(file) => (
+                    self.delete_db_impl(&file).await,
+                    Some((file, SQLITE_IOERR_DELETE)),
+                ),
+                IdbCommitOp::Clear => (clear_impl(&self.idb).await, None),
             };
-            if let Some(notify) = notify {
-                // An unsuccessful send would be one where the corresponding receiver
-                // has already been deallocated.
-                let _ = notify.send(ret);
+
+            // A failure nobody is waiting for would otherwise go unnoticed
+            // altogether, so it is left for SQLite to report instead. An
+            // unsuccessful send would be one where the corresponding receiver has
+            // already been deallocated, which is no better than never having been
+            // waited for.
+            let unwaited = match notify {
+                Some(notify) => notify.send(ret).err(),
+                None => Some(ret),
+            };
+
+            if let (Some(Err(err)), Some((file, code))) = (unwaited, report_against) {
+                self.record_unreported_err(&file, code, err.to_string());
             }
         }
     }
@@ -678,6 +824,15 @@ impl VfsStore<IdbFile, RelaxedIdb> for RelaxedIdbStore {
     ) -> VfsResult<i32> {
         let name = unsafe { vfs_file.name() };
         let pool = unsafe { Self::app_data(vfs_file.vfs) };
+
+        // `xWrite`, `xTruncate` and `xSync` all arrive here, which makes this the
+        // first chance to tell SQLite that a sync has failed. Reads are deliberately
+        // left alone: they are served from memory, and are correct regardless of
+        // what IndexedDB holds.
+        if let Some(err) = pool.take_unreported_err(name) {
+            return Err(err);
+        }
+
         match pool.name2file.borrow_mut().get_mut(name) {
             Some(file) => f(file),
             None => Err(VfsError::new(SQLITE_IOERR, format!("{name} not found"))),
