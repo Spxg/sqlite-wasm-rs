@@ -13,6 +13,14 @@
 
 ### Changed
 
+* **Breaking:** `VfsFile::read`/`write` offsets, `truncate` sizes, and `size`
+  results now use `u64` instead of `usize`, preserving file positions above
+  4 GiB on wasm32. Custom VFS implementations must update these signatures and
+  check conversions to memory indices or backend-specific numeric types.
+  Buffer lengths and page sizes remain `usize`. OPFS and IndexedDB use 64-bit
+  file positions and reject values outside JavaScript's safe integer range;
+  in-memory files and whole-file exports remain limited by available memory.
+
 --------------------------------------------------------------------------------
 
 ## [0.5.5](https://github.com/Spxg/sqlite-wasm-rs/compare/0.5.4...0.5.5)
