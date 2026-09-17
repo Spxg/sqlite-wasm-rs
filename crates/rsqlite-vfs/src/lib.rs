@@ -98,6 +98,7 @@ pub fn random_name(randomness: fn(&mut [u8])) -> String {
 }
 
 /// An in-memory file implementation that stores data in fixed-size chunks. Suitable for temporary files.
+/// File sizes are limited by the platform's address space and available memory.
 pub struct MemChunksFile {
     chunks: Vec<Vec<u8>>,
     chunk_size: Option<usize>,
@@ -134,16 +135,17 @@ impl MemChunksFile {
 }
 
 impl VfsFile for MemChunksFile {
-    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<bool> {
+    fn read(&self, buf: &mut [u8], offset: u64) -> VfsResult<bool> {
+        if offset >= self.file_size as u64 {
+            buf.fill(0);
+            return Ok(false);
+        }
+        // Bounded by the in-memory file size above.
+        let offset = offset as usize;
         let Some(chunk_size) = self.chunk_size else {
             buf.fill(0);
             return Ok(false);
         };
-
-        if self.file_size <= offset {
-            buf.fill(0);
-            return Ok(false);
-        }
 
         if chunk_size == buf.len()
             && offset % chunk_size == 0
@@ -177,10 +179,15 @@ impl VfsFile for MemChunksFile {
         }
     }
 
-    fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()> {
+    fn write(&mut self, buf: &[u8], offset: u64) -> VfsResult<()> {
         if buf.is_empty() {
             return Ok(());
         }
+        let offset = usize::try_from(offset)
+            .map_err(|_| VfsError::new(SQLITE_FULL, "File offset exceeds address space".into()))?;
+        let end = offset
+            .checked_add(buf.len())
+            .ok_or_else(|| VfsError::new(SQLITE_FULL, "File size exceeds address space".into()))?;
 
         let chunk_size = if let Some(chunk_size) = self.chunk_size {
             chunk_size
@@ -190,7 +197,7 @@ impl VfsFile for MemChunksFile {
             size
         };
 
-        let new_length = self.file_size.max(offset + buf.len());
+        let new_length = self.file_size.max(end);
 
         if chunk_size == buf.len() && offset % chunk_size == 0 {
             for _ in self.chunks.len()..offset / chunk_size {
@@ -204,7 +211,7 @@ impl VfsFile for MemChunksFile {
         } else {
             let mut size = buf.len();
             let chunk_start_idx = offset / chunk_size;
-            let chunk_end_idx = (offset + size - 1) / chunk_size;
+            let chunk_end_idx = (end - 1) / chunk_size;
             let chunks_length = self.chunks.len();
 
             for _ in chunks_length..=chunk_end_idx {
@@ -232,12 +239,20 @@ impl VfsFile for MemChunksFile {
         Ok(())
     }
 
-    fn truncate(&mut self, size: usize) -> VfsResult<()> {
+    fn truncate(&mut self, size: u64) -> VfsResult<()> {
+        let size = usize::try_from(size)
+            .map_err(|_| VfsError::new(SQLITE_FULL, "File size exceeds address space".into()))?;
         if let Some(chunk_size) = self.chunk_size {
             if size == 0 {
                 core::mem::take(&mut self.chunks);
             } else {
                 let idx = ((size - 1) / chunk_size) + 1;
+                if idx > self.chunks.len() {
+                    return Err(VfsError::new(
+                        SQLITE_IOERR_TRUNCATE,
+                        "Cannot extend an in-memory file by truncating".into(),
+                    ));
+                }
                 self.chunks.drain(idx..);
             }
         } else if size != 0 {
@@ -252,8 +267,8 @@ impl VfsFile for MemChunksFile {
         Ok(())
     }
 
-    fn size(&self) -> VfsResult<usize> {
-        Ok(self.file_size)
+    fn size(&self) -> VfsResult<u64> {
+        Ok(self.file_size as u64)
     }
 }
 
@@ -416,17 +431,21 @@ impl<T> Deref for VfsAppData<T> {
 }
 
 /// A trait defining the basic I/O capabilities required for a VFS file implementation.
+///
+/// File offsets and sizes are byte counts independent of the platform's pointer width.
+/// Buffers remain limited by the address space; implementations must return an error
+/// when a requested offset or size exceeds their storage limits, never truncate it.
 pub trait VfsFile {
     /// Abstraction of `xRead`, returns true for `SQLITE_OK` and false for `SQLITE_IOERR_SHORT_READ`
-    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<bool>;
+    fn read(&self, buf: &mut [u8], offset: u64) -> VfsResult<bool>;
     /// Abstraction of `xWrite`
-    fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()>;
+    fn write(&mut self, buf: &[u8], offset: u64) -> VfsResult<()>;
     /// Abstraction of `xTruncate`
-    fn truncate(&mut self, size: usize) -> VfsResult<()>;
+    fn truncate(&mut self, size: u64) -> VfsResult<()>;
     /// Abstraction of `xSync`
     fn flush(&mut self) -> VfsResult<()>;
     /// Abstraction of `xFileSize`
-    fn size(&self) -> VfsResult<usize>;
+    fn size(&self) -> VfsResult<u64>;
 }
 
 /// Make changes to files
@@ -761,7 +780,8 @@ pub trait SQLiteIoMethods {
 
             let f = |file: &Self::File| {
                 let size = iAmt as usize;
-                let offset = iOfst as usize;
+                let offset = u64::try_from(iOfst)
+                    .map_err(|_| VfsError::new(SQLITE_IOERR_READ, "Negative file offset".into()))?;
                 let slice = core::slice::from_raw_parts_mut(zBuf.cast::<u8>(), size);
                 let code = if file.read(slice, offset)? {
                     SQLITE_OK
@@ -789,7 +809,10 @@ pub trait SQLiteIoMethods {
             let app_data = Self::Store::app_data(vfs_file.vfs);
 
             let f = |file: &mut Self::File| {
-                let (offset, size) = (iOfst as usize, iAmt as usize);
+                let size = iAmt as usize;
+                let offset = u64::try_from(iOfst).map_err(|_| {
+                    VfsError::new(SQLITE_IOERR_WRITE, "Negative file offset".into())
+                })?;
                 let slice = core::slice::from_raw_parts(zBuf.cast::<u8>(), size);
                 file.write(slice, offset)?;
                 Ok(SQLITE_OK)
@@ -811,7 +834,10 @@ pub trait SQLiteIoMethods {
             let app_data = Self::Store::app_data(vfs_file.vfs);
 
             let f = |file: &mut Self::File| {
-                file.truncate(size as usize)?;
+                let size = u64::try_from(size).map_err(|_| {
+                    VfsError::new(SQLITE_IOERR_TRUNCATE, "Negative file size".into())
+                })?;
+                file.truncate(size)?;
                 Ok(SQLITE_OK)
             };
 
@@ -853,9 +879,13 @@ pub trait SQLiteIoMethods {
             let app_data = Self::Store::app_data(vfs_file.vfs);
 
             let f = |file: &Self::File| {
-                file.size().map(|size| {
-                    *pSize = size as sqlite3_int64;
+                let size = sqlite3_int64::try_from(file.size()?).map_err(|_| {
+                    VfsError::new(
+                        SQLITE_IOERR_FSTAT,
+                        "File size exceeds SQLite's limit".into(),
+                    )
                 })?;
+                *pSize = size;
                 Ok(SQLITE_OK)
             };
 
@@ -990,15 +1020,15 @@ pub mod test_suite {
         {
             Err(VfsError::new(SQLITE_IOERR, "incorrect buffer data".into()))?;
         }
-        if file.size()? != write_buffer.len() {
+        if file.size()? != write_buffer.len() as u64 {
             Err(VfsError::new(
                 SQLITE_IOERR,
                 "incorrect buffer length".into(),
             ))?;
         }
 
-        file.write(&write_buffer, base_offset)?;
-        if file.size()? != base_offset + write_buffer.len() {
+        file.write(&write_buffer, base_offset as u64)?;
+        if file.size()? != (base_offset + write_buffer.len()) as u64 {
             Err(VfsError::new(
                 SQLITE_IOERR,
                 "incorrect buffer length".into(),

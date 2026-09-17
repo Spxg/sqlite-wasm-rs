@@ -5,9 +5,12 @@
 use sqlite_wasm_rs::{
     sqlite3_close, sqlite3_exec, sqlite3_open_v2,
     utils::{
-        ffi::{sqlite3_file, sqlite3_vfs, SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_READWRITE},
-        register_vfs, OsCallback, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsFile, VfsResult,
-        VfsStore,
+        ffi::{
+            sqlite3_file, sqlite3_vfs, SQLITE_FULL, SQLITE_OK, SQLITE_OPEN_CREATE,
+            SQLITE_OPEN_READWRITE,
+        },
+        register_vfs, OsCallback, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsError, VfsFile,
+        VfsResult, VfsStore,
     },
 };
 use std::time::Duration;
@@ -24,16 +27,16 @@ impl VfsFile for MemFile {
     ///
     /// We copy the data starting at offset in the memory file to buffer,
     /// and if it cannot be read completely, false is returned.
-    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<bool> {
+    fn read(&self, buf: &mut [u8], offset: u64) -> VfsResult<bool> {
         let size = buf.len();
-        let end = size + offset;
-        if self.0.len() <= offset {
+        if self.0.len() as u64 <= offset {
             buf.fill(0);
             return Ok(false);
         }
 
-        let read_end = end.min(self.0.len());
-        let read_size = read_end - offset;
+        let offset = offset as usize;
+        let read_size = size.min(self.0.len() - offset);
+        let read_end = offset + read_size;
         buf[..read_size].copy_from_slice(&self.0[offset..read_end]);
 
         if read_size < size {
@@ -47,8 +50,13 @@ impl VfsFile for MemFile {
     ///
     /// We copy the data in the buffer to the memory file,
     /// and if the size is not enough, expand it.
-    fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()> {
-        let end = buf.len() + offset;
+    fn write(&mut self, buf: &[u8], offset: u64) -> VfsResult<()> {
+        let offset = usize::try_from(offset)
+            .map_err(|_| VfsError::new(SQLITE_FULL, "File offset exceeds address space".into()))?;
+        let end = offset
+            .checked_add(buf.len())
+            .filter(|&end| end <= isize::MAX as usize)
+            .ok_or_else(|| VfsError::new(SQLITE_FULL, "File size exceeds address space".into()))?;
         if end > self.0.len() {
             self.0.resize(end, 0);
         }
@@ -59,7 +67,9 @@ impl VfsFile for MemFile {
     /// Called by `xTruncate`
     ///
     /// Truncate the memory file, which happens during vacuum
-    fn truncate(&mut self, size: usize) -> VfsResult<()> {
+    fn truncate(&mut self, size: u64) -> VfsResult<()> {
+        let size = usize::try_from(size)
+            .map_err(|_| VfsError::new(SQLITE_FULL, "File size exceeds address space".into()))?;
         self.0.truncate(size);
         Ok(())
     }
@@ -77,8 +87,8 @@ impl VfsFile for MemFile {
     /// Called by `xFileSize`
     ///
     /// Get the memory file size
-    fn size(&self) -> VfsResult<usize> {
-        Ok(self.0.len())
+    fn size(&self) -> VfsResult<u64> {
+        Ok(self.0.len() as u64)
     }
 }
 

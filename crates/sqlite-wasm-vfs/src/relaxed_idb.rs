@@ -48,8 +48,8 @@ use rsqlite_vfs::{
     bail, check_db_and_page_size, check_import_db, check_option, check_result,
     ffi::{
         sqlite3_file, sqlite3_vfs, SQLITE_ERROR, SQLITE_FCNTL_COMMIT_PHASETWO, SQLITE_FCNTL_PRAGMA,
-        SQLITE_FCNTL_SYNC, SQLITE_IOERR, SQLITE_IOERR_DELETE, SQLITE_NOTFOUND, SQLITE_OK,
-        SQLITE_OPEN_MAIN_DB,
+        SQLITE_FCNTL_SYNC, SQLITE_IOERR, SQLITE_IOERR_DELETE, SQLITE_IOERR_TRUNCATE,
+        SQLITE_IOERR_WRITE, SQLITE_NOTFOUND, SQLITE_OK, SQLITE_OPEN_MAIN_DB,
     },
     register_vfs, registered_vfs, ImportDbError, MemChunksFile, OsCallback, RegisterVfsError,
     SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
@@ -74,29 +74,28 @@ use wasm_bindgen::JsValue;
 
 type Result<T> = std::result::Result<T, RelaxedIdbError>;
 
-fn page_read<T, G: Fn(usize) -> Option<T>, R: Fn(T, &mut [u8], (usize, usize))>(
+fn page_read<T, G: Fn(u64) -> Option<T>, R: Fn(T, &mut [u8], (usize, usize))>(
     buf: &mut [u8],
     page_size: usize,
-    file_size: usize,
-    offset: usize,
+    file_size: u64,
+    offset: u64,
     get_page: G,
     read_fn: R,
 ) -> bool {
-    if page_size == 0 || file_size == 0 {
+    if page_size == 0 || offset >= file_size {
         buf.fill(0);
         return false;
     }
 
     let mut bytes_read = 0;
     let mut p_data_offset = 0;
-    let p_data_length = buf.len();
+    let p_data_length = (buf.len() as u64).min(file_size - offset) as usize;
     let i_offset = offset;
 
     while p_data_offset < p_data_length {
-        let file_offset = i_offset + p_data_offset;
-        let page_idx = file_offset / page_size;
-        let page_offset = file_offset % page_size;
-        let page_addr = page_idx * page_size;
+        let file_offset = i_offset + p_data_offset as u64;
+        let page_offset = (file_offset % page_size as u64) as usize;
+        let page_addr = file_offset - page_offset as u64;
 
         let Some(page) = get_page(page_addr) else {
             break;
@@ -113,7 +112,7 @@ fn page_read<T, G: Fn(usize) -> Option<T>, R: Fn(T, &mut [u8], (usize, usize))>(
         bytes_read += page_length;
     }
 
-    if bytes_read < p_data_length {
+    if bytes_read < buf.len() {
         buf[bytes_read..].fill(0);
         return false;
     }
@@ -149,15 +148,15 @@ impl IdbFile {
 
 #[derive(Default)]
 struct IdbPageFile {
-    file_size: usize,
+    file_size: u64,
     block_size: usize,
-    blocks: HashMap<usize, Uint8Array>,
-    tx_blocks: HashSet<usize>,
+    blocks: HashMap<u64, Uint8Array>,
+    tx_blocks: HashSet<u64>,
     sync_notified: bool,
 }
 
 impl VfsFile for IdbPageFile {
-    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<bool> {
+    fn read(&self, buf: &mut [u8], offset: u64) -> VfsResult<bool> {
         Ok(page_read(
             buf,
             self.block_size,
@@ -170,8 +169,15 @@ impl VfsFile for IdbPageFile {
         ))
     }
 
-    fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()> {
+    fn write(&mut self, buf: &[u8], offset: u64) -> VfsResult<()> {
         let page_size = buf.len();
+        if page_size == 0 {
+            return Ok(());
+        }
+        let end = offset
+            .checked_add(page_size as u64)
+            .ok_or_else(|| VfsError::new(SQLITE_IOERR_WRITE, "File size overflow".into()))?;
+        crate::check_js_file_size(end, SQLITE_IOERR_WRITE)?;
 
         for fill in (self.file_size..offset).step_by(page_size) {
             self.blocks
@@ -187,11 +193,12 @@ impl VfsFile for IdbPageFile {
 
         self.tx_blocks.insert(offset);
         self.block_size = page_size;
-        self.file_size = self.file_size.max(offset + page_size);
+        self.file_size = self.file_size.max(end);
         Ok(())
     }
 
-    fn truncate(&mut self, size: usize) -> VfsResult<()> {
+    fn truncate(&mut self, size: u64) -> VfsResult<()> {
+        crate::check_js_file_size(size, SQLITE_IOERR_TRUNCATE)?;
         self.file_size = size;
         Ok(())
     }
@@ -200,27 +207,27 @@ impl VfsFile for IdbPageFile {
         Ok(())
     }
 
-    fn size(&self) -> VfsResult<usize> {
+    fn size(&self) -> VfsResult<u64> {
         Ok(self.file_size)
     }
 }
 
 impl VfsFile for IdbFile {
-    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<bool> {
+    fn read(&self, buf: &mut [u8], offset: u64) -> VfsResult<bool> {
         match self {
             IdbFile::Main(idb_page_file) => idb_page_file.read(buf, offset),
             IdbFile::Temp(mem_chunks_file) => mem_chunks_file.read(buf, offset),
         }
     }
 
-    fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()> {
+    fn write(&mut self, buf: &[u8], offset: u64) -> VfsResult<()> {
         match self {
             IdbFile::Main(idb_page_file) => idb_page_file.write(buf, offset),
             IdbFile::Temp(mem_chunks_file) => mem_chunks_file.write(buf, offset),
         }
     }
 
-    fn truncate(&mut self, size: usize) -> VfsResult<()> {
+    fn truncate(&mut self, size: u64) -> VfsResult<()> {
         match self {
             IdbFile::Main(idb_page_file) => idb_page_file.truncate(size),
             IdbFile::Temp(mem_chunks_file) => mem_chunks_file.truncate(size),
@@ -234,7 +241,7 @@ impl VfsFile for IdbFile {
         }
     }
 
-    fn size(&self) -> VfsResult<usize> {
+    fn size(&self) -> VfsResult<u64> {
         match self {
             IdbFile::Main(idb_page_file) => idb_page_file.size(),
             IdbFile::Temp(mem_chunks_file) => mem_chunks_file.size(),
@@ -242,8 +249,8 @@ impl VfsFile for IdbFile {
     }
 }
 
-fn key_range(file: &str, start: usize) -> std::ops::RangeInclusive<[JsValue; 2]> {
-    [JsValue::from(file), JsValue::from(start)]
+fn key_range(file: &str, start: u64) -> std::ops::RangeInclusive<[JsValue; 2]> {
+    [JsValue::from(file), JsValue::from(start as f64)]
         ..=[
             JsValue::from(file),
             JsValue::from(Number::POSITIVE_INFINITY),
@@ -283,12 +290,12 @@ async fn preload_db_impl(
                 let IdbFile::Main(db) = occupied_entry.get_mut() else {
                     unreachable!();
                 };
-                db.file_size += db.block_size;
+                db.file_size = db.file_size.max(offset + u64::from(data.length()));
                 db.blocks.insert(offset, data);
             }
             hash_map::Entry::Vacant(vacant_entry) => {
                 vacant_entry.insert(IdbFile::Main(IdbPageFile {
-                    file_size: data.length() as _,
+                    file_size: offset + u64::from(data.length()),
                     block_size: data.length() as _,
                     blocks: HashMap::from([(offset, data)]),
                     tx_blocks: HashSet::new(),
@@ -407,10 +414,10 @@ impl RelaxedIdb {
             )));
         }
 
-        let mut blocks: HashMap<usize, Uint8Array> = bytes
+        let mut blocks: HashMap<u64, Uint8Array> = bytes
             .chunks(page_size)
             .enumerate()
-            .map(|(idx, buffer)| (idx * page_size, Uint8Array::new_from_slice(buffer)))
+            .map(|(idx, buffer)| ((idx * page_size) as u64, Uint8Array::new_from_slice(buffer)))
             .collect();
 
         // forced to write back to legacy mode
@@ -424,7 +431,7 @@ impl RelaxedIdb {
         self.name2file.borrow_mut().insert(
             filename.into(),
             IdbFile::Main(IdbPageFile {
-                file_size: blocks.len() * page_size,
+                file_size: bytes.len() as u64,
                 block_size: page_size,
                 blocks,
                 tx_blocks,
@@ -440,13 +447,22 @@ impl RelaxedIdb {
 
         match name2file.get(name) {
             Some(IdbFile::Main(file)) => {
-                let file_size = file.file_size;
+                let file_size = usize::try_from(file.file_size)
+                    .ok()
+                    .filter(|&size| size <= isize::MAX as usize)
+                    .ok_or_else(|| {
+                        RelaxedIdbError::Generic("File is too large to export into memory".into())
+                    })?;
                 let mut ret = vec![0; file_size];
                 for (&offset, buffer) in &file.blocks {
-                    if offset >= file_size {
+                    if offset >= file.file_size {
                         continue;
                     }
-                    buffer.copy_to(&mut ret[offset..offset + file.block_size]);
+                    let offset = offset as usize;
+                    let length = file.block_size.min(file_size - offset);
+                    buffer
+                        .subarray(0, length as u32)
+                        .copy_to(&mut ret[offset..offset + length]);
                 }
                 Ok(ret)
             }
@@ -505,7 +521,7 @@ impl RelaxedIdb {
         let file_size = idb_blocks.file_size;
         let mut truncated_offset = idb_blocks.file_size;
         while idb_blocks.blocks.remove(&truncated_offset).is_some() {
-            truncated_offset += idb_blocks.block_size;
+            truncated_offset += idb_blocks.block_size as u64;
         }
 
         let tx_blocks = std::mem::take(&mut idb_blocks.tx_blocks);
@@ -556,7 +572,7 @@ impl RelaxedIdb {
     }
 }
 
-fn get_block(value: JsValue) -> (String, usize, Uint8Array) {
+fn get_block(value: JsValue) -> (String, u64, Uint8Array) {
     let path = Reflect::get(&value, &JsValue::from("path"))
         .unwrap()
         .as_string()
@@ -564,16 +580,22 @@ fn get_block(value: JsValue) -> (String, usize, Uint8Array) {
     let offset = Reflect::get(&value, &JsValue::from("offset"))
         .unwrap()
         .as_f64()
-        .unwrap() as usize;
+        .unwrap() as u64;
     let data = Reflect::get(&value, &JsValue::from("data")).unwrap();
 
     (path, offset, Uint8Array::from(data))
 }
 
-fn set_block(path: &JsValue, offset: usize, data: &Uint8Array) -> JsValue {
+fn set_block(path: &JsValue, offset: u64, data: &Uint8Array) -> JsValue {
     let block = Object::new();
     Reflect::set(&block, &JsValue::from("path"), path).unwrap();
-    Reflect::set(&block, &JsValue::from("offset"), &JsValue::from(offset)).unwrap();
+    // Keep numeric keys compatible with existing databases; u64.into() creates a BigInt.
+    Reflect::set(
+        &block,
+        &JsValue::from("offset"),
+        &JsValue::from(offset as f64),
+    )
+    .unwrap();
     Reflect::set(&block, &JsValue::from("data"), &JsValue::from(data)).unwrap();
     block.into()
 }
@@ -939,9 +961,44 @@ pub async fn install<C: OsCallback>(
 
 #[cfg(test)]
 mod tests {
-    use super::{IdbFile, RelaxedIdb, RelaxedIdbCfgBuilder, RelaxedIdbStore};
-    use rsqlite_vfs::{test_suite::test_vfs_store, VfsAppData};
+    use super::{
+        get_block, key_range, set_block, IdbFile, IdbPageFile, RelaxedIdb, RelaxedIdbCfgBuilder,
+        RelaxedIdbStore,
+    };
+    use rsqlite_vfs::{test_suite::test_vfs_store, VfsAppData, VfsFile};
     use wasm_bindgen_test::wasm_bindgen_test;
+
+    #[wasm_bindgen_test]
+    fn page_offsets_above_4_gib() {
+        let offset = 1u64 << 32;
+        // Model a large existing file without allocating its preceding pages.
+        let mut file = IdbPageFile {
+            file_size: offset,
+            ..Default::default()
+        };
+        file.write(&[41; 512], offset).unwrap();
+        file.write(&[42; 512], offset + 512).unwrap();
+        assert_eq!(file.size().unwrap(), offset + 1024);
+        assert!(!file.blocks.contains_key(&0));
+        let mut buffer = [0; 3];
+        assert!(file.read(&mut buffer, offset + 511).unwrap());
+        assert_eq!(buffer, [41, 42, 42]);
+        file.truncate(offset + 513).unwrap();
+        assert!(!file.read(&mut buffer, offset + 511).unwrap());
+        assert_eq!(buffer, [41, 42, 0]);
+
+        let path = wasm_bindgen::JsValue::from("large.db");
+        let block = set_block(&path, offset, file.blocks.get(&offset).unwrap());
+        let (name, stored_offset, bytes) = get_block(block);
+        assert_eq!(name, "large.db");
+        assert_eq!(stored_offset, offset);
+        assert_eq!(bytes.length(), 512);
+        let range = key_range("large.db", offset);
+        assert_eq!(range.start()[1].as_f64(), Some(offset as f64));
+        assert!(file.write(&[0; 512], crate::MAX_SAFE_INTEGER).is_err());
+        assert!(file.truncate(crate::MAX_SAFE_INTEGER + 1).is_err());
+        assert_eq!(file.size().unwrap(), offset + 513);
+    }
 
     #[wasm_bindgen_test]
     async fn test_relaxed_idb_vfs_store() {

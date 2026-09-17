@@ -69,15 +69,15 @@ impl MemFile {
 }
 
 impl VfsFile for MemFile {
-    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<bool> {
+    fn read(&self, buf: &mut [u8], offset: u64) -> VfsResult<bool> {
         self.file().read(buf, offset)
     }
 
-    fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()> {
+    fn write(&mut self, buf: &[u8], offset: u64) -> VfsResult<()> {
         self.file_mut().write(buf, offset)
     }
 
-    fn truncate(&mut self, size: usize) -> VfsResult<()> {
+    fn truncate(&mut self, size: u64) -> VfsResult<()> {
         self.file_mut().truncate(size)
     }
 
@@ -85,7 +85,7 @@ impl VfsFile for MemFile {
         self.file_mut().flush()
     }
 
-    fn size(&self) -> VfsResult<usize> {
+    fn size(&self) -> VfsResult<u64> {
         self.file().size()
     }
 }
@@ -272,7 +272,12 @@ where
         let name2file = self.0.borrow();
 
         if let Some(file) = name2file.get(filename) {
-            let file_size = file.size().unwrap();
+            let file_size = usize::try_from(file.size().unwrap())
+                .ok()
+                .filter(|&size| size <= isize::MAX as usize)
+                .ok_or_else(|| {
+                    MemVfsError::Generic("File is too large to export into memory".into())
+                })?;
             let mut ret = vec![0; file_size];
             file.read(&mut ret, 0).unwrap();
             Ok(ret)

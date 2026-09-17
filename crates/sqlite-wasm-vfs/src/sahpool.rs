@@ -37,7 +37,8 @@ use rsqlite_vfs::{
     ffi::{
         sqlite3_file, sqlite3_filename, sqlite3_vfs, sqlite3_vfs_register, sqlite3_vfs_unregister,
         SQLITE_CANTOPEN, SQLITE_ERROR, SQLITE_FCNTL_SIZE_HINT, SQLITE_IOCAP_UNDELETABLE_WHEN_OPEN,
-        SQLITE_IOERR, SQLITE_IOERR_DELETE, SQLITE_IOERR_TRUNCATE, SQLITE_NOTFOUND, SQLITE_OK,
+        SQLITE_IOERR, SQLITE_IOERR_DELETE, SQLITE_IOERR_FSTAT, SQLITE_IOERR_READ,
+        SQLITE_IOERR_TRUNCATE, SQLITE_IOERR_WRITE, SQLITE_NOTFOUND, SQLITE_OK,
         SQLITE_OPEN_DELETEONCLOSE, SQLITE_OPEN_MAIN_DB, SQLITE_OPEN_MAIN_JOURNAL,
         SQLITE_OPEN_SUPER_JOURNAL, SQLITE_OPEN_WAL,
     },
@@ -86,18 +87,19 @@ struct SyncAccessFile {
 impl SyncAccessFile {
     /// Pre-extends files because growing OPFS once is cheaper than growing per page.
     fn apply_size_hint(&mut self, hint: i64) -> VfsResult<()> {
-        if hint <= 0 || hint as u64 <= self.size()? as u64 {
+        if hint <= 0 || hint as u64 <= self.size()? {
             return Ok(());
         }
 
-        let size = usize::try_from(hint).map_err(|_| {
-            VfsError::new(
-                SQLITE_IOERR_TRUNCATE,
-                format!("size hint {hint} exceeds the platform's file size limit"),
-            )
-        })?;
-        self.truncate(size)
+        self.truncate(hint as u64)
     }
+}
+
+fn physical_offset(offset: u64, length: usize, code: i32) -> VfsResult<f64> {
+    let start = offset.checked_add(HEADER_OFFSET_DATA as u64);
+    let end = start.and_then(|start| start.checked_add(length as u64));
+    crate::check_js_file_size(end.unwrap_or(u64::MAX), code)?;
+    Ok(start.unwrap() as f64)
 }
 
 struct OpfsSAHPool {
@@ -491,9 +493,15 @@ impl OpfsSAHPool {
             .ok_or_else(|| OpfsSAHError::Generic(format!("File not found: {filename}")))?;
 
         let sah = &file.handle;
-        let actual_size = (sah.get_size().map_err(OpfsSAHError::GetSize)?
-            - HEADER_OFFSET_DATA as f64)
-            .max(0.0) as usize;
+        let actual_size = file
+            .size()
+            .map_err(|err| OpfsSAHError::Generic(format!("Failed to get file size: {err:?}")))?;
+        let actual_size = usize::try_from(actual_size)
+            .ok()
+            .filter(|&size| size <= isize::MAX as usize)
+            .ok_or_else(|| {
+                OpfsSAHError::Generic("File is too large to export into memory".into())
+            })?;
 
         let mut data = vec![0; actual_size];
         if actual_size > 0 {
@@ -549,13 +557,11 @@ impl OpfsSAHPool {
 }
 
 impl VfsFile for SyncAccessFile {
-    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<bool> {
+    fn read(&self, buf: &mut [u8], offset: u64) -> VfsResult<bool> {
+        let at = physical_offset(offset, buf.len(), SQLITE_IOERR_READ)?;
         let n_read = self
             .handle
-            .read_with_u8_array_and_options(
-                buf,
-                &read_write_options((HEADER_OFFSET_DATA + offset) as f64),
-            )
+            .read_with_u8_array_and_options(buf, &read_write_options(at))
             .map_err(OpfsSAHError::Read)
             .map_err(|err| err.vfs_err(SQLITE_IOERR))?;
 
@@ -567,13 +573,11 @@ impl VfsFile for SyncAccessFile {
         Ok(true)
     }
 
-    fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()> {
+    fn write(&mut self, buf: &[u8], offset: u64) -> VfsResult<()> {
+        let at = physical_offset(offset, buf.len(), SQLITE_IOERR_WRITE)?;
         let n_write = self
             .handle
-            .write_with_u8_array_and_options(
-                buf,
-                &read_write_options((HEADER_OFFSET_DATA + offset) as f64),
-            )
+            .write_with_u8_array_and_options(buf, &read_write_options(at))
             .map_err(OpfsSAHError::Write)
             .map_err(|err| err.vfs_err(SQLITE_IOERR))?;
 
@@ -584,9 +588,10 @@ impl VfsFile for SyncAccessFile {
         Ok(())
     }
 
-    fn truncate(&mut self, size: usize) -> VfsResult<()> {
+    fn truncate(&mut self, size: u64) -> VfsResult<()> {
+        let size = physical_offset(size, 0, SQLITE_IOERR_TRUNCATE)?;
         self.handle
-            .truncate_with_f64((HEADER_OFFSET_DATA + size) as f64)
+            .truncate_with_f64(size)
             .map_err(OpfsSAHError::Truncate)
             .map_err(|err| err.vfs_err(SQLITE_IOERR_TRUNCATE))
     }
@@ -597,13 +602,23 @@ impl VfsFile for SyncAccessFile {
             .map_err(|err| err.vfs_err(SQLITE_IOERR))
     }
 
-    fn size(&self) -> VfsResult<usize> {
-        Ok(self
+    fn size(&self) -> VfsResult<u64> {
+        let size = self
             .handle
             .get_size()
             .map_err(OpfsSAHError::GetSize)
-            .map_err(|err| err.vfs_err(SQLITE_IOERR))? as usize
-            - HEADER_OFFSET_DATA)
+            .map_err(|err| err.vfs_err(SQLITE_IOERR))?;
+        if !size.is_finite()
+            || size < 0.0
+            || size.fract() != 0.0
+            || size > crate::MAX_SAFE_INTEGER as f64
+        {
+            return Err(VfsError::new(
+                SQLITE_IOERR_FSTAT,
+                "Invalid OPFS file size".into(),
+            ));
+        }
+        Ok((size as u64).saturating_sub(HEADER_OFFSET_DATA as u64))
     }
 }
 
@@ -1025,6 +1040,20 @@ mod tests {
     };
     use rsqlite_vfs::{ffi::SQLITE_OPEN_MAIN_DB, test_suite::test_vfs_store, VfsAppData, VfsFile};
     use wasm_bindgen_test::wasm_bindgen_test;
+
+    #[wasm_bindgen_test]
+    fn physical_offsets_above_4_gib() {
+        let offset = 1u64 << 32;
+        assert_eq!(
+            super::physical_offset(offset, 512, super::SQLITE_IOERR_WRITE).unwrap(),
+            (offset + super::HEADER_OFFSET_DATA as u64) as f64,
+        );
+        let max = crate::MAX_SAFE_INTEGER - super::HEADER_OFFSET_DATA as u64;
+        assert!(super::physical_offset(max, 0, super::SQLITE_IOERR_TRUNCATE).is_ok());
+        assert!(super::physical_offset(max, 1, super::SQLITE_IOERR_WRITE).is_err());
+        assert!(super::physical_offset(max + 1, 0, super::SQLITE_IOERR_TRUNCATE).is_err());
+        assert!(super::physical_offset(u64::MAX, 0, super::SQLITE_IOERR_READ).is_err());
+    }
 
     #[wasm_bindgen_test]
     async fn size_hint_grows_but_does_not_shrink_file() {
