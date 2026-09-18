@@ -164,7 +164,6 @@ jobs:
           - ""
           - "--no-default-features"
           - "--no-default-features --features sahpool"
-          - "--no-default-features --features relaxed-idb"
           - "--all-features"
     runs-on: ${{ matrix.os }}
     steps:

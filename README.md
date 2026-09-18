@@ -43,15 +43,7 @@ fn open_db() {
 sqlite-wasm-vfs = "0.2"
 ```
 
-Both `sqlite-wasm-vfs` implementations are enabled by default. To use only the
-OPFS SAH pool, without the IndexedDB dependency:
-
-```toml
-[dependencies]
-sqlite-wasm-vfs = { version = "0.2", default-features = false, features = ["sahpool"] }
-```
-
-Use `features = ["relaxed-idb"]` instead for IndexedDB only. See the
+The OPFS SAH pool is enabled by default through the `sahpool` feature. See the
 [`sqlite-wasm-vfs` feature documentation](./crates/sqlite-wasm-vfs/README.md#features)
 for details.
 
@@ -59,19 +51,14 @@ The following vfs have been implemented:
 
 * [`memory`](./crates/rsqlite-vfs/src/memvfs.rs): as the default vfs, no additional conditions are required, store the database in memory.
 * [`sahpool`](./crates/sqlite-wasm-vfs/src/sahpool.rs): ported from sqlite-wasm, store the database in opfs.
-* [`relaxed-idb`](./crates/sqlite-wasm-vfs/src/relaxed_idb.rs): store the database in blocks in indexed db.
 
 ### VFS Comparison
 
-||MemoryVFS|SyncAccessHandlePoolVFS|RelaxedIdbVFS|
-|-|-|-|-|
-|Storage|RAM|OPFS|IndexedDB|
-|Contexts|All|Dedicated Worker|All|
-|Multiple connections|:x:|:x:|:x:|
-|Full durability|✅|✅|:x:|
-|Relaxed durability|:x:|:x:|✅|
-|Multi-database transactions|✅|✅|✅|
-|No COOP/COEP requirements|✅|✅|✅|
+||MemoryVFS|SyncAccessHandlePoolVFS|
+|-|-|-|
+|Storage|RAM|OPFS|
+|Contexts|All|Dedicated Worker|
+|No COOP/COEP requirements|✅|✅|
 
 ### How to implement a VFS
 

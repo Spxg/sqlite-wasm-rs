@@ -11,9 +11,8 @@ categories = ["development-tools::ffi", "wasm", "database"]
 keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "javascript"]
 
 [features]
-default = ["sahpool", "relaxed-idb"]
+default = ["sahpool"]
 sahpool = ["dep:web-sys"]
-relaxed-idb = ["dep:indexed_db_futures"]
 
 [dependencies]
 rsqlite-vfs = "0.1"
@@ -34,7 +33,6 @@ web-sys = { version = "0.3.81", optional = true, features = [
   "FileSystemGetFileOptions",
   "FileSystemFileHandle",
 ]}
-indexed_db_futures = { version = "0.6.4", optional = true }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.54"

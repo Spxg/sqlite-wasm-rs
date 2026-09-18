@@ -4,25 +4,18 @@ Some experimental VFS implementations.
 
 ## Features
 
-Both implementations are enabled by default:
+The OPFS SAH pool implementation is enabled by default:
 
 | Feature | Module | Storage |
 | --- | --- | --- |
 | `sahpool` | `sqlite_wasm_vfs::sahpool` | Origin Private File System (OPFS), using a pool of `SyncAccessHandle`s |
-| `relaxed-idb` | `sqlite_wasm_vfs::relaxed_idb` | IndexedDB, with relaxed durability guarantees |
 
-To use only the OPFS SAH pool, without the IndexedDB implementation and its
-`indexed_db_futures` dependency:
+To use the OPFS SAH pool:
 
 ```toml
 [dependencies]
-sqlite-wasm-vfs = { version = "0.2", default-features = false, features = ["sahpool"] }
+sqlite-wasm-vfs = "0.2"
 ```
 
-To use only IndexedDB, without the OPFS implementation and its `web-sys`
-filesystem bindings:
-
-```toml
-[dependencies]
-sqlite-wasm-vfs = { version = "0.2", default-features = false, features = ["relaxed-idb"] }
-```
+Set `default-features = false` to disable the implementation and its `web-sys`
+filesystem bindings. Enable `features = ["sahpool"]` to opt back in explicitly.

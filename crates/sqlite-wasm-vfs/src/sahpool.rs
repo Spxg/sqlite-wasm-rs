@@ -95,10 +95,18 @@ impl SyncAccessFile {
     }
 }
 
+// OPFS offsets use JavaScript Numbers.
+const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
+
 fn physical_offset(offset: u64, length: usize, code: i32) -> VfsResult<f64> {
     let start = offset.checked_add(HEADER_OFFSET_DATA as u64);
     let end = start.and_then(|start| start.checked_add(length as u64));
-    crate::check_js_file_size(end.unwrap_or(u64::MAX), code)?;
+    if end.unwrap_or(u64::MAX) > MAX_SAFE_INTEGER {
+        return Err(VfsError::new(
+            code,
+            "File offset or size exceeds JavaScript's safe integer range".into(),
+        ));
+    }
     Ok(start.unwrap() as f64)
 }
 
@@ -608,10 +616,7 @@ impl VfsFile for SyncAccessFile {
             .get_size()
             .map_err(OpfsSAHError::GetSize)
             .map_err(|err| err.vfs_err(SQLITE_IOERR))?;
-        if !size.is_finite()
-            || size < 0.0
-            || size.fract() != 0.0
-            || size > crate::MAX_SAFE_INTEGER as f64
+        if !size.is_finite() || size < 0.0 || size.fract() != 0.0 || size > MAX_SAFE_INTEGER as f64
         {
             return Err(VfsError::new(
                 SQLITE_IOERR_FSTAT,
@@ -1048,7 +1053,7 @@ mod tests {
             super::physical_offset(offset, 512, super::SQLITE_IOERR_WRITE).unwrap(),
             (offset + super::HEADER_OFFSET_DATA as u64) as f64,
         );
-        let max = crate::MAX_SAFE_INTEGER - super::HEADER_OFFSET_DATA as u64;
+        let max = super::MAX_SAFE_INTEGER - super::HEADER_OFFSET_DATA as u64;
         assert!(super::physical_offset(max, 0, super::SQLITE_IOERR_TRUNCATE).is_ok());
         assert!(super::physical_offset(max, 1, super::SQLITE_IOERR_WRITE).is_err());
         assert!(super::physical_offset(max + 1, 0, super::SQLITE_IOERR_TRUNCATE).is_err());
