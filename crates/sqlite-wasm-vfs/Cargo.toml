@@ -1,6 +1,6 @@
 [package]
 name = "sqlite-wasm-vfs"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["Spxg <noz@live.com>"]
 license = "MIT"
@@ -22,7 +22,7 @@ sahpool = [
 ]
 
 [dependencies]
-rsqlite-vfs = { version = "0.1", optional = true }
+rsqlite-vfs = { version = "0.2", optional = true }
 
 wasm-bindgen = { version = "0.2.104", optional = true }
 js-sys = { version = "0.3.81", optional = true }
@@ -44,7 +44,7 @@ web-sys = { version = "0.3.81", optional = true, features = [
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.54"
-sqlite-wasm-rs = { version = "0.5.1", default-features = false, features = ["wasm-bindgen"] }
+sqlite-wasm-rs = { version = "0.6", default-features = false, features = ["wasm-bindgen"] }
 
 [package.metadata.docs.rs]
 targets = ["wasm32-unknown-unknown"]
