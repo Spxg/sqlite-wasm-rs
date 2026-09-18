@@ -39,7 +39,7 @@
 #ifndef PRINTF_H_
 #define PRINTF_H_
 
-#ifdef PRINTF_INCLUDE_CONFIG_H
+#if defined(PRINTF_INCLUDE_CONFIG_H) && PRINTF_INCLUDE_CONFIG_H
 #include "printf_config.h"
 #endif
 
@@ -65,14 +65,6 @@ ATTR_PRINTF((one_based_format_index), 0)
 #else
 # define ATTR_PRINTF(one_based_format_index, first_arg)
 # define ATTR_VPRINTF(one_based_format_index)
-#endif
-
-#ifndef PRINTF_ALIAS_STANDARD_FUNCTION_NAMES_SOFT
-#define PRINTF_ALIAS_STANDARD_FUNCTION_NAMES_SOFT 0
-#endif
-
-#ifndef PRINTF_ALIAS_STANDARD_FUNCTION_NAMES_HARD
-#define PRINTF_ALIAS_STANDARD_FUNCTION_NAMES_HARD 0
 #endif
 
 #if PRINTF_ALIAS_STANDARD_FUNCTION_NAMES_HARD
@@ -146,8 +138,8 @@ int vprintf_(const char* format, va_list arg) ATTR_VPRINTF(1);
 /**
  * An implementation of the C standard's sprintf/vsprintf
  *
- * @note For security considerations (the potential for exceeding the buffer
- * bounds), please consider using the size-constrained variant, @ref snprintf /
+ * @note For safety reasons (the potential for exceeding the buffer bounbds),
+ * please consider using the size-constrained variant, @ref snprintf /
  * @ref vsnprintf, instead.
  *
  * @param s An array in which to store the formatted string. It must be large

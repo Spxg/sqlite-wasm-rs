@@ -3,9 +3,26 @@
 ** Purpose:     Amalgamation of the SQLite3 Multiple Ciphers encryption extension for SQLite
 ** Author:      Ulrich Telle
 ** Created:     2020-02-28
-** Copyright:   (c) 2006-2025 Ulrich Telle
+** Copyright:   (c) 2006-2026 Ulrich Telle
 ** License:     MIT
 */
+
+/*
+** If SQLite functions should be called through a dispatch table,
+** thus hiding all SQLite function symbols from the linker,
+** define the symbol SQLITE3MC_USE_DISPATCH_TABLE.
+*/
+
+#ifdef SQLITE3MC_USE_DISPATCH_TABLE
+#ifdef SQLITE_API
+#undef SQLITE_API
+#endif
+#ifdef SQLITE_PRIVATE
+#undef SQLITE_PRIVATE
+#endif
+#define SQLITE_API static
+#define SQLITE_PRIVATE static
+#endif
 
 /*
 ** Force some options required for WASM builds
@@ -123,7 +140,7 @@ SQLITE_API LPWSTR sqlite3_win32_utf8_to_unicode(const char*);
 /*** Begin of #include "sqlite3patched.c" ***/
 /******************************************************************************
 ** This file is an amalgamation of many separate C source files from SQLite
-** version 3.53.2.  By combining all the individual C code files into this
+** version 3.53.4.  By combining all the individual C code files into this
 ** single large file, the entire code can be compiled as a single translation
 ** unit.  This allows many compilers to do optimizations that would not be
 ** possible if the files were compiled separately.  Performance improvements
@@ -141,7 +158,7 @@ SQLITE_API LPWSTR sqlite3_win32_utf8_to_unicode(const char*);
 ** separate file. This file contains only code for the core SQLite library.
 **
 ** The content in this amalgamation comes from Fossil check-in
-** d6e03d8c777cfa2d35e3b60d8ec3e0187f3e with changes in files:
+** bf7c7f30031888f4e796e429ab3978879485 with changes in files:
 **
 **
 */
@@ -590,12 +607,12 @@ extern "C" {
 ** [sqlite3_libversion_number()], [sqlite3_sourceid()],
 ** [sqlite_version()] and [sqlite_source_id()].
 */
-#define SQLITE_VERSION        "3.53.2"
-#define SQLITE_VERSION_NUMBER 3053002
-#define SQLITE_SOURCE_ID      "2026-06-03 19:12:13 d6e03d8c777cfa2d35e3b60d8ec3e0187f3e9f99d8e2ee9cac695fd6fcdf1a24"
+#define SQLITE_VERSION        "3.53.4"
+#define SQLITE_VERSION_NUMBER 3053004
+#define SQLITE_SOURCE_ID      "2026-07-24 19:02:57 bf7c7f30031888f4e796e429ab3978879485813aaca6f641c7b33e4e09459bcc"
 #define SQLITE_SCM_BRANCH     "branch-3.53"
-#define SQLITE_SCM_TAGS       "release version-3.53.2"
-#define SQLITE_SCM_DATETIME   "2026-06-03T19:12:13.350Z"
+#define SQLITE_SCM_TAGS       "release version-3.53.4"
+#define SQLITE_SCM_DATETIME   "2026-07-24T19:02:57.525Z"
 
 /*
 ** CAPI3REF: Run-Time Library Version Numbers
@@ -4810,7 +4827,8 @@ SQLITE_API int sqlite3_limit(sqlite3*, int id, int newVal);
 ** or in an ORDER BY or GROUP BY clause.</dd>)^
 **
 ** [[SQLITE_LIMIT_EXPR_DEPTH]] ^(<dt>SQLITE_LIMIT_EXPR_DEPTH</dt>
-** <dd>The maximum depth of the parse tree on any expression.</dd>)^
+** <dd>The maximum depth of the parse tree on any expression and
+** the maximum nesting depth for subqueries and VIEWs</dd>)^
 **
 ** [[SQLITE_LIMIT_PARSER_DEPTH]] ^(<dt>SQLITE_LIMIT_PARSER_DEPTH</dt>
 ** <dd>The maximum depth of the LALR(1) parser stack used to analyze
@@ -4841,7 +4859,8 @@ SQLITE_API int sqlite3_limit(sqlite3*, int id, int newVal);
 ** <dd>The maximum index number of any [parameter] in an SQL statement.)^
 **
 ** [[SQLITE_LIMIT_TRIGGER_DEPTH]] ^(<dt>SQLITE_LIMIT_TRIGGER_DEPTH</dt>
-** <dd>The maximum depth of recursion for triggers.</dd>)^
+** <dd>The maximum depth of recursion for triggers, and the maximum
+** nesting depth for separate triggers.</dd>)^
 **
 ** [[SQLITE_LIMIT_WORKER_THREADS]] ^(<dt>SQLITE_LIMIT_WORKER_THREADS</dt>
 ** <dd>The maximum number of auxiliary worker threads that a single
@@ -15938,6 +15957,13 @@ SQLITE_PRIVATE void sqlite3HashClear(Hash*);
 #endif
 
 /*
+** sizeof64() is like sizeof(), but always returns a 64-bit value, even
+** on 32-bit builds. This can help to avoid overflow by ensuring 64-bit
+** arithmetic is used consistently in both 32-bit and 64-bit builds.
+*/
+#define sizeof64(X) ((sqlite3_int64)sizeof(X))
+
+/*
 ** Work around C99 "flex-array" syntax for pre-C99 compilers, so as
 ** to avoid complaints from -fsanitize=strict-bounds.
 */
@@ -17298,7 +17324,7 @@ SQLITE_PRIVATE   int sqlite3BtreeCheckpoint(Btree*, int, int *, int *);
 
 SQLITE_PRIVATE const char *sqlite3BtreeGetFilename(Btree *);
 SQLITE_PRIVATE const char *sqlite3BtreeGetJournalname(Btree *);
-SQLITE_PRIVATE int sqlite3BtreeCopyFile(Btree *, Btree *);
+SQLITE_PRIVATE int sqlite3BtreeCopyFile(Btree*, Btree*);
 
 SQLITE_PRIVATE int sqlite3BtreeIncrVacuum(Btree *);
 
@@ -21056,6 +21082,7 @@ struct Parse {
   int szOpAlloc;       /* Bytes of memory space allocated for Vdbe.aOp[] */
   int iSelfTab;        /* Table associated with an index on expr, or negative
                        ** of the base register during check-constraint eval */
+  int nNestSel;        /* Number of nested SELECT statements and/or VIEWs */
   int nLabel;          /* The *negative* of the number of labels used */
   int nLabelAlloc;     /* Number of slots in aLabel */
   int *aLabel;         /* Space to hold the labels */
@@ -27718,7 +27745,7 @@ SQLITE_PRIVATE int sqlite3OsCurrentTimeInt64(sqlite3_vfs *pVfs, sqlite3_int64 *p
   }else{
     double r;
     rc = pVfs->xCurrentTime(pVfs, &r);
-    *pTimeOut = (sqlite3_int64)(r*86400000.0);
+    *pTimeOut = sqlite3RealToI64(r*86400000.0);
   }
   return rc;
 }
@@ -39718,16 +39745,17 @@ int kvvfsDecode(const char *a, char *aOut, int nOut){
   while( 1 ){
     c = kvvfsHexValue[aIn[i]];
     if( c<0 ){
-      int n = 0;
-      int mult = 1;
+      sqlite3_int64 n = 0;
+      sqlite3_int64 mult = 1;
       c = aIn[i];
       if( c==0 ) break;
       while( c>='a' && c<='z' ){
         n += (c - 'a')*mult;
+        if( n>nOut ) return -1 /* oversized/malformed input */;
         mult *= 26;
         c = aIn[++i];
       }
-      if( j+n>nOut ) return -1;
+      if( j+n>nOut ) return -1 /* oversized/malformed input */;
       memset(&aOut[j], 0, n);
       j += n;
       if( c==0 || mult==1 ) break; /* progress stalled if mult==1 */
@@ -39763,7 +39791,7 @@ static void kvvfsDecodeJournal(
   i = 0;
   mult = 1;
   while( (c = zTxt[i++])>='a' && c<='z' ){
-    n += (zTxt[i] - 'a')*mult;
+    n += (c - 'a')*mult;
     mult *= 26;
   }
   sqlite3_free(pFile->aJrnl);
@@ -39809,9 +39837,7 @@ static int kvvfsClose(sqlite3_file *pProtoFile){
              pFile->isJournal ? "journal" : "db"));
   sqlite3_free(pFile->aJrnl);
   sqlite3_free(pFile->aData);
-#ifdef SQLITE_WASM
   memset(pFile, 0, sizeof(*pFile));
-#endif
   return SQLITE_OK;
 }
 
@@ -39841,6 +39867,7 @@ static int kvvfsReadJrnl(
                                        aTxt, szTxt+1);
     if( rc>=0 ){
       kvvfsDecodeJournal(pFile, aTxt, szTxt);
+      rc = 0;
     }
     sqlite3_free(aTxt);
     if( rc ) return rc;
@@ -49908,10 +49935,8 @@ static struct win_syscall {
 #define osWaitForSingleObjectEx ((DWORD(WINAPI*)(HANDLE,DWORD, \
         BOOL))aSyscall[63].pCurrent)
 
-  { "GetNativeSystemInfo",     (SYSCALL)GetNativeSystemInfo,     0 },
-
-#define osGetNativeSystemInfo ((VOID(WINAPI*)( \
-        LPSYSTEM_INFO))aSyscall[64].pCurrent)
+  { "GetNativeSystemInfo",     (SYSCALL)0,                       0 },
+  /* ^^^^^^^^^^^^^^^^^^^----------------^------- placeholder only */
 
 #if defined(SQLITE_WIN32_HAS_ANSI)
   { "OutputDebugStringA",      (SYSCALL)OutputDebugStringA,      0 },
@@ -53166,11 +53191,29 @@ SQLITE_API int sqlite3_win_test_unc_locking = 0;
 
 /*
 ** Return true if the string passed as the only argument is likely
-** to be a UNC path. In other words, if it starts with "\\".
+** to be a UNC path.  Return false if note.
+**
+** Return true if:
+**
+**   (1) The name begins with "\\"
+**   (2) But does not begin with "\\?\C:\" where C can be any alphabetic
+**       character.
+**
+** For testing, also return true in all cases if the global variable
+** sqlite3_win_test_unc_locking is true.
 */
 static int winIsUNCPath(const char *zFile){
   if( zFile[0]=='\\' && zFile[1]=='\\' ){
-    return 1;
+    if( zFile[2]=='?'
+     && zFile[3]=='\\'
+     && sqlite3Isalpha(zFile[4])
+     && zFile[5]==':'
+     && winIsDirSep(zFile[6])
+    ){
+      return sqlite3_win_test_unc_locking;
+    }else{
+      return 1;
+    }
   }
   return sqlite3_win_test_unc_locking;
 }
@@ -56186,7 +56229,7 @@ SQLITE_API unsigned char *sqlite3_serialize(
   sqlite3_int64 sz;
   int szPage = 0;
   sqlite3_stmt *pStmt = 0;
-  unsigned char *pOut;
+  unsigned char *pOut = 0;
   char *zSql;
   int rc;
 
@@ -56196,12 +56239,13 @@ SQLITE_API unsigned char *sqlite3_serialize(
     return 0;
   }
 #endif
+  sqlite3_mutex_enter(db->mutex);
 
   if( zSchema==0 ) zSchema = db->aDb[0].zDbSName;
   p = memdbFromDbSchema(db, zSchema);
   iDb = sqlite3FindDbName(db, zSchema);
   if( piSize ) *piSize = -1;
-  if( iDb<0 ) return 0;
+  if( iDb<0 ) goto serialize_out;
   if( p ){
     MemStore *pStore = p->pStore;
     assert( pStore->pMutex==0 );
@@ -56212,19 +56256,17 @@ SQLITE_API unsigned char *sqlite3_serialize(
       pOut = sqlite3_malloc64( pStore->sz );
       if( pOut ) memcpy(pOut, pStore->aData, pStore->sz);
     }
-    return pOut;
+    goto serialize_out;
   }
   pBt = db->aDb[iDb].pBt;
-  if( pBt==0 ) return 0;
+  if( pBt==0 ) goto serialize_out;
   szPage = sqlite3BtreeGetPageSize(pBt);
   zSql = sqlite3_mprintf("PRAGMA \"%w\".page_count", zSchema);
   rc = zSql ? sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0) : SQLITE_NOMEM;
   sqlite3_free(zSql);
-  if( rc ) return 0;
+  if( rc ) goto serialize_out;
   rc = sqlite3_step(pStmt);
-  if( rc!=SQLITE_ROW ){
-    pOut = 0;
-  }else{
+  if( rc==SQLITE_ROW ){
     sz = sqlite3_column_int64(pStmt, 0)*szPage;
     if( sz==0 ){
       sqlite3_reset(pStmt);
@@ -56258,6 +56300,9 @@ SQLITE_API unsigned char *sqlite3_serialize(
     }
   }
   sqlite3_finalize(pStmt);
+
+ serialize_out:
+  sqlite3_mutex_leave(db->mutex);
   return pOut;
 }
 
@@ -58111,22 +58156,24 @@ static int pcache1InitBulk(PCache1 *pCache){
   if( szBulk > pCache->szAlloc*(i64)pCache->nMax ){
     szBulk = pCache->szAlloc*(i64)pCache->nMax;
   }
-  zBulk = pCache->pBulk = sqlite3Malloc( szBulk );
-  sqlite3EndBenignMalloc();
-  if( zBulk ){
-    int nBulk = sqlite3MallocSize(zBulk)/pCache->szAlloc;
-    do{
-      PgHdr1 *pX = (PgHdr1*)&zBulk[pCache->szPage];
-      pX->page.pBuf = zBulk;
-      pX->page.pExtra = (u8*)pX + ROUND8(sizeof(*pX));
-      assert( EIGHT_BYTE_ALIGNMENT( pX->page.pExtra ) );
-      pX->isBulkLocal = 1;
-      pX->isAnchor = 0;
-      pX->pNext = pCache->pFree;
-      pX->pLruPrev = 0;           /* Initializing this saves a valgrind error */
-      pCache->pFree = pX;
-      zBulk += pCache->szAlloc;
-    }while( --nBulk );
+  if( szBulk>=pCache->szAlloc ){
+    zBulk = pCache->pBulk = sqlite3Malloc( szBulk );
+    sqlite3EndBenignMalloc();
+    if( zBulk ){
+      int nBulk = sqlite3MallocSize(zBulk)/pCache->szAlloc;
+      do{
+        PgHdr1 *pX = (PgHdr1*)&zBulk[pCache->szPage];
+        pX->page.pBuf = zBulk;
+        pX->page.pExtra = (u8*)pX + ROUND8(sizeof(*pX));
+        assert( EIGHT_BYTE_ALIGNMENT( pX->page.pExtra ) );
+        pX->isBulkLocal = 1;
+        pX->isAnchor = 0;
+        pX->pNext = pCache->pFree;
+        pX->pLruPrev = 0;    /* Initializing this saves a valgrind error */
+        pCache->pFree = pX;
+        zBulk += pCache->szAlloc;
+      }while( --nBulk );
+    }
   }
   return pCache->pFree!=0;
 }
@@ -61025,39 +61072,43 @@ static void checkPage(PgHdr *pPg){
 #endif  /* SQLITE_CHECK_PAGES */
 
 /*
-** When this is called the journal file for pager pPager must be open.
-** This function attempts to read a super-journal file name from the
-** end of the file and, if successful, copies it into memory supplied
-** by the caller. See comments above writeSuperJournal() for the format
-** used to store a super-journal file name at the end of a journal file.
-**
-** zSuper must point to a buffer of at least nSuper bytes allocated by
-** the caller. This should be sqlite3_vfs.mxPathname+1 (to ensure there is
-** enough space to write the super-journal name). If the super-journal
-** name in the journal is longer than nSuper bytes (including a
-** nul-terminator), then this is handled as if no super-journal name
-** were present in the journal.
-**
-** If a super-journal file name is present at the end of the journal
-** file, then it is copied into the buffer pointed to by zSuper. A
-** nul-terminator byte is appended to the buffer following the
-** super-journal file name.
-**
-** If it is determined that no super-journal file name is present
-** zSuper[0] is set to 0 and SQLITE_OK returned.
-**
-** If an error occurs while reading from the journal file, an SQLite
-** error code is returned.
+** Free a buffer allocated by the readSuperJournal() function.
 */
-static int readSuperJournal(sqlite3_file *pJrnl, char *zSuper, u64 nSuper){
+static void freeSuperJournal(char *zSuper){
+  if( zSuper ){
+    sqlite3_free(&zSuper[-4]);
+  }
+}
+
+/*
+** Parameter pJrnl is a file-handle open on a journal file. This function
+** attempts to read a super-journal file name from the end of the journal
+** file. If successful, it sets output parameter (*pzSuper) to point to a
+** buffer containing the super-journal name as a nul-terminated string.
+** The caller is responsible for freeing the buffer using freeSuperJournal().
+**
+** Refer to comments above writeSuperJournal() for the format used to store
+** a super-journal file name at the end of a journal file.
+**
+** Parameter nSuper is passed the maximum allowable size of the super journal
+** name in bytes. If the super-journal name in the journal is longer than
+** nSuper bytes (including a nul-terminator), then this is handled as if no
+** super-journal name were present in the journal.
+**
+** If there is no super-journal name at the end of pJrnl, (*pzSuper) is
+** set to 0 and SQLITE_OK is returned. Or, if an error occurs while reading
+** the super-journal name, an SQLite error code is returned and (*pzSuper)
+** is set to 0.
+*/
+static int readSuperJournal(sqlite3_file *pJrnl, u64 nSuper, char **pzSuper){
   int rc;                    /* Return code */
   u32 len;                   /* Length in bytes of super-journal name */
   i64 szJ;                   /* Total size in bytes of journal file pJrnl */
   u32 cksum;                 /* MJ checksum value read from journal */
-  u32 u;                     /* Unsigned loop counter */
   unsigned char aMagic[8];   /* A buffer to hold the magic header */
-  zSuper[0] = '\0';
+  char *zOut = 0;
 
+  *pzSuper = 0;
   if( SQLITE_OK!=(rc = sqlite3OsFileSize(pJrnl, &szJ))
    || szJ<16
    || SQLITE_OK!=(rc = read32bits(pJrnl, szJ-16, &len))
@@ -61067,27 +61118,34 @@ static int readSuperJournal(sqlite3_file *pJrnl, char *zSuper, u64 nSuper){
    || SQLITE_OK!=(rc = read32bits(pJrnl, szJ-12, &cksum))
    || SQLITE_OK!=(rc = sqlite3OsRead(pJrnl, aMagic, 8, szJ-8))
    || memcmp(aMagic, aJournalMagic, 8)
-   || SQLITE_OK!=(rc = sqlite3OsRead(pJrnl, zSuper, len, szJ-16-len))
   ){
     return rc;
   }
 
-  /* See if the checksum matches the super-journal name */
-  for(u=0; u<len; u++){
-    cksum -= zSuper[u];
+  zOut = (char*)sqlite3MallocZero(4 + len + 2);
+  if( !zOut ){
+    rc = SQLITE_NOMEM_BKPT;
+  }else{
+    zOut = &zOut[4];
+    if( SQLITE_OK==(rc = sqlite3OsRead(pJrnl, zOut, len, szJ-16-len)) ){
+      u32 u;                   /* Unsigned loop counter */
+      /* See if the checksum matches the super-journal name */
+      for(u=0; u<len; u++){
+        cksum -= zOut[u];
+      }
+    }
+    if( rc!=SQLITE_OK || cksum || zOut[0]==0 ){
+      /* If the checksum doesn't add up, then one or more of the disk sectors
+      ** containing the super-journal filename is corrupted. This means
+      ** definitely roll back, so just return SQLITE_OK and report a (nul)
+      ** super-journal filename.  */
+      freeSuperJournal(zOut);
+      zOut = 0;
+    }
   }
-  if( cksum ){
-    /* If the checksum doesn't add up, then one or more of the disk sectors
-    ** containing the super-journal filename is corrupted. This means
-    ** definitely roll back, so just return SQLITE_OK and report a (nul)
-    ** super-journal filename.
-    */
-    len = 0;
-  }
-  zSuper[len] = '\0';
-  zSuper[len+1] = '\0';
 
-  return SQLITE_OK;
+  *pzSuper = zOut;
+  return rc;
 }
 
 /*
@@ -62242,6 +62300,40 @@ static int pager_playback_one_page(
 }
 
 /*
+** Check if zSuper is a valid super-journal name. There are two valid
+** formats:
+**
+**   + The 3rd and 4th last bytes of the filename are ".9", and the
+**     following 2 bytes are hex digits. This is a file created in 8.3
+**     filenames mode.
+**
+**   + The 3rd last byte of the filename is "9" and the filename
+**     contains the string "-mj" starting at the 12th last byte.
+**     All bytes following the "-mj" are hex digits.
+**
+** If the filename matches either of these patterns, return non-zero.
+** Otherwise, return zero.
+*/
+static int pagerIsSuperJrnlName(const char *zSuper){
+  const int nSuper = sqlite3Strlen30(zSuper);
+  int ii;
+
+  if( nSuper<4 ) return 0;
+  if( zSuper[nSuper-3]!='9' ) return 0;
+#ifdef SQLITE_ENABLE_8_3_NAMES
+  if( sqlite3Isxdigit(zSuper[nSuper-2])==0 ) return 0;
+  if( sqlite3Isxdigit(zSuper[nSuper-1])==0 ) return 0;
+  if( zSuper[nSuper-4]=='.' ) return 1;
+#endif
+  if( nSuper<12 ) return 0;
+  if( memcmp(&zSuper[nSuper-12], "-mj", 3) ) return 0;
+  for(ii=nSuper-9; ii<nSuper; ii++){
+    if( sqlite3Isxdigit(zSuper[ii])==0 ) return 0;
+  }
+  return 1;
+}
+
+/*
 ** Parameter zSuper is the name of a super-journal file. A single journal
 ** file that referred to the super-journal file has just been rolled back.
 ** This routine checks if it is possible to delete the super-journal file,
@@ -62292,9 +62384,16 @@ static int pager_delsuper(Pager *pPager, const char *zSuper){
   char *zSuperJournal = 0;  /* Contents of super-journal file */
   i64 nSuperJournal;        /* Size of super-journal file */
   char *zJournal;           /* Pointer to one journal within MJ file */
-  char *zSuperPtr;          /* Space to hold super-journal filename */
   char *zFree = 0;          /* Free this buffer */
-  i64 nSuperPtr;            /* Amount of space allocated to zSuperPtr[] */
+  int bSeen = 0;            /* If super-journal contains pPager->zJournal */
+
+  /* Check if this looks like a real super-journal name. If it does not,
+  ** return SQLITE_OK without attempting to delete it. This is to limit
+  ** the degree to which a crafted journal file can be used to cause
+  ** SQLite to delete arbitrary files. */
+  if( pagerIsSuperJrnlName(zSuper)==0 ){
+    return SQLITE_OK;
+  }
 
   /* Allocate space for both the pJournal and pSuper file descriptors.
   ** If successful, open the super-journal file for reading.
@@ -62317,9 +62416,8 @@ static int pager_delsuper(Pager *pPager, const char *zSuper){
   */
   rc = sqlite3OsFileSize(pSuper, &nSuperJournal);
   if( rc!=SQLITE_OK ) goto delsuper_out;
-  nSuperPtr = 1 + (i64)pVfs->mxPathname;
-  assert( nSuperJournal>=0 && nSuperPtr>0 );
-  zFree = sqlite3Malloc(4 + nSuperJournal + 2 + nSuperPtr + 2);
+  assert( nSuperJournal>=0 );
+  zFree = sqlite3Malloc(4 + nSuperJournal + 2);
   if( !zFree ){
     rc = SQLITE_NOMEM_BKPT;
     goto delsuper_out;
@@ -62328,7 +62426,6 @@ static int pager_delsuper(Pager *pPager, const char *zSuper){
   }
   zFree[0] = zFree[1] = zFree[2] = zFree[3] = 0;
   zSuperJournal = &zFree[4];
-  zSuperPtr = &zSuperJournal[nSuperJournal+2];
   rc = sqlite3OsRead(pSuper, zSuperJournal, (int)nSuperJournal, 0);
   if( rc!=SQLITE_OK ) goto delsuper_out;
   zSuperJournal[nSuperJournal] = 0;
@@ -62336,43 +62433,56 @@ static int pager_delsuper(Pager *pPager, const char *zSuper){
 
   zJournal = zSuperJournal;
   while( (zJournal-zSuperJournal)<nSuperJournal ){
-    int exists;
-    rc = sqlite3OsAccess(pVfs, zJournal, SQLITE_ACCESS_EXISTS, &exists);
-    if( rc!=SQLITE_OK ){
-      goto delsuper_out;
-    }
-    if( exists ){
-      /* One of the journals pointed to by the super-journal exists.
-      ** Open it and check if it points at the super-journal. If
-      ** so, return without deleting the super-journal file.
-      ** NB:  zJournal is really a MAIN_JOURNAL.  But call it a
-      ** SUPER_JOURNAL here so that the VFS will not send the zJournal
-      ** name into sqlite3_database_file_object().
-      */
-      int c;
-      int flags = (SQLITE_OPEN_READONLY|SQLITE_OPEN_SUPER_JOURNAL);
-      rc = sqlite3OsOpen(pVfs, zJournal, pJournal, flags, 0);
+    if( strcmp(zJournal, pPager->zJournal)==0 ){
+      bSeen = 1;
+    }else{
+      int exists;
+      rc = sqlite3OsAccess(pVfs, zJournal, SQLITE_ACCESS_EXISTS, &exists);
       if( rc!=SQLITE_OK ){
         goto delsuper_out;
       }
+      if( exists ){
+        char *zSuperPtr = 0;
 
-      rc = readSuperJournal(pJournal, zSuperPtr, nSuperPtr);
-      sqlite3OsClose(pJournal);
-      if( rc!=SQLITE_OK ){
-        goto delsuper_out;
-      }
+        /* One of the journals pointed to by the super-journal exists.
+        ** Open it and check if it points at the super-journal. If
+        ** so, return without deleting the super-journal file.
+        ** NB:  zJournal is really a MAIN_JOURNAL.  But call it a
+        ** SUPER_JOURNAL here so that the VFS will not send the zJournal
+        ** name into sqlite3_database_file_object().
+        */
+        int c;
+        int flags = (SQLITE_OPEN_READONLY|SQLITE_OPEN_SUPER_JOURNAL);
+        rc = sqlite3OsOpen(pVfs, zJournal, pJournal, flags, 0);
+        if( rc!=SQLITE_OK ){
+          goto delsuper_out;
+        }
 
-      c = zSuperPtr[0]!=0 && strcmp(zSuperPtr, zSuper)==0;
-      if( c ){
-        /* We have a match. Do not delete the super-journal file. */
-        goto delsuper_out;
+        rc = readSuperJournal(pJournal, 1+(u64)pVfs->mxPathname, &zSuperPtr);
+        sqlite3OsClose(pJournal);
+        if( rc!=SQLITE_OK ){
+          assert( zSuperPtr==0 );
+          goto delsuper_out;
+        }
+
+        c = zSuperPtr!=0 && strcmp(zSuperPtr, zSuper)==0;
+        freeSuperJournal(zSuperPtr);
+        if( c ){
+          /* We have a match. Do not delete the super-journal file. */
+          goto delsuper_out;
+        }
       }
     }
     zJournal += (sqlite3Strlen30(zJournal)+1);
   }
 
   sqlite3OsClose(pSuper);
-  rc = sqlite3OsDelete(pVfs, zSuper, 0);
+  if( bSeen ){
+    /* Only delete the super-journal if bSeen is true - indicating that
+    ** the super-journal contained a pointer to this database's journal
+    ** file. */
+    rc = sqlite3OsDelete(pVfs, zSuper, 0);
+  }
 
 delsuper_out:
   sqlite3_free(zFree);
@@ -62577,19 +62687,11 @@ static int pager_playback(Pager *pPager, int isHot){
   ** If a super-journal file name is specified, but the file is not
   ** present on disk, then the journal is not hot and does not need to be
   ** played back.
-  **
-  ** TODO: Technically the following is an error because it assumes that
-  ** buffer Pager.pTmpSpace is (mxPathname+1) bytes or larger. i.e. that
-  ** ((pPager->pageSize+8) >= pPager->pVfs->mxPathname+1). Using os_unix.c,
-  ** mxPathname is 512, which is the same as the minimum allowable value
-  ** for pageSize, and so this assumption holds. But it might not for some
-  ** custom VFS.  */
-  zSuper = pPager->pTmpSpace;
-  rc = readSuperJournal(pPager->jfd, zSuper, 1+(i64)pPager->pVfs->mxPathname);
-  if( rc==SQLITE_OK && zSuper[0] ){
+  */
+  rc = readSuperJournal(pPager->jfd, 1+(i64)pPager->pVfs->mxPathname, &zSuper);
+  if( rc==SQLITE_OK && zSuper ){
     rc = sqlite3OsAccess(pVfs, zSuper, SQLITE_ACCESS_EXISTS, &res);
   }
-  zSuper = 0;
   if( rc!=SQLITE_OK || !res ){
     goto end_playback;
   }
@@ -62718,30 +62820,20 @@ end_playback:
   */
   pPager->changeCountDone = pPager->tempFile;
 
-  if( rc==SQLITE_OK ){
-    /* Leave 4 bytes of space before the super-journal filename in memory.
-    ** This is because it may end up being passed to sqlite3OsOpen(), in
-    ** which case it requires 4 0x00 bytes in memory immediately before
-    ** the filename. */
-    zSuper = &pPager->pTmpSpace[4];
-    rc = readSuperJournal(pPager->jfd, zSuper, 1+(i64)pPager->pVfs->mxPathname);
-    testcase( rc!=SQLITE_OK );
-  }
   if( rc==SQLITE_OK
    && (pPager->eState>=PAGER_WRITER_DBMOD || pPager->eState==PAGER_OPEN)
   ){
     rc = sqlite3PagerSync(pPager, 0);
   }
   if( rc==SQLITE_OK ){
-    rc = pager_end_transaction(pPager, zSuper[0]!='\0', 0);
+    rc = pager_end_transaction(pPager, zSuper!=0, 0);
     testcase( rc!=SQLITE_OK );
   }
-  if( rc==SQLITE_OK && zSuper[0] && res ){
+  if( rc==SQLITE_OK && zSuper && res ){
     /* If there was a super-journal and this routine will return success,
     ** see if it is possible to delete the super-journal.
     */
-    assert( zSuper==&pPager->pTmpSpace[4] );
-    memset(pPager->pTmpSpace, 0, 4);
+    assert( memcmp(&zSuper[-4], "\0\0\0\0", 4)==0 );
     rc = pager_delsuper(pPager, zSuper);
     testcase( rc!=SQLITE_OK );
   }
@@ -62754,6 +62846,7 @@ end_playback:
   ** back a journal created by a process with a different sector size
   ** value. Reset it to the correct value for this process.
   */
+  freeSuperJournal(zSuper);
   setSectorSize(pPager);
   return rc;
 }
@@ -68613,6 +68706,12 @@ static int walDecodeFrame(
     return 0;
   }
 
+  /* Need a valid page size
+  */
+  if( !pWal->szPage ){
+    return 0;
+  }
+
   /* A frame is only valid if a checksum of the WAL header,
   ** all prior frames, the first 16 bytes of this frame-header,
   ** and the frame-data matches the checksum in the last 8
@@ -70467,7 +70566,7 @@ static int walBeginShmUnreliable(Wal *pWal, int *pChanged){
 
   /* Allocate a buffer to read frames into */
   assert( (pWal->szPage & (pWal->szPage-1))==0 );
-  assert( pWal->szPage>=512 && pWal->szPage<=65536 );
+  assert( (pWal->szPage>=512 && pWal->szPage<=65536) || pWal->szPage==0 );
   szFrame = pWal->szPage + WAL_FRAME_HDRSIZE;
   aFrame = (u8 *)sqlite3_malloc64(szFrame);
   if( aFrame==0 ){
@@ -72965,6 +73064,9 @@ struct IntegrityCk {
   u32 *heap;        /* Min-heap used for analyzing cell coverage */
   sqlite3 *db;      /* Database connection running the check */
   i64 nRow;         /* Number of rows visited in current tree */
+#ifdef SQLITE_DEBUG
+  u32 mxHeap;       /* Maximum number of entries in the Min-heap */
+#endif
 };
 
 /*
@@ -75426,8 +75528,12 @@ static int btreeComputeFreeSpace(MemPage *pPage){
       }
       next = get2byte(&data[pc]);
       size = get2byte(&data[pc+2]);
+      if( size<4 ){
+        /* Minimum freeblock size is 4 */
+        return SQLITE_CORRUPT_PAGE(pPage);
+      }
       nFree = nFree + size;
-      if( next<=pc+size+3 ) break;
+      if( next<pc+size+4 ) break;
       pc = next;
     }
     if( next>0 ){
@@ -79260,14 +79366,14 @@ static int indexCellCompare(
     /* This branch runs if the record-size field of the cell is a
     ** single byte varint and the record fits entirely on the main
     ** b-tree page.  */
-    testcase( pCell+nCell+1==pPage->aDataEnd );
+    if( pCell + nCell >= pPage->aDataEnd ) return 99;
     c = xRecordCompare(nCell, (void*)&pCell[1], pIdxKey);
   }else if( !(pCell[1] & 0x80)
     && (nCell = ((nCell&0x7f)<<7) + pCell[1])<=pPage->maxLocal
   ){
     /* The record-size field is a 2 byte varint and the record
     ** fits entirely on the main b-tree page.  */
-    testcase( pCell+nCell+2==pPage->aDataEnd );
+    if( pCell + nCell >= pPage->aDataEnd ) return 99;
     c = xRecordCompare(nCell, (void*)&pCell[2], pIdxKey);
   }else{
     /* If the record extends into overflow pages, do not attempt
@@ -79429,14 +79535,17 @@ bypass_moveto_root:
         /* This branch runs if the record-size field of the cell is a
         ** single byte varint and the record fits entirely on the main
         ** b-tree page.  */
-        testcase( pCell+nCell+1==pPage->aDataEnd );
+        if( pCell + nCell >= pPage->aDataEnd ){
+          rc = SQLITE_CORRUPT_PAGE(pPage);
+          goto moveto_index_finish;
+        }
         c = xRecordCompare(nCell, (void*)&pCell[1], pIdxKey);
       }else if( !(pCell[1] & 0x80)
         && (nCell = ((nCell&0x7f)<<7) + pCell[1])<=pPage->maxLocal
+        && pCell + nCell < pPage->aDataEnd
       ){
         /* The record-size field is a 2 byte varint and the record
         ** fits entirely on the main b-tree page.  */
-        testcase( pCell+nCell+2==pPage->aDataEnd );
         c = xRecordCompare(nCell, (void*)&pCell[2], pIdxKey);
       }else{
         /* The record flows over onto one or more overflow pages. In
@@ -84301,6 +84410,7 @@ static int checkTreePage(
       }
     }else{
       /* Populate the coverage-checking heap for leaf pages */
+      assert( heap[0] < pCheck->mxHeap );
       btreeHeapInsert(heap, (pc<<16)|(pc+info.nSize-1));
     }
   }
@@ -84320,6 +84430,7 @@ static int checkTreePage(
         u32 size;
         pc = get2byteAligned(&data[cellStart+i*2]);
         size = pPage->xCellSize(pPage, &data[pc]);
+        assert( heap[0] < pCheck->mxHeap );
         btreeHeapInsert(heap, (pc<<16)|(pc+size-1));
       }
     }
@@ -84336,6 +84447,7 @@ static int checkTreePage(
       assert( (u32)i<=usableSize-4 ); /* Enforced by btreeComputeFreeSpace() */
       size = get2byte(&data[i+2]);
       assert( (u32)(i+size)<=usableSize ); /* due to btreeComputeFreeSpace() */
+      assert( heap[0] < pCheck->mxHeap );
       btreeHeapInsert(heap, (((u32)i)<<16)|(i+size-1));
       /* EVIDENCE-OF: R-58208-19414 The first 2 bytes of a freeblock are a
       ** big-endian integer which is the offset in the b-tree page of the next
@@ -84470,6 +84582,9 @@ SQLITE_PRIVATE int sqlite3BtreeIntegrityCheck(
     goto integrity_ck_cleanup;
   }
   sCheck.heap = (u32*)sqlite3PageMalloc( pBt->pageSize );
+#ifdef SQLITE_DEBUG
+  sCheck.mxHeap = pBt->pageSize/4 - 1;
+#endif
   if( sCheck.heap==0 ){
     checkOom(&sCheck);
     goto integrity_ck_cleanup;
@@ -84887,6 +85002,7 @@ SQLITE_PRIVATE int sqlite3BtreeConnectionCount(Btree *p){
 */
 struct sqlite3_backup {
   sqlite3* pDestDb;        /* Destination database handle */
+  char *zDestDb;
   Btree *pDest;            /* Destination b-tree file */
   u32 iDestSchema;         /* Original schema cookie in destination */
   int bDestLocked;         /* True once a write-transaction is open on pDest */
@@ -84976,10 +85092,8 @@ static Btree *findBtree(sqlite3 *pErrorDb, sqlite3 *pDb, const char *zDb){
 ** Attempt to set the page size of the destination to match the page size
 ** of the source.
 */
-static int setDestPgsz(sqlite3_backup *p){
-  int rc;
-  rc = sqlite3BtreeSetPageSize(p->pDest,sqlite3BtreeGetPageSize(p->pSrc),0,0);
-  return rc;
+static int setDestPgsz(Btree *pDest, Btree *pSrc){
+  return sqlite3BtreeSetPageSize(pDest, sqlite3BtreeGetPageSize(pSrc), 0, 0);
 }
 
 /*
@@ -85042,27 +85156,37 @@ SQLITE_API sqlite3_backup *sqlite3_backup_init(
     );
     p = 0;
   }else {
+    int nDest = sqlite3Strlen30(zDestDb);
+
     /* Allocate space for a new sqlite3_backup object...
     ** EVIDENCE-OF: R-64852-21591 The sqlite3_backup object is created by a
     ** call to sqlite3_backup_init() and is destroyed by a call to
     ** sqlite3_backup_finish(). */
-    p = (sqlite3_backup *)sqlite3MallocZero(sizeof(sqlite3_backup));
+    p = (sqlite3_backup*)sqlite3MallocZero(sizeof(sqlite3_backup)+nDest+1);
     if( !p ){
       sqlite3Error(pDestDb, SQLITE_NOMEM_BKPT);
+    }else{
+      p->zDestDb = (char*)&p[1];
+      memcpy(p->zDestDb, zDestDb, nDest);
     }
   }
 
   /* If the allocation succeeded, populate the new object. */
   if( p ){
+    /* Do not store the pointer to the destination b-tree at this point.
+    ** This is because there is nothing preventing it from being detached
+    ** or otherwise freed before the first call to sqlite3_backup_step()
+    ** on this object. The source b-tree does not have this problem, as
+    ** incrementing Btree.nBackup (see below) effectively locks the object. */
+    Btree *pDest = findBtree(pDestDb, pDestDb, zDestDb);
     p->pSrc = findBtree(pDestDb, pSrcDb, zSrcDb);
-    p->pDest = findBtree(pDestDb, pDestDb, zDestDb);
     p->pDestDb = pDestDb;
     p->pSrcDb = pSrcDb;
     p->iNext = 1;
     p->isAttached = 0;
 
-    if( 0==p->pSrc || 0==p->pDest
-     || checkReadTransaction(pDestDb, p->pDest)!=SQLITE_OK
+    if( 0==p->pSrc || 0==pDest
+     || checkReadTransaction(pDestDb, pDest)!=SQLITE_OK
      ){
       /* One (or both) of the named databases did not exist or an OOM
       ** error was hit. Or there is a transaction open on the destination
@@ -85186,7 +85310,7 @@ static void attachBackupObject(sqlite3_backup *p){
 */
 SQLITE_API int sqlite3_backup_step(sqlite3_backup *p, int nPage){
   int rc;
-  int destMode;       /* Destination journal mode */
+  int destMode = 0;   /* Destination journal mode */
   int pgszSrc = 0;    /* Source page size */
   int pgszDest = 0;   /* Destination page size */
 
@@ -85202,7 +85326,8 @@ SQLITE_API int sqlite3_backup_step(sqlite3_backup *p, int nPage){
   rc = p->rc;
   if( !isFatalError(rc) ){
     Pager * const pSrcPager = sqlite3BtreePager(p->pSrc);     /* Source pager */
-    Pager * const pDestPager = sqlite3BtreePager(p->pDest);   /* Dest pager */
+    Btree * pDest = 0;                                        /* Dest btree */
+    Pager * pDestPager = 0;                                   /* Dest pager */
     int ii;                            /* Iterator variable */
     int nSrcPage = -1;                 /* Size of source db in pages */
     int bCloseTrans = 0;               /* True if src db requires unlocking */
@@ -85216,6 +85341,7 @@ SQLITE_API int sqlite3_backup_step(sqlite3_backup *p, int nPage){
       rc = SQLITE_OK;
     }
 
+
     /* If there is no open read-transaction on the source database, open
     ** one now. If a transaction is opened here, then it will be closed
     ** before this function exits.
@@ -85225,34 +85351,48 @@ SQLITE_API int sqlite3_backup_step(sqlite3_backup *p, int nPage){
       bCloseTrans = 1;
     }
 
+    /* Locate the destination btree and pager. */
+    if( (pDest = p->pDest)==0 ){
+      pDest = findBtree(p->pDestDb, p->pDestDb, p->zDestDb);
+    }
+    if( pDest==0 ){
+      rc = SQLITE_ERROR;
+    }else{
+      pDestPager = sqlite3BtreePager(pDest);
+    }
+
     /* If the destination database has not yet been locked (i.e. if this
     ** is the first call to backup_step() for the current backup operation),
     ** try to set its page size to the same as the source database. This
     ** is especially important on ZipVFS systems, as in that case it is
     ** not possible to create a database file that uses one page size by
     ** writing to it with another.  */
-    if( p->bDestLocked==0 && rc==SQLITE_OK && setDestPgsz(p)==SQLITE_NOMEM ){
+    if( p->bDestLocked==0 && rc==SQLITE_OK
+     && setDestPgsz(pDest, p->pSrc)==SQLITE_NOMEM
+    ){
       rc = SQLITE_NOMEM;
     }
 
     /* Lock the destination database, if it is not locked already. */
     if( SQLITE_OK==rc && p->bDestLocked==0
-     && SQLITE_OK==(rc = sqlite3BtreeBeginTrans(p->pDest, 2,
+     && SQLITE_OK==(rc = sqlite3BtreeBeginTrans(pDest, 2,
                                                 (int*)&p->iDestSchema))
     ){
       p->bDestLocked = 1;
+      p->pDest = pDest;
     }
 
     /* Do not allow backup if the destination database is in WAL mode
     ** and the page sizes are different between source and destination */
-    pgszSrc = sqlite3BtreeGetPageSize(p->pSrc);
-    pgszDest = sqlite3BtreeGetPageSize(p->pDest);
-    destMode = sqlite3PagerGetJournalMode(sqlite3BtreePager(p->pDest));
-    if( SQLITE_OK==rc
-     && (destMode==PAGER_JOURNALMODE_WAL || sqlite3PagerIsMemdb(pDestPager))
-     && pgszSrc!=pgszDest
-    ){
-      rc = SQLITE_READONLY;
+    if( rc==SQLITE_OK ){
+      pgszSrc = sqlite3BtreeGetPageSize(p->pSrc);
+      pgszDest = sqlite3BtreeGetPageSize(p->pDest);
+      destMode = sqlite3PagerGetJournalMode(sqlite3BtreePager(p->pDest));
+      if( (destMode==PAGER_JOURNALMODE_WAL || sqlite3PagerIsMemdb(pDestPager))
+        && pgszSrc!=pgszDest
+      ){
+        rc = SQLITE_READONLY;
+      }
     }
 
     /* Now that there is a read-lock on the source database, query the
@@ -85470,7 +85610,9 @@ SQLITE_API int sqlite3_backup_finish(sqlite3_backup *p){
   }
 
   /* If a transaction is still open on the Btree, roll it back. */
-  sqlite3BtreeRollback(p->pDest, SQLITE_OK, 0);
+  if( p->pDest ){
+    sqlite3BtreeRollback(p->pDest, SQLITE_OK, 0);
+  }
 
   /* Set the error code of the destination database handle. */
   rc = (p->rc==SQLITE_DONE) ? SQLITE_OK : p->rc;
@@ -93738,8 +93880,14 @@ SQLITE_PRIVATE const char *sqlite3VdbeFuncName(const sqlite3_context *pCtx){
 ** added or changed.
 */
 SQLITE_API int sqlite3_expired(sqlite3_stmt *pStmt){
-  Vdbe *p = (Vdbe*)pStmt;
-  return p==0 || p->expired;
+  int iRet = 1;
+  if( pStmt ){
+    Vdbe *p = (Vdbe*)pStmt;
+    sqlite3_mutex_enter(p->db->mutex);
+    iRet = p->expired;
+    sqlite3_mutex_leave(p->db->mutex);
+  }
+  return iRet;
 }
 #endif
 
@@ -111460,11 +111608,20 @@ static SQLITE_NOINLINE void resolveSetExprSubtypeArg(ExprList *pList){
   nn = pList ? pList->nExpr : 0;
   for(ii=0; ii<nn; ii++){
     Expr *pExpr = pList->a[ii].pExpr;
-    ExprSetProperty(pExpr, EP_SubtArg);
-    if( pExpr->op==TK_SELECT ){
-      assert( ExprUseXSelect(pExpr) );
-      assert( pExpr->x.pSelect!=0 );
-      resolveSetExprSubtypeArg(pExpr->x.pSelect->pEList);
+    while( 1 /*exit-by-break*/ ){
+      ExprSetProperty(pExpr, EP_SubtArg);
+      if( pExpr->op==TK_SELECT ){
+        assert( ExprUseXSelect(pExpr) );
+        assert( pExpr->x.pSelect!=0 );
+        resolveSetExprSubtypeArg(pExpr->x.pSelect->pEList);
+        break;
+      }
+      if( pExpr->op==TK_UPLUS ){
+        pExpr = pExpr->pLeft;
+        assert( pExpr!=0 );
+      }else{
+        break;
+      }
     }
   }
 }
@@ -117034,7 +117191,7 @@ static void sqlite3ExprCodeIN(
     Expr *p = sqlite3VectorFieldSubexpr(pExpr->pLeft, i);
     if( pParse->nErr ) goto sqlite3ExprCodeIN_oom_error;
     if( sqlite3ExprCanBeNull(p) ){
-      sqlite3VdbeAddOp2(v, OP_IsNull, rLhs+i, destStep2);
+      sqlite3VdbeAddOp2(v, OP_IsNull, rLhs+aiMap[i], destStep2);
       VdbeCoverage(v);
     }
   }
@@ -117118,8 +117275,8 @@ static void sqlite3ExprCodeIN(
       ** ...)" is the collating sequence of x.".  */
       pColl = sqlite3ExprCollSeq(pParse, p);
     }
-    sqlite3VdbeAddOp3(v, OP_Column, iTab, i, r3);
-    sqlite3VdbeAddOp4(v, OP_Ne, rLhs+i, destNotNull, r3,
+    sqlite3VdbeAddOp3(v, OP_Column, iTab, aiMap[i], r3);
+    sqlite3VdbeAddOp4(v, OP_Ne, rLhs+aiMap[i], destNotNull, r3,
                       (void*)pColl, P4_COLLSEQ);
     VdbeCoverage(v);
     sqlite3ReleaseTempReg(pParse, r3);
@@ -125458,9 +125615,9 @@ static int loadStatTbl(
     }
     pIdx->nSampleCol = nIdxCol;
     pIdx->mxSample = nSample;
-    nByte = ROUND8(sizeof(IndexSample) * nSample);
-    nByte += sizeof(tRowcnt) * nIdxCol * 3 * nSample;
-    nByte += nIdxCol * sizeof(tRowcnt);     /* Space for Index.aAvgEq[] */
+    nByte = ROUND8(sizeof64(IndexSample) * nSample);
+    nByte += sizeof64(tRowcnt) * nIdxCol * 3 * nSample;
+    nByte += nIdxCol * sizeof64(tRowcnt);   /* Space for Index.aAvgEq[] */
 
     pIdx->aSample = sqlite3DbMallocZero(db, nByte);
     if( pIdx->aSample==0 ){
@@ -125468,7 +125625,7 @@ static int loadStatTbl(
       return SQLITE_NOMEM_BKPT;
     }
     pPtr = (u8*)pIdx->aSample;
-    pPtr += ROUND8(nSample*sizeof(pIdx->aSample[0]));
+    pPtr += ROUND8(nSample*sizeof64(pIdx->aSample[0]));
     pSpace = (tRowcnt*)pPtr;
     assert( EIGHT_BYTE_ALIGNMENT( pSpace ) );
     pIdx->aAvgEq = pSpace; pSpace += nIdxCol;
@@ -136945,7 +137102,7 @@ static void percentSort(double *a, unsigned int n){
         i++;
       }
     }while( i<iGt );
-    if( iLt>n/2 ){
+    if( iLt>(int)(n/2) ){
       if( n-iGt>=2 ) percentSort(a+iGt, n-iGt);
       n = iLt;
     }else{
@@ -151462,6 +151619,13 @@ SQLITE_PRIVATE Table *sqlite3ResultSetOfSelect(Parse *pParse, Select *pSelect, c
   sqlite3 *db = pParse->db;
   u64 savedFlags;
 
+  pParse->nNestSel++;
+#if SQLITE_MAX_EXPR_DEPTH>0
+  if( pParse->nNestSel >= db->aLimit[SQLITE_LIMIT_EXPR_DEPTH] ){
+    sqlite3ErrorMsg(pParse, "VIEWs and/or subqueries nested too deep");
+    return 0;
+  }
+#endif
   savedFlags = db->flags;
   db->flags &= ~(u64)SQLITE_FullColNames;
   db->flags |= SQLITE_ShortColNames;
@@ -151483,6 +151647,8 @@ SQLITE_PRIVATE Table *sqlite3ResultSetOfSelect(Parse *pParse, Select *pSelect, c
     sqlite3DeleteTable(db, pTab);
     return 0;
   }
+  pParse->nNestSel--;
+  assert( pParse->nNestSel>=0 );
   return pTab;
 }
 
@@ -159426,7 +159592,7 @@ static TriggerPrg *codeRowTrigger(
   Table *pTab,         /* The table pTrigger is attached to */
   int orconf           /* ON CONFLICT policy to code trigger program with */
 ){
-  Parse *pTop = sqlite3ParseToplevel(pParse);
+  Parse *pTop;                /* Top level Parse object */
   sqlite3 *db = pParse->db;   /* Database handle */
   TriggerPrg *pPrg;           /* Value to return */
   Expr *pWhen = 0;            /* Duplicate of trigger WHEN expression */
@@ -159435,9 +159601,23 @@ static TriggerPrg *codeRowTrigger(
   SubProgram *pProgram = 0;   /* Sub-vdbe for trigger program */
   int iEndTrigger = 0;        /* Label to jump to if WHEN is false */
   Parse sSubParse;            /* Parse context for sub-vdbe */
+  int nDepth;                 /* Trigger depth */
 
+  /* Ensure that triggers are not chained too deep.  This test is linear
+  ** in the chaining depth, but sensible code ought not be chaining
+  ** triggers excessively, so that shouldn't be a problem.
+  */
+  pTop = pParse;
+  for(nDepth=0; pTop->pOuterParse; pTop = pTop->pOuterParse, nDepth++){}
+  if( nDepth>=db->aLimit[SQLITE_LIMIT_TRIGGER_DEPTH] ){
+    sqlite3ErrorMsg(pParse, "triggers nested too deep");
+    return 0;
+  }
+
+  pTop = sqlite3ParseToplevel(pParse);
   assert( pTrigger->zName==0 || pTab==tableOfTrigger(pTrigger) );
   assert( pTop->pVdbe );
+
 
   /* Allocate the TriggerPrg and SubProgram objects. To ensure that they
   ** are freed if an error occurs, link them into the Parse.pTriggerPrg
@@ -161439,7 +161619,8 @@ SQLITE_PRIVATE void sqlite3UpsertDoUpdate(
   /* excluded.* columns of type REAL need to be converted to a hard real */
   for(i=0; i<pTab->nCol; i++){
     if( pTab->aCol[i].affinity==SQLITE_AFF_REAL ){
-      sqlite3VdbeAddOp1(v, OP_RealAffinity, pTop->regData+i);
+      int iStorage = pTop->regData + sqlite3TableColumnToStorage(pTab, i);
+      sqlite3VdbeAddOp1(v, OP_RealAffinity, iStorage);
     }
   }
   sqlite3Update(pParse, pSrc, sqlite3ExprListDup(db,pUpsert->pUpsertSet,0),
@@ -162036,6 +162217,7 @@ SQLITE_API int sqlite3_drop_modules(sqlite3 *db, const char** azNames){
 #ifdef SQLITE_ENABLE_API_ARMOR
   if( !sqlite3SafetyCheckOk(db) ) return SQLITE_MISUSE_BKPT;
 #endif
+  sqlite3_mutex_enter(db->mutex);
   for(pThis=sqliteHashFirst(&db->aModule); pThis; pThis=pNext){
     Module *pMod = (Module*)sqliteHashData(pThis);
     pNext = sqliteHashNext(pThis);
@@ -162046,6 +162228,7 @@ SQLITE_API int sqlite3_drop_modules(sqlite3 *db, const char** azNames){
     }
     createModule(db, pMod->zName, 0, 0, 0);
   }
+  sqlite3_mutex_leave(db->mutex);
   return SQLITE_OK;
 }
 
@@ -167420,7 +167603,10 @@ static void transferJoinMarkings(Expr *pDerived, Expr *pBase){
 static void markTermAsChild(WhereClause *pWC, int iChild, int iParent){
   pWC->a[iChild].iParent = iParent;
   pWC->a[iChild].truthProb = pWC->a[iParent].truthProb;
+  assert(   pWC->a[iParent].nChild <  UMXV(pWC->a[0].nChild) );
   pWC->a[iParent].nChild++;
+  testcase( pWC->a[iParent].nChild == UMXV(pWC->a[0].nChild) );
+
 }
 
 /*
@@ -168197,6 +168383,7 @@ static void exprAnalyze(
     pList = pExpr->x.pList;
     assert( pList!=0 );
     assert( pList->nExpr==2 );
+    assert( pWC->a[idxTerm].nChild==0 );
     for(i=0; i<2; i++){
       Expr *pNewExpr;
       int idxNew;
@@ -168407,8 +168594,11 @@ static void exprAnalyze(
    && pExpr->x.pSelect->pWin==0
 #endif
    && pWC->op==TK_AND
+   && pExpr->x.pSelect->pEList->nExpr <= UMXV(pTerm->nChild)
+   /* ^-- See bug 2026-06-04T10:00:49Z */
   ){
     int i;
+    assert( pTerm->nChild==0 );
     for(i=0; i<sqlite3ExprVectorSize(pExpr->pLeft); i++){
       int idxNew;
       idxNew = whereClauseInsert(pWC, pExpr, TERM_VIRTUAL|TERM_SLICE);
@@ -176958,7 +177148,7 @@ static void nth_valueStepFunc(
         break;
       case SQLITE_FLOAT: {
         double fVal = sqlite3_value_double(apArg[1]);
-        if( ((i64)fVal)!=fVal ) goto error_out;
+        if( sqlite3RealToI64(fVal)!=fVal ) goto error_out;
         iVal = (i64)fVal;
         break;
       }
@@ -188482,13 +188672,17 @@ static int nocaseCollatingFunc(
 ** Return the ROWID of the most recent insert
 */
 SQLITE_API sqlite_int64 sqlite3_last_insert_rowid(sqlite3 *db){
+  i64 iRet;
 #ifdef SQLITE_ENABLE_API_ARMOR
   if( !sqlite3SafetyCheckOk(db) ){
     (void)SQLITE_MISUSE_BKPT;
     return 0;
   }
 #endif
-  return db->lastRowid;
+  sqlite3_mutex_enter(db->mutex);
+  iRet = db->lastRowid;
+  sqlite3_mutex_leave(db->mutex);
+  return iRet;
 }
 
 /*
@@ -188510,13 +188704,17 @@ SQLITE_API void sqlite3_set_last_insert_rowid(sqlite3 *db, sqlite3_int64 iRowid)
 ** Return the number of changes in the most recent call to sqlite3_exec().
 */
 SQLITE_API sqlite3_int64 sqlite3_changes64(sqlite3 *db){
+  i64 iRet;
 #ifdef SQLITE_ENABLE_API_ARMOR
   if( !sqlite3SafetyCheckOk(db) ){
     (void)SQLITE_MISUSE_BKPT;
     return 0;
   }
 #endif
-  return db->nChange;
+  sqlite3_mutex_enter(db->mutex);
+  iRet = db->nChange;
+  sqlite3_mutex_leave(db->mutex);
+  return iRet;
 }
 SQLITE_API int sqlite3_changes(sqlite3 *db){
   return (int)sqlite3_changes64(db);
@@ -188526,13 +188724,17 @@ SQLITE_API int sqlite3_changes(sqlite3 *db){
 ** Return the number of changes since the database handle was opened.
 */
 SQLITE_API sqlite3_int64 sqlite3_total_changes64(sqlite3 *db){
+  i64 iRet;
 #ifdef SQLITE_ENABLE_API_ARMOR
   if( !sqlite3SafetyCheckOk(db) ){
     (void)SQLITE_MISUSE_BKPT;
     return 0;
   }
 #endif
-  return db->nTotalChange;
+  sqlite3_mutex_enter(db->mutex);
+  iRet = db->nTotalChange;
+  sqlite3_mutex_leave(db->mutex);
+  return iRet;
 }
 SQLITE_API int sqlite3_total_changes(sqlite3 *db){
   return (int)sqlite3_total_changes64(db);
@@ -189215,6 +189417,7 @@ SQLITE_API int sqlite3_busy_timeout(sqlite3 *db, int ms){
 #ifdef SQLITE_ENABLE_API_ARMOR
   if( !sqlite3SafetyCheckOk(db) ) return SQLITE_MISUSE_BKPT;
 #endif
+  sqlite3_mutex_enter(db->mutex);
   if( ms>0 ){
     sqlite3_busy_handler(db, (int(*)(void*,int))sqliteDefaultBusyCallback,
                              (void*)db);
@@ -189225,6 +189428,7 @@ SQLITE_API int sqlite3_busy_timeout(sqlite3 *db, int ms){
   }else{
     sqlite3_busy_handler(db, 0, 0);
   }
+  sqlite3_mutex_leave(db->mutex);
   return SQLITE_OK;
 }
 
@@ -190130,9 +190334,11 @@ SQLITE_API int sqlite3_set_errmsg(sqlite3 *db, int errcode, const char *zMsg){
 */
 SQLITE_API int sqlite3_error_offset(sqlite3 *db){
   int iOffset = -1;
-  if( db && sqlite3SafetyCheckSickOrOk(db) && db->errCode ){
+  if( db && sqlite3SafetyCheckSickOrOk(db) ){
     sqlite3_mutex_enter(db->mutex);
-    iOffset = db->errByteOffset;
+    if( db->errCode ){
+      iOffset = db->errByteOffset;
+    }
     sqlite3_mutex_leave(db->mutex);
   }
   return iOffset;
@@ -190186,25 +190392,43 @@ SQLITE_API const void *sqlite3_errmsg16(sqlite3 *db){
 ** passed to this function, we assume a malloc() failed during sqlite3_open().
 */
 SQLITE_API int sqlite3_errcode(sqlite3 *db){
-  if( db && !sqlite3SafetyCheckSickOrOk(db) ){
+  int iRet;
+  if( !db ) return SQLITE_NOMEM_BKPT;
+  if( !sqlite3SafetyCheckSickOrOk(db) ){
     return SQLITE_MISUSE_BKPT;
   }
-  if( !db || db->mallocFailed ){
-    return SQLITE_NOMEM_BKPT;
+  sqlite3_mutex_enter(db->mutex);
+  if( db->mallocFailed ){
+    iRet = SQLITE_NOMEM_BKPT;
+  }else{
+    iRet = db->errCode & db->errMask;
   }
-  return db->errCode & db->errMask;
+  sqlite3_mutex_leave(db->mutex);
+  return iRet;
 }
 SQLITE_API int sqlite3_extended_errcode(sqlite3 *db){
-  if( db && !sqlite3SafetyCheckSickOrOk(db) ){
+  int iRet;
+  if( !db ) return SQLITE_NOMEM_BKPT;
+  if( !sqlite3SafetyCheckSickOrOk(db) ){
     return SQLITE_MISUSE_BKPT;
   }
-  if( !db || db->mallocFailed ){
-    return SQLITE_NOMEM_BKPT;
+  sqlite3_mutex_enter(db->mutex);
+  if( db->mallocFailed ){
+    iRet = SQLITE_NOMEM_BKPT;
+  }else{
+    iRet = db->errCode;
   }
-  return db->errCode;
+  sqlite3_mutex_leave(db->mutex);
+  return iRet;
 }
 SQLITE_API int sqlite3_system_errno(sqlite3 *db){
-  return db ? db->iSysErrno : 0;
+  int iRet = 0;
+  if( db ){
+    sqlite3_mutex_enter(db->mutex);
+    iRet = db->iSysErrno;
+    sqlite3_mutex_leave(db->mutex);
+  }
+  return iRet;
 }
 
 /*
@@ -190399,6 +190623,7 @@ SQLITE_API int sqlite3_limit(sqlite3 *db, int limitId, int newLimit){
   if( limitId<0 || limitId>=SQLITE_N_LIMIT ){
     return -1;
   }
+  sqlite3_mutex_enter(db->mutex);
   oldLimit = db->aLimit[limitId];
   if( newLimit>=0 ){                   /* IMP: R-52476-28732 */
     if( newLimit>aHardLimit[limitId] ){
@@ -190408,6 +190633,7 @@ SQLITE_API int sqlite3_limit(sqlite3 *db, int limitId, int newLimit){
     }
     db->aLimit[limitId] = newLimit;
   }
+  sqlite3_mutex_leave(db->mutex);
   return oldLimit;                     /* IMP: R-53341-35419 */
 }
 
@@ -190450,7 +190676,7 @@ SQLITE_PRIVATE int sqlite3ParseUri(
   const char *zVfs = zDefaultVfs;
   char *zFile;
   char c;
-  int nUri = sqlite3Strlen30(zUri);
+  i64 nUri = strlen(zUri);
 
   assert( *pzErrMsg==0 );
 
@@ -190460,8 +190686,8 @@ SQLITE_PRIVATE int sqlite3ParseUri(
   ){
     char *zOpt;
     int eState;                   /* Parser state when parsing URI */
-    int iIn;                      /* Input character index */
-    int iOut = 0;                 /* Output character index */
+    i64 iIn;                      /* Input character index */
+    i64 iOut = 0;                 /* Output character index */
     u64 nByte = nUri+8;           /* Bytes of space to allocate */
 
     /* Make sure the SQLITE_OPEN_URI flag is set to indicate to the VFS xOpen
@@ -190495,7 +190721,7 @@ SQLITE_PRIVATE int sqlite3ParseUri(
       while( zUri[iIn] && zUri[iIn]!='/' ) iIn++;
       if( iIn!=7 && (iIn!=16 || memcmp("localhost", &zUri[7], 9)) ){
         *pzErrMsg = sqlite3_mprintf("invalid uri authority: %.*s",
-            iIn-7, &zUri[7]);
+            (int)(iIn-7), &zUri[7]);
         rc = SQLITE_ERROR;
         goto parse_uri_out;
       }
@@ -190570,11 +190796,11 @@ SQLITE_PRIVATE int sqlite3ParseUri(
     ** here. Options that are interpreted here include "vfs" and those that
     ** correspond to flags that may be passed to the sqlite3_open_v2()
     ** method. */
-    zOpt = &zFile[sqlite3Strlen30(zFile)+1];
+    zOpt = &zFile[strlen(zFile)+1];
     while( zOpt[0] ){
-      int nOpt = sqlite3Strlen30(zOpt);
+      i64 nOpt = strlen(zOpt);
       char *zVal = &zOpt[nOpt+1];
-      int nVal = sqlite3Strlen30(zVal);
+      i64 nVal = strlen(zVal);
 
       if( nOpt==3 && memcmp("vfs", zOpt, 3)==0 ){
         zVfs = zVal;
@@ -190620,7 +190846,7 @@ SQLITE_PRIVATE int sqlite3ParseUri(
           int mode = 0;
           for(i=0; aMode[i].z; i++){
             const char *z = aMode[i].z;
-            if( nVal==sqlite3Strlen30(z) && 0==memcmp(zVal, z, nVal) ){
+            if( nVal==(i64)strlen(z) && 0==memcmp(zVal, z, nVal) ){
               mode = aMode[i].mode;
               break;
             }
@@ -191313,13 +191539,17 @@ SQLITE_API int sqlite3_global_recover(void){
 ** by the next COMMIT or ROLLBACK.
 */
 SQLITE_API int sqlite3_get_autocommit(sqlite3 *db){
+  int iRet;
 #ifdef SQLITE_ENABLE_API_ARMOR
   if( !sqlite3SafetyCheckOk(db) ){
     (void)SQLITE_MISUSE_BKPT;
     return 0;
   }
 #endif
-  return db->autoCommit;
+  sqlite3_mutex_enter(db->mutex);
+  iRet = db->autoCommit;
+  sqlite3_mutex_leave(db->mutex);
+  return iRet;
 }
 
 /*
@@ -192344,17 +192574,19 @@ SQLITE_PRIVATE Btree *sqlite3DbNameToBtree(sqlite3 *db, const char *zDbName){
 ** of range.
 */
 SQLITE_API const char *sqlite3_db_name(sqlite3 *db, int N){
+  const char *zRet = 0;
 #ifdef SQLITE_ENABLE_API_ARMOR
   if( !sqlite3SafetyCheckOk(db) ){
     (void)SQLITE_MISUSE_BKPT;
     return 0;
   }
 #endif
-  if( N<0 || N>=db->nDb ){
-    return 0;
-  }else{
-    return db->aDb[N].zDbSName;
+  sqlite3_mutex_enter(db->mutex);
+  if( N>=0 && N<db->nDb ){
+    zRet = db->aDb[N].zDbSName;
   }
+  sqlite3_mutex_leave(db->mutex);
+  return zRet;
 }
 
 /*
@@ -195976,8 +196208,13 @@ static void fts3PutDeltaVarint(
   sqlite3_int64 iVal              /* Write this value to the list */
 ){
   assert_fts3_nc( iVal-*piPrev > 0 || (*piPrev==0 && iVal==0) );
-  *pp += sqlite3Fts3PutVarint(*pp, iVal-*piPrev);
-  *piPrev = iVal;
+  if( iVal-(*piPrev)>=0 ){
+    /* Refuse to write a negative delta integer. This only happens with a
+    ** corrupt db (see the assert above) and can cause buffer overwrites
+    ** in some cases.  */
+    *pp += sqlite3Fts3PutVarint(*pp, iVal-*piPrev);
+    *piPrev = iVal;
+  }
 }
 
 /*
@@ -198331,6 +198568,7 @@ static int fts3EvalDeferredPhrase(Fts3Cursor *pCsr, Fts3Phrase *pPhrase){
       char *p1;
       char *p2;
       char *aOut;
+      i64 nAlloc = (i64)nPoslist*2 + FTS3_BUFFER_PADDING;
 
       if( nMaxUndeferred>iPrev ){
         p1 = aPoslist;
@@ -198342,7 +198580,7 @@ static int fts3EvalDeferredPhrase(Fts3Cursor *pCsr, Fts3Phrase *pPhrase){
         nDistance = iPrev - nMaxUndeferred;
       }
 
-      aOut = (char *)sqlite3Fts3MallocZero(((i64)nPoslist)+FTS3_BUFFER_PADDING);
+      aOut = (char *)sqlite3Fts3MallocZero(nAlloc);
       if( !aOut ){
         sqlite3_free(aPoslist);
         return SQLITE_NOMEM;
@@ -207397,6 +207635,10 @@ static void fts3ReadEndBlockField(
     for(/* no-op */; zText[i]>='0' && zText[i]<='9'; i++){
       iVal = iVal*10 + (zText[i] - '0');
     }
+
+    /* This if() clause is just to avoid an integer overflow. The record is
+    ** corrupt in this case.  */
+    if( (i64)iVal==SMALLEST_INT64 ) iMul = 1;
     *pnByte = ((i64)iVal * (i64)iMul);
   }
 }
@@ -208623,7 +208865,7 @@ static int fts3IncrmergeLoad(
         return FTS_CORRUPT_VTAB;
       }
 
-      pWriter->nLeafEst = (int)((iEnd - iStart) + 1)/FTS_MAX_APPENDABLE_HEIGHT;
+      pWriter->nLeafEst = (int)(((iEnd - iStart)+1)/FTS_MAX_APPENDABLE_HEIGHT);
       pWriter->iStart = iStart;
       pWriter->iEnd = iEnd;
       pWriter->iAbsLevel = iAbsLevel;
@@ -210741,8 +210983,8 @@ static int fts3StringAppend(
   ** to grow the buffer until so that it is big enough to accommodate the
   ** appended data.
   */
-  if( pStr->n+nAppend+1>=pStr->nAlloc ){
-    sqlite3_int64 nAlloc = pStr->nAlloc+(sqlite3_int64)nAppend+100;
+  if( (i64)pStr->n+(i64)nAppend+1>=(i64)pStr->nAlloc ){
+    i64 nAlloc = pStr->nAlloc+(i64)nAppend+100;
     char *zNew = sqlite3_realloc64(pStr->z, nAlloc);
     if( !zNew ){
       return SQLITE_NOMEM;
@@ -214946,7 +215188,8 @@ static u32 jsonTranslateBlobToText(
       if( sz==0 ) goto malformed_jsonb;
       if( zIn[0]=='-' ){
         jsonAppendChar(pOut, '-');
-        k++;
+        if( sz<=1 ) goto malformed_jsonb;
+        k = 1;
       }
       if( zIn[k]=='.' ){
         jsonAppendChar(pOut, '0');
@@ -217910,7 +218153,9 @@ static int jsonSkipLabel(JsonEachCursor *p){
   if( p->eType==JSONB_OBJECT ){
     u32 sz = 0;
     u32 n = jsonbPayloadSize(&p->sParse, p->i, &sz);
-    return p->i + n + sz;
+    sz += p->i + n;
+    if( sz >= p->sParse.nBlob ) sz = p->i;
+    return sz;
   }else{
     return p->i;
   }
@@ -218737,7 +218982,7 @@ struct RtreeCursor {
   sqlite3_stmt *pReadAux;           /* Statement to read aux-data */
   RtreeSearchPoint sPoint;          /* Cached next search point */
   RtreeNode *aNode[RTREE_CACHE_SZ]; /* Rtree node cache */
-  u32 anQueue[RTREE_MAX_DEPTH+1];   /* Number of queued entries by iLevel */
+  u32 anQueue[RTREE_MAX_DEPTH+2];   /* Number of queued entries by iLevel */
 };
 
 /* Return the Rtree of a RtreeCursor */
@@ -219192,6 +219437,9 @@ static int nodeAcquire(
       rc = SQLITE_CORRUPT_VTAB;
       RTREE_IS_CORRUPT(pRtree);
     }
+  }else if( iNode<=0 ){
+    RTREE_IS_CORRUPT(pRtree);
+    rc = SQLITE_CORRUPT_VTAB;
   }else if( pRtree->iNodeSize==sqlite3_blob_bytes(pRtree->pNodeBlob) ){
     pNode = (RtreeNode *)sqlite3_malloc64(sizeof(RtreeNode)+pRtree->iNodeSize);
     if( !pNode ){
@@ -219217,7 +219465,7 @@ static int nodeAcquire(
   */
   if( rc==SQLITE_OK && pNode && iNode==1 ){
     pRtree->iDepth = readInt16(pNode->zData);
-    if( pRtree->iDepth>RTREE_MAX_DEPTH ){
+    if( pRtree->iDepth>=RTREE_MAX_DEPTH ){
       rc = SQLITE_CORRUPT_VTAB;
       RTREE_IS_CORRUPT(pRtree);
     }
@@ -226780,16 +227028,26 @@ static unsigned int rbuDeltaGetInt(const char **pz, int *pLen){
     25, 26, 27, 28, 29, 30, 31, 32,   33, 34, 35, -1, -1, -1, -1, 36,
     -1, 37, 38, 39, 40, 41, 42, 43,   44, 45, 46, 47, 48, 49, 50, 51,
     52, 53, 54, 55, 56, 57, 58, 59,   60, 61, 62, -1, -1, -1, 63, -1,
+
+    -1, -1, -1, -1, -1, -1, -1, -1,   -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1,   -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1,   -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1,   -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1,   -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1,   -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1,   -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1,   -1, -1, -1, -1, -1, -1, -1, -1,
   };
   unsigned int v = 0;
   int c;
   unsigned char *z = (unsigned char*)*pz;
-  unsigned char *zStart = z;
-  while( (c = zValue[0x7f&*(z++)])>=0 ){
-     v = (v<<6) + c;
+  unsigned char *zEnd = z + (*pLen);
+  while( z<zEnd && (c = zValue[*z])>=0 ){
+    v = (v<<6) + c;
+    z++;
   }
-  z--;
-  *pLen -= (int)(z - zStart);
+
+  *pLen -= (int)(z - (unsigned char*)*pz);
   *pz = (char*)z;
   return v;
 }
@@ -226858,21 +227116,22 @@ static int rbuDeltaApply(
   int lenDelta,          /* Length of the delta */
   char *zOut             /* Write the output into this preallocated buffer */
 ){
-  unsigned int limit;
-  unsigned int total = 0;
+  sqlite3_uint64 limit;
+  sqlite3_uint64 total = 0;
 #if RBU_ENABLE_DELTA_CKSUM
   char *zOrigOut = zOut;
 #endif
 
   limit = rbuDeltaGetInt(&zDelta, &lenDelta);
-  if( *zDelta!='\n' ){
+  if( lenDelta<=0 || *zDelta!='\n' ){
     /* ERROR: size integer not terminated by "\n" */
     return -1;
   }
-  zDelta++; lenDelta--;
-  while( *zDelta && lenDelta>0 ){
+  zDelta++; lenDelta--; /* Skip the \n */
+  while( lenDelta>0 && zDelta[0] ){
     unsigned int cnt, ofst;
     cnt = rbuDeltaGetInt(&zDelta, &lenDelta);
+    if( lenDelta<=0 ) return -1;
     switch( zDelta[0] ){
       case '@': {
         zDelta++; lenDelta--;
@@ -226902,7 +227161,7 @@ static int rbuDeltaApply(
           /* ERROR:  insert command gives an output larger than predicted */
           return -1;
         }
-        if( (int)cnt>lenDelta ){
+        if( cnt>lenDelta ){
           /* ERROR: insert count exceeds size of delta */
           return -1;
         }
@@ -226940,7 +227199,7 @@ static int rbuDeltaApply(
 static int rbuDeltaOutputSize(const char *zDelta, int lenDelta){
   int size;
   size = rbuDeltaGetInt(&zDelta, &lenDelta);
-  if( *zDelta!='\n' ){
+  if( lenDelta<=0 || *zDelta!='\n' ){
     /* ERROR: size integer not terminated by "\n" */
     return -1;
   }
@@ -226988,7 +227247,7 @@ static void rbuFossilDeltaFunc(
     return;
   }
 
-  aOut = sqlite3_malloc(nOut+1);
+  aOut = sqlite3_malloc64((i64)nOut+1);
   if( aOut==0 ){
     sqlite3_result_error_nomem(context);
   }else{
@@ -228915,13 +229174,13 @@ static int rbuGetUpdateStmt(
     char *zUpdate = 0;
 
     pUp->zMask = (char*)&pUp[1];
-    memcpy(pUp->zMask, zMask, pIter->nTblCol);
     pUp->pNext = pIter->pRbuUpdate;
     pIter->pRbuUpdate = pUp;
 
     if( zSet ){
       const char *zPrefix = "";
-
+      assert( p->rc==SQLITE_OK );
+      memcpy(pUp->zMask, zMask, pIter->nTblCol);
       if( pIter->eType!=RBU_PK_VTAB ) zPrefix = "rbu_imp_";
       zUpdate = sqlite3_mprintf("UPDATE \"%s%w\" SET %s WHERE %s",
           zPrefix, pIter->zTbl, zSet, zWhere
@@ -229011,6 +229270,9 @@ static RbuState *rbuLoadState(sqlite3rbu *p){
 
       case RBU_STATE_ROW:
         pRet->nRow = sqlite3_column_int(pStmt, 1);
+        if( pRet->nRow<0 ){
+          rc = SQLITE_CORRUPT;
+        }
         break;
 
       case RBU_STATE_PROGRESS:
@@ -235167,7 +235429,7 @@ static void sessionAppendStr(
   int *pRc
 ){
   int nStr = sqlite3Strlen30(zStr);
-  if( 0==sessionBufferGrow(p, nStr+1, pRc) ){
+  if( 0==sessionBufferGrow(p, (i64)nStr+1, pRc) ){
     memcpy(&p->aBuf[p->nBuf], zStr, nStr);
     p->nBuf += nStr;
     p->aBuf[p->nBuf] = 0x00;
@@ -240247,7 +240509,12 @@ static int sessionChangesetToHash(
 
   pIter->in.bNoDiscard = 1;
   while( SQLITE_ROW==(sessionChangesetNext(pIter, &aRec, &nRec, 0)) ){
-    rc = sessionOneChangeIterToHash(pGrp, pIter, bRebase);
+    if( bRebase && pIter->bPatchset ){
+      /* A patchset may not be used as a rebase */
+      rc = SQLITE_ERROR;
+    }else{
+      rc = sessionOneChangeIterToHash(pGrp, pIter, bRebase);
+    }
     if( rc!=SQLITE_OK ) break;
   }
 
@@ -240565,14 +240832,17 @@ static void sessionAppendRecordMerge(
   u8 *a2, int n2,                 /* Record 2 */
   int *pRc                        /* IN/OUT: error code */
 ){
-  sessionBufferGrow(pBuf, n1+n2, pRc);
+  u8 *a1Eof = &a1[n1];
+  u8 *a2Eof = &a2[n2];
+
+  sessionBufferGrow(pBuf, (i64)n1+n2, pRc);
   if( *pRc==SQLITE_OK ){
     int i;
     u8 *pOut = &pBuf->aBuf[pBuf->nBuf];
     for(i=0; i<nCol; i++){
-      int nn1 = sessionSerialLen(a1);
-      int nn2 = sessionSerialLen(a2);
-      if( *a1==0 || *a1==0xFF ){
+      int nn1 = (a1<a1Eof ? sessionSerialLen(a1) : 0);
+      int nn2 = (a2<a2Eof ? sessionSerialLen(a2) : 0);
+      if( nn1==0 || (nn2>0 && (*a1==0 || *a1==0xFF)) ){
         memcpy(pOut, a2, nn2);
         pOut += nn2;
       }else{
@@ -240614,20 +240884,21 @@ static void sessionAppendPartialUpdate(
   u8 *aChange, int nChange,       /* Record to rebase against */
   int *pRc                        /* IN/OUT: Return Code */
 ){
-  sessionBufferGrow(pBuf, 2+nRec+nChange, pRc);
+  sessionBufferGrow(pBuf, (i64)2+nRec+nChange, pRc);
   if( *pRc==SQLITE_OK ){
     int bData = 0;
     u8 *pOut = &pBuf->aBuf[pBuf->nBuf];
     int i;
     u8 *a1 = aRec;
     u8 *a2 = aChange;
+    u8 *a2Eof = &a2[nChange];
 
     *pOut++ = SQLITE_UPDATE;
     *pOut++ = pIter->bIndirect;
     for(i=0; i<pIter->nCol; i++){
       int n1 = sessionSerialLen(a1);
-      int n2 = sessionSerialLen(a2);
-      if( pIter->abPK[i] || a2[0]==0 ){
+      int n2 = (a2>=a2Eof) ? 0 : sessionSerialLen(a2);
+      if( n2<=0 || pIter->abPK[i] || a2[0]==0 ){
         if( !pIter->abPK[i] && a1[0] ) bData = 1;
         memcpy(pOut, a1, n1);
         pOut += n1;
@@ -240828,8 +241099,8 @@ SQLITE_API int sqlite3rebaser_configure(
   sqlite3_rebaser *p,
   int nRebase, const void *pRebase
 ){
-  sqlite3_changeset_iter *pIter = 0;   /* Iterator opened on pData/nData */
   int rc;                              /* Return code */
+  sqlite3_changeset_iter *pIter = 0;   /* Iterator opened on pData/nData */
   rc = sqlite3changeset_start(&pIter, nRebase, (void*)pRebase);
   if( rc==SQLITE_OK ){
     rc = sessionChangesetToHash(pIter, &p->grp, 1);
@@ -244954,7 +245225,7 @@ static void fts5SnippetFunction(
   int rc = SQLITE_OK;             /* Return code */
   int iCol;                       /* 1st argument to snippet() */
   const char *zEllips;            /* 4th argument to snippet() */
-  int nToken;                     /* 5th argument to snippet() */
+  i64 nToken;                     /* 5th argument to snippet() */
   int nInst = 0;                  /* Number of instance matches this row */
   int i;                          /* Used to iterate through instances */
   int nPhrase;                    /* Number of phrases in query */
@@ -244979,7 +245250,7 @@ static void fts5SnippetFunction(
   ctx.zClose = fts5ValueToText(apVal[2]);
   ctx.iRangeEnd = -1;
   zEllips = fts5ValueToText(apVal[3]);
-  nToken = sqlite3_value_int(apVal[4]);
+  nToken = (int)(MIN( MAX(sqlite3_value_int64(apVal[4]), 0), 64));
 
   iBestCol = (iCol>=0 ? iCol : 0);
   nPhrase = pApi->xPhraseCount(pFts);
@@ -247695,7 +247966,7 @@ static int fts5ExprNearIsMatch(int *pRc, Fts5ExprNearset *pNear){
       i64 iPos = a[i].reader.iPos;
       Fts5PoslistWriter *pWriter = &a[i].writer;
       if( a[i].pOut->n==0 || iPos!=pWriter->iPrev ){
-        sqlite3Fts5PoslistWriterAppend(a[i].pOut, pWriter, iPos);
+        sqlite3Fts5PoslistSafeAppend(a[i].pOut, &pWriter->iPrev, iPos);
       }
     }
 
@@ -248646,10 +248917,10 @@ static int fts5ParseTokenize(
       memset(pSyn, 0, (size_t)nByte);
       pSyn->pTerm = ((char*)pSyn) + sizeof(Fts5ExprTerm) + sizeof(Fts5Buffer);
       pSyn->nFullTerm = pSyn->nQueryTerm = nToken;
+      memcpy(pSyn->pTerm, pToken, nToken);
       if( pCtx->pConfig->bTokendata ){
         pSyn->nQueryTerm = (int)strlen(pSyn->pTerm);
       }
-      memcpy(pSyn->pTerm, pToken, nToken);
       pSyn->pSynonym = pPhrase->aTerm[pPhrase->nTerm-1].pSynonym;
       pPhrase->aTerm[pPhrase->nTerm-1].pSynonym = pSyn;
     }
@@ -251649,6 +251920,7 @@ static Fts5Data *fts5DataRead(Fts5Index *p, i64 iRowid){
       pRet = (Fts5Data*)sqlite3_malloc64(nAlloc);
       if( pRet ){
         pRet->nn = nByte;
+        pRet->szLeaf = 0;
         aOut = pRet->p = (u8*)pRet + szData;
       }else{
         rc = SQLITE_NOMEM;
@@ -251661,10 +251933,8 @@ static Fts5Data *fts5DataRead(Fts5Index *p, i64 iRowid){
         sqlite3_free(pRet);
         pRet = 0;
       }else{
-        /* TODO1: Fix this */
         pRet->p[nByte] = 0x00;
         pRet->p[nByte+1] = 0x00;
-        pRet->szLeaf = fts5GetU16(&pRet->p[2]);
       }
     }
     p->rc = rc;
@@ -251685,9 +251955,17 @@ static void fts5DataRelease(Fts5Data *pData){
   sqlite3_free(pData);
 }
 
+/*
+** Read a leaf-page record. This is similar to fts5DataRead(), except that
+** it fills in the Fts5Data.szLeaf value before returning.
+*/
 static Fts5Data *fts5LeafRead(Fts5Index *p, i64 iRowid){
   Fts5Data *pRet = fts5DataRead(p, iRowid);
   if( pRet ){
+    assert( pRet->szLeaf==0 );
+    if( pRet->nn>=4 ){
+      pRet->szLeaf = fts5GetU16(&pRet->p[2]);
+    }
     if( pRet->szLeaf<4 || pRet->szLeaf>pRet->nn ){
       FTS5_CORRUPT_ROWID(p, iRowid);
       fts5DataRelease(pRet);
@@ -251932,7 +252210,7 @@ static int fts5StructureDecode(
         i += fts5GetVarint32(&pData[i], nTotal);
         if( nTotal<pLvl->nMerge ) rc = FTS5_CORRUPT;
         pLvl->aSeg = (Fts5StructureSegment*)sqlite3Fts5MallocZero(&rc,
-            nTotal * sizeof(Fts5StructureSegment)
+            (i64)nTotal * sizeof(Fts5StructureSegment)
         );
         nSegment -= nTotal;
       }
@@ -252888,7 +253166,7 @@ static void fts5SegIterReverseNewPage(Fts5Index *p, Fts5SegIter *pIter){
   while( p->rc==SQLITE_OK && pIter->iLeafPgno>pIter->iTermLeafPgno ){
     Fts5Data *pNew;
     pIter->iLeafPgno--;
-    pNew = fts5DataRead(p, FTS5_SEGMENT_ROWID(
+    pNew = fts5LeafRead(p, FTS5_SEGMENT_ROWID(
           pIter->pSeg->iSegid, pIter->iLeafPgno
     ));
     if( pNew ){
@@ -253597,6 +253875,10 @@ static void fts5SegIterNextInit(
 
     pIter->iPgidxOff = pIter->pLeaf->szLeaf;
     pIter->iPgidxOff += fts5GetVarint32(&a[pIter->iPgidxOff], iTermOff);
+    if( iTermOff > pIter->pLeaf->szLeaf ){
+      p->rc = FTS5_CORRUPT;
+      return;
+    }
     pIter->iLeafOffset = iTermOff;
     fts5SegIterLoadTerm(p, pIter, 0);
     fts5SegIterLoadNPos(p, pIter);
@@ -255923,7 +256205,7 @@ static void fts5SecureDeleteOverflow(
     int iNext = 0;
     u8 *aPg = 0;
 
-    pLeaf = fts5DataRead(p, iRowid);
+    pLeaf = fts5LeafRead(p, iRowid);
     if( pLeaf==0 ) break;
     aPg = pLeaf->p;
 
@@ -255931,7 +256213,7 @@ static void fts5SecureDeleteOverflow(
     if( iNext!=0 ){
       *pbLastInDoclist = 0;
     }
-    if( iNext==0 && pLeaf->szLeaf!=pLeaf->nn ){
+    if( iNext==0 && pLeaf->szLeaf<pLeaf->nn ){
       fts5GetVarint32(&aPg[pLeaf->szLeaf], iNext);
     }
 
@@ -256218,7 +256500,7 @@ static void fts5DoSecureDelete(
     /* The entry being removed may be the only position list in
     ** its doclist. */
     for(iPgno=pSeg->iLeafPgno-1; iPgno>pSeg->iTermLeafPgno; iPgno-- ){
-      Fts5Data *pPg = fts5DataRead(p, FTS5_SEGMENT_ROWID(iSegid, iPgno));
+      Fts5Data *pPg = fts5LeafRead(p, FTS5_SEGMENT_ROWID(iSegid, iPgno));
       int bEmpty = (pPg && pPg->nn==4);
       fts5DataRelease(pPg);
       if( bEmpty==0 ) break;
@@ -256226,7 +256508,7 @@ static void fts5DoSecureDelete(
 
     if( iPgno==pSeg->iTermLeafPgno ){
       i64 iId = FTS5_SEGMENT_ROWID(iSegid, pSeg->iTermLeafPgno);
-      Fts5Data *pTerm = fts5DataRead(p, iId);
+      Fts5Data *pTerm = fts5LeafRead(p, iId);
       if( pTerm && pTerm->szLeaf==pSeg->iTermLeafOffset ){
         u8 *aTermIdx = &pTerm->p[pTerm->szLeaf];
         int nTermIdx = pTerm->nn - pTerm->szLeaf;
@@ -258756,8 +259038,8 @@ static void fts5IndexTombstoneRebuild(
 ){
   const int MINSLOT = 32;
   int nSlotPerPage = MAX(MINSLOT, (p->pConfig->pgsz - 8) / szKey);
-  int nSlot = 0;                  /* Number of slots in each output page */
-  int nOut = 0;
+  i64 nSlot = 0;                  /* Number of slots in each output page */
+  i64 nOut = 0;
 
   /* Figure out how many output pages (nOut) and how many slots per
   ** page (nSlot).  There are three possibilities:
@@ -258782,23 +259064,26 @@ static void fts5IndexTombstoneRebuild(
     nSlot = MINSLOT;
   }else if( pSeg->nPgTombstone==1 ){
     /* Case 2. */
-    int nElem = (int)fts5GetU32(&pData1->p[4]);
+    u32 nElem = fts5GetU32(&pData1->p[4]);
     assert( pData1 && iPg1==0 );
-    nOut = 1;
-    nSlot = MAX(nElem*4, MINSLOT);
-    if( nSlot>nSlotPerPage ) nOut = 0;
+    if( nElem>((u32)nSlotPerPage/4) ){
+      nOut = 0;
+    }else{
+      nOut = 1;
+      nSlot = MAX((i64)nElem*4, MINSLOT);
+    }
   }
   if( nOut==0 ){
     /* Case 3. */
-    nOut = (pSeg->nPgTombstone * 2 + 1);
+    nOut = ((i64)pSeg->nPgTombstone * 2 + 1);
     nSlot = nSlotPerPage;
   }
 
   /* Allocate the required array and output pages */
   while( 1 ){
     int res = 0;
-    int ii = 0;
-    int szPage = 0;
+    i64 ii = 0;
+    i64 szPage = 0;
     Fts5Data **apOut = 0;
 
     /* Allocate space for the new hash table */
@@ -259175,7 +259460,7 @@ static void fts5IndexIntegrityCheckEmpty(
   /* Now check that the iter.nEmpty leaves following the current leaf
   ** (a) exist and (b) contain no terms. */
   for(i=iFirst; p->rc==SQLITE_OK && i<=iLast; i++){
-    Fts5Data *pLeaf = fts5DataRead(p, FTS5_SEGMENT_ROWID(pSeg->iSegid, i));
+    Fts5Data *pLeaf = fts5LeafRead(p, FTS5_SEGMENT_ROWID(pSeg->iSegid, i));
     if( pLeaf ){
       if( !fts5LeafIsTermless(pLeaf)
        || (i>=iNoRowid && 0!=fts5LeafFirstRowidOff(pLeaf))
@@ -259303,9 +259588,13 @@ static void fts5IndexIntegrityCheckSegment(
         FTS5_CORRUPT_ROWID(p, iRow);
       }else{
         iOff += fts5GetVarint32(&pLeaf->p[iOff], nTerm);
-        res = fts5Memcmp(&pLeaf->p[iOff], zIdxTerm, MIN(nTerm, nIdxTerm));
-        if( res==0 ) res = nTerm - nIdxTerm;
-        if( res<0 ) FTS5_CORRUPT_ROWID(p, iRow);
+        if( (i64)iOff+(i64)nTerm>(i64)pLeaf->szLeaf ){
+          FTS5_CORRUPT_ROWID(p, iRow);
+        }else{
+          res = fts5Memcmp(&pLeaf->p[iOff], zIdxTerm, MIN(nTerm, nIdxTerm));
+          if( res==0 ) res = nTerm - nIdxTerm;
+          if( res<0 ) FTS5_CORRUPT_ROWID(p, iRow);
+        }
       }
 
       fts5IntegrityCheckPgidx(p, iRow, pLeaf);
@@ -259336,7 +259625,7 @@ static void fts5IndexIntegrityCheckSegment(
         /* Check any rowid-less pages that occur before the current leaf. */
         for(iPg=iPrevLeaf+1; iPg<fts5DlidxIterPgno(pDlidx); iPg++){
           iKey = FTS5_SEGMENT_ROWID(iSegid, iPg);
-          pLeaf = fts5DataRead(p, iKey);
+          pLeaf = fts5LeafRead(p, iKey);
           if( pLeaf ){
             if( fts5LeafFirstRowidOff(pLeaf)!=0 ) FTS5_CORRUPT_ROWID(p, iKey);
             fts5DataRelease(pLeaf);
@@ -259347,7 +259636,7 @@ static void fts5IndexIntegrityCheckSegment(
         /* Check that the leaf page indicated by the iterator really does
         ** contain the rowid suggested by the same. */
         iKey = FTS5_SEGMENT_ROWID(iSegid, iPrevLeaf);
-        pLeaf = fts5DataRead(p, iKey);
+        pLeaf = fts5LeafRead(p, iKey);
         if( pLeaf ){
           i64 iRowid;
           int iRowidOff = fts5LeafFirstRowidOff(pLeaf);
@@ -263027,19 +263316,23 @@ static int fts5ApiPhraseFirstColumn(
 
   if( pConfig->eDetail==FTS5_DETAIL_COLUMNS ){
     Fts5Sorter *pSorter = pCsr->pSorter;
-    int n;
-    if( pSorter ){
-      int i1 = (iPhrase==0 ? 0 : pSorter->aIdx[iPhrase-1]);
-      n = pSorter->aIdx[iPhrase] - i1;
-      pIter->a = &pSorter->aPoslist[i1];
+    if( iPhrase<0 || iPhrase>=sqlite3Fts5ExprPhraseCount(pCsr->pExpr) ){
+      rc = SQLITE_RANGE;
     }else{
-      rc = sqlite3Fts5ExprPhraseCollist(pCsr->pExpr, iPhrase, &pIter->a, &n);
-    }
-    if( rc==SQLITE_OK ){
-      assert( pIter->a || n==0 );
-      pIter->b = (pIter->a ? &pIter->a[n] : 0);
-      *piCol = 0;
-      fts5ApiPhraseNextColumn(pCtx, pIter, piCol);
+      int n;
+      if( pSorter ){
+        int i1 = (iPhrase==0 ? 0 : pSorter->aIdx[iPhrase-1]);
+        n = pSorter->aIdx[iPhrase] - i1;
+        pIter->a = &pSorter->aPoslist[i1];
+      }else{
+        rc = sqlite3Fts5ExprPhraseCollist(pCsr->pExpr, iPhrase, &pIter->a, &n);
+      }
+      if( rc==SQLITE_OK ){
+        assert( pIter->a || n==0 );
+        pIter->b = (pIter->a ? &pIter->a[n] : 0);
+        *piCol = 0;
+        fts5ApiPhraseNextColumn(pCtx, pIter, piCol);
+      }
     }
   }else{
     int n;
@@ -263947,7 +264240,7 @@ static void fts5SourceIdFunc(
 ){
   assert( nArg==0 );
   UNUSED_PARAM2(nArg, apUnused);
-  sqlite3_result_text(pCtx, "fts5: 2026-06-03 19:12:13 d6e03d8c777cfa2d35e3b60d8ec3e0187f3e9f99d8e2ee9cac695fd6fcdf1a24", -1, SQLITE_TRANSIENT);
+  sqlite3_result_text(pCtx, "fts5: 2026-07-24 19:02:57 bf7c7f30031888f4e796e429ab3978879485813aaca6f641c7b33e4e09459bcc", -1, SQLITE_TRANSIENT);
 }
 
 /*
@@ -264589,34 +264882,31 @@ static int sqlite3Fts5StorageOpen(
     if( pConfig->eContent==FTS5_CONTENT_NORMAL
      || pConfig->eContent==FTS5_CONTENT_UNINDEXED
     ){
-      int nDefn = 32 + pConfig->nCol*10;
-      char *zDefn = sqlite3_malloc64(32 + (sqlite3_int64)pConfig->nCol * 20);
-      if( zDefn==0 ){
-        rc = SQLITE_NOMEM;
-      }else{
-        int i;
-        int iOff;
-        sqlite3_snprintf(nDefn, zDefn, "id INTEGER PRIMARY KEY");
-        iOff = (int)strlen(zDefn);
-        for(i=0; i<pConfig->nCol; i++){
-          if( pConfig->eContent==FTS5_CONTENT_NORMAL
-           || pConfig->abUnindexed[i]
-          ){
-            sqlite3_snprintf(nDefn-iOff, &zDefn[iOff], ", c%d", i);
-            iOff += (int)strlen(&zDefn[iOff]);
-          }
+      int i = 0;
+      char *zDefn = 0;
+      sqlite3_str *pDefn = sqlite3_str_new(pConfig->db);
+
+      sqlite3_str_appendf(pDefn, "id INTEGER PRIMARY KEY");
+      for(i=0; i<pConfig->nCol; i++){
+        if( pConfig->eContent==FTS5_CONTENT_NORMAL || pConfig->abUnindexed[i] ){
+          sqlite3_str_appendf(pDefn, ", c%d", i);
         }
-        if( pConfig->bLocale ){
-          for(i=0; i<pConfig->nCol; i++){
-            if( pConfig->abUnindexed[i]==0 ){
-              sqlite3_snprintf(nDefn-iOff, &zDefn[iOff], ", l%d", i);
-              iOff += (int)strlen(&zDefn[iOff]);
-            }
-          }
-        }
-        rc = sqlite3Fts5CreateTable(pConfig, "content", zDefn, 0, pzErr);
       }
-      sqlite3_free(zDefn);
+      if( pConfig->bLocale ){
+        for(i=0; i<pConfig->nCol; i++){
+          if( pConfig->abUnindexed[i]==0 ){
+            sqlite3_str_appendf(pDefn, ", l%d", i);
+          }
+        }
+      }
+      zDefn = sqlite3_str_finish(pDefn);
+
+      if( zDefn ){
+        rc = sqlite3Fts5CreateTable(pConfig, "content", zDefn, 0, pzErr);
+        sqlite3_free(zDefn);
+      }else{
+        rc = SQLITE_NOMEM;
+      }
     }
 
     if( rc==SQLITE_OK && pConfig->bColumnsize ){
@@ -269803,10 +270093,10 @@ SQLITE_API const char *sqlite3_sourceid(void){ return SQLITE_SOURCE_ID; }
 #define SQLITE3MC_VERSION_H_
 
 #define SQLITE3MC_VERSION_MAJOR      2
-#define SQLITE3MC_VERSION_MINOR      3
-#define SQLITE3MC_VERSION_RELEASE    5
+#define SQLITE3MC_VERSION_MINOR      5
+#define SQLITE3MC_VERSION_RELEASE    1
 #define SQLITE3MC_VERSION_SUBRELEASE 0
-#define SQLITE3MC_VERSION_STRING     "SQLite3 Multiple Ciphers 2.3.5"
+#define SQLITE3MC_VERSION_STRING     "SQLite3 Multiple Ciphers 2.5.1"
 
 #endif /* SQLITE3MC_VERSION_H_ */
 /*** End of #include "sqlite3mc_version.h" ***/
@@ -269965,12 +270255,12 @@ extern "C" {
 ** [sqlite3_libversion_number()], [sqlite3_sourceid()],
 ** [sqlite_version()] and [sqlite_source_id()].
 */
-#define SQLITE_VERSION        "3.53.2"
-#define SQLITE_VERSION_NUMBER 3053002
-#define SQLITE_SOURCE_ID      "2026-06-03 19:12:13 d6e03d8c777cfa2d35e3b60d8ec3e0187f3e9f99d8e2ee9cac695fd6fcdf1a24"
+#define SQLITE_VERSION        "3.53.4"
+#define SQLITE_VERSION_NUMBER 3053004
+#define SQLITE_SOURCE_ID      "2026-07-24 19:02:57 bf7c7f30031888f4e796e429ab3978879485813aaca6f641c7b33e4e09459bcc"
 #define SQLITE_SCM_BRANCH     "branch-3.53"
-#define SQLITE_SCM_TAGS       "release version-3.53.2"
-#define SQLITE_SCM_DATETIME   "2026-06-03T19:12:13.350Z"
+#define SQLITE_SCM_TAGS       "release version-3.53.4"
+#define SQLITE_SCM_DATETIME   "2026-07-24T19:02:57.525Z"
 
 /*
 ** CAPI3REF: Run-Time Library Version Numbers
@@ -274185,7 +274475,8 @@ SQLITE_API int sqlite3_limit(sqlite3*, int id, int newVal);
 ** or in an ORDER BY or GROUP BY clause.</dd>)^
 **
 ** [[SQLITE_LIMIT_EXPR_DEPTH]] ^(<dt>SQLITE_LIMIT_EXPR_DEPTH</dt>
-** <dd>The maximum depth of the parse tree on any expression.</dd>)^
+** <dd>The maximum depth of the parse tree on any expression and
+** the maximum nesting depth for subqueries and VIEWs</dd>)^
 **
 ** [[SQLITE_LIMIT_PARSER_DEPTH]] ^(<dt>SQLITE_LIMIT_PARSER_DEPTH</dt>
 ** <dd>The maximum depth of the LALR(1) parser stack used to analyze
@@ -274216,7 +274507,8 @@ SQLITE_API int sqlite3_limit(sqlite3*, int id, int newVal);
 ** <dd>The maximum index number of any [parameter] in an SQL statement.)^
 **
 ** [[SQLITE_LIMIT_TRIGGER_DEPTH]] ^(<dt>SQLITE_LIMIT_TRIGGER_DEPTH</dt>
-** <dd>The maximum depth of recursion for triggers.</dd>)^
+** <dd>The maximum depth of recursion for triggers, and the maximum
+** nesting depth for separate triggers.</dd>)^
 **
 ** [[SQLITE_LIMIT_WORKER_THREADS]] ^(<dt>SQLITE_LIMIT_WORKER_THREADS</dt>
 ** <dd>The maximum number of auxiliary worker threads that a single
@@ -284390,7 +284682,933 @@ SQLITE_API void sqlite3mc_vfs_shutdown();
 /*** End of #include "sqlite3mc_vfs.h" ***/
 
 
+/*
+** Dispatch table support
+*/
+
+#ifdef SQLITE3MC_USE_DISPATCH_TABLE
+
+/*
+** Instead of making the SQLite symbols public dispatch tables can be
+** used. In that case only the pointers to the dispatch tables are
+** made public, hiding all other SQLite symbols. This is useful for
+** modules which want to use an embedded SQLite version without
+** conflicts with other SQLite implementation.
+**
+** The only rule to obey is that such an embedded SQLite instance
+** should not access the same database files as a separate SQLite
+** instance within the same process, because that could lead to
+** database corruption.
+**
+** Define symbol SQLITE3MC_USE_DISPATCH_TABLE to activate the use of
+** dispatch tables.
+**
+** Define symbol SQLITE3MC_API_TABLE_PREFIX to specify your own
+** global symbols for the dispatch tables to avoid name clashes.
+**
+** Example: #define SQLITE3MC_API_TABLE_PREFIX MyApplication
+**
+** The default prefix is "sqlite3mc".
+*/
+
+#ifndef SQLITE3MC_API_TABLE_PREFIX
+#define SQLITE3MC_API_TABLE_PREFIX  sqlite3mc
 #endif
+
+#define SQLITE3MC_CONCAT(A,B) SQLITE3MC_CONCAT_(A,B)
+#define SQLITE3MC_CONCAT_(A,B) A##B
+#define SQLITE3MC_API_TABLE(name) SQLITE3MC_CONCAT(SQLITE3MC_API_TABLE_PREFIX,SQLITE3MC_CONCAT(_,name))
+
+#define SQLITE3MC_API_TABLE_EXT  SQLITE3MC_API_TABLE(api_ext)
+#define SQLITE3MC_API_TABLE_CORE SQLITE3MC_API_TABLE(api_core)
+#define SQLITE3MC_API_TABLE_MC   SQLITE3MC_API_TABLE(api_mc)
+
+/* Define the dispatch table name for sqlite3ext.h */
+#define sqlite3_api SQLITE3MC_API_TABLE_EXT
+
+/* #include "sqlite3ext.h" */
+/*** Begin of #include "sqlite3ext.h" ***/
+/*
+** 2006 June 7
+**
+** The author disclaims copyright to this source code.  In place of
+** a legal notice, here is a blessing:
+**
+**    May you do good and not evil.
+**    May you find forgiveness for yourself and forgive others.
+**    May you share freely, never taking more than you give.
+**
+*************************************************************************
+** This header file defines the SQLite interface for use by
+** shared libraries that want to be imported as extensions into
+** an SQLite instance.  Shared libraries that intend to be loaded
+** as extensions by SQLite should #include this file instead of
+** sqlite3.h.
+*/
+#ifndef SQLITE3EXT_H
+#define SQLITE3EXT_H
+/* #include "sqlite3.h" */
+
+
+/*
+** The following structure holds pointers to all of the SQLite API
+** routines.
+**
+** WARNING:  In order to maintain backwards compatibility, add new
+** interfaces to the end of this structure only.  If you insert new
+** interfaces in the middle of this structure, then older different
+** versions of SQLite will not be able to load each other's shared
+** libraries!
+*/
+struct sqlite3_api_routines {
+  void * (*aggregate_context)(sqlite3_context*,int nBytes);
+  int  (*aggregate_count)(sqlite3_context*);
+  int  (*bind_blob)(sqlite3_stmt*,int,const void*,int n,void(*)(void*));
+  int  (*bind_double)(sqlite3_stmt*,int,double);
+  int  (*bind_int)(sqlite3_stmt*,int,int);
+  int  (*bind_int64)(sqlite3_stmt*,int,sqlite_int64);
+  int  (*bind_null)(sqlite3_stmt*,int);
+  int  (*bind_parameter_count)(sqlite3_stmt*);
+  int  (*bind_parameter_index)(sqlite3_stmt*,const char*zName);
+  const char * (*bind_parameter_name)(sqlite3_stmt*,int);
+  int  (*bind_text)(sqlite3_stmt*,int,const char*,int n,void(*)(void*));
+  int  (*bind_text16)(sqlite3_stmt*,int,const void*,int,void(*)(void*));
+  int  (*bind_value)(sqlite3_stmt*,int,const sqlite3_value*);
+  int  (*busy_handler)(sqlite3*,int(*)(void*,int),void*);
+  int  (*busy_timeout)(sqlite3*,int ms);
+  int  (*changes)(sqlite3*);
+  int  (*close)(sqlite3*);
+  int  (*collation_needed)(sqlite3*,void*,void(*)(void*,sqlite3*,
+                           int eTextRep,const char*));
+  int  (*collation_needed16)(sqlite3*,void*,void(*)(void*,sqlite3*,
+                             int eTextRep,const void*));
+  const void * (*column_blob)(sqlite3_stmt*,int iCol);
+  int  (*column_bytes)(sqlite3_stmt*,int iCol);
+  int  (*column_bytes16)(sqlite3_stmt*,int iCol);
+  int  (*column_count)(sqlite3_stmt*pStmt);
+  const char * (*column_database_name)(sqlite3_stmt*,int);
+  const void * (*column_database_name16)(sqlite3_stmt*,int);
+  const char * (*column_decltype)(sqlite3_stmt*,int i);
+  const void * (*column_decltype16)(sqlite3_stmt*,int);
+  double  (*column_double)(sqlite3_stmt*,int iCol);
+  int  (*column_int)(sqlite3_stmt*,int iCol);
+  sqlite_int64  (*column_int64)(sqlite3_stmt*,int iCol);
+  const char * (*column_name)(sqlite3_stmt*,int);
+  const void * (*column_name16)(sqlite3_stmt*,int);
+  const char * (*column_origin_name)(sqlite3_stmt*,int);
+  const void * (*column_origin_name16)(sqlite3_stmt*,int);
+  const char * (*column_table_name)(sqlite3_stmt*,int);
+  const void * (*column_table_name16)(sqlite3_stmt*,int);
+  const unsigned char * (*column_text)(sqlite3_stmt*,int iCol);
+  const void * (*column_text16)(sqlite3_stmt*,int iCol);
+  int  (*column_type)(sqlite3_stmt*,int iCol);
+  sqlite3_value* (*column_value)(sqlite3_stmt*,int iCol);
+  void * (*commit_hook)(sqlite3*,int(*)(void*),void*);
+  int  (*complete)(const char*sql);
+  int  (*complete16)(const void*sql);
+  int  (*create_collation)(sqlite3*,const char*,int,void*,
+                           int(*)(void*,int,const void*,int,const void*));
+  int  (*create_collation16)(sqlite3*,const void*,int,void*,
+                             int(*)(void*,int,const void*,int,const void*));
+  int  (*create_function)(sqlite3*,const char*,int,int,void*,
+                          void (*xFunc)(sqlite3_context*,int,sqlite3_value**),
+                          void (*xStep)(sqlite3_context*,int,sqlite3_value**),
+                          void (*xFinal)(sqlite3_context*));
+  int  (*create_function16)(sqlite3*,const void*,int,int,void*,
+                            void (*xFunc)(sqlite3_context*,int,sqlite3_value**),
+                            void (*xStep)(sqlite3_context*,int,sqlite3_value**),
+                            void (*xFinal)(sqlite3_context*));
+  int (*create_module)(sqlite3*,const char*,const sqlite3_module*,void*);
+  int  (*data_count)(sqlite3_stmt*pStmt);
+  sqlite3 * (*db_handle)(sqlite3_stmt*);
+  int (*declare_vtab)(sqlite3*,const char*);
+  int  (*enable_shared_cache)(int);
+  int  (*errcode)(sqlite3*db);
+  const char * (*errmsg)(sqlite3*);
+  const void * (*errmsg16)(sqlite3*);
+  int  (*exec)(sqlite3*,const char*,sqlite3_callback,void*,char**);
+  int  (*expired)(sqlite3_stmt*);
+  int  (*finalize)(sqlite3_stmt*pStmt);
+  void  (*free)(void*);
+  void  (*free_table)(char**result);
+  int  (*get_autocommit)(sqlite3*);
+  void * (*get_auxdata)(sqlite3_context*,int);
+  int  (*get_table)(sqlite3*,const char*,char***,int*,int*,char**);
+  int  (*global_recover)(void);
+  void  (*interruptx)(sqlite3*);
+  sqlite_int64  (*last_insert_rowid)(sqlite3*);
+  const char * (*libversion)(void);
+  int  (*libversion_number)(void);
+  void *(*malloc)(int);
+  char * (*mprintf)(const char*,...);
+  int  (*open)(const char*,sqlite3**);
+  int  (*open16)(const void*,sqlite3**);
+  int  (*prepare)(sqlite3*,const char*,int,sqlite3_stmt**,const char**);
+  int  (*prepare16)(sqlite3*,const void*,int,sqlite3_stmt**,const void**);
+  void * (*profile)(sqlite3*,void(*)(void*,const char*,sqlite_uint64),void*);
+  void  (*progress_handler)(sqlite3*,int,int(*)(void*),void*);
+  void *(*realloc)(void*,int);
+  int  (*reset)(sqlite3_stmt*pStmt);
+  void  (*result_blob)(sqlite3_context*,const void*,int,void(*)(void*));
+  void  (*result_double)(sqlite3_context*,double);
+  void  (*result_error)(sqlite3_context*,const char*,int);
+  void  (*result_error16)(sqlite3_context*,const void*,int);
+  void  (*result_int)(sqlite3_context*,int);
+  void  (*result_int64)(sqlite3_context*,sqlite_int64);
+  void  (*result_null)(sqlite3_context*);
+  void  (*result_text)(sqlite3_context*,const char*,int,void(*)(void*));
+  void  (*result_text16)(sqlite3_context*,const void*,int,void(*)(void*));
+  void  (*result_text16be)(sqlite3_context*,const void*,int,void(*)(void*));
+  void  (*result_text16le)(sqlite3_context*,const void*,int,void(*)(void*));
+  void  (*result_value)(sqlite3_context*,sqlite3_value*);
+  void * (*rollback_hook)(sqlite3*,void(*)(void*),void*);
+  int  (*set_authorizer)(sqlite3*,int(*)(void*,int,const char*,const char*,
+                         const char*,const char*),void*);
+  void  (*set_auxdata)(sqlite3_context*,int,void*,void (*)(void*));
+  char * (*xsnprintf)(int,char*,const char*,...);
+  int  (*step)(sqlite3_stmt*);
+  int  (*table_column_metadata)(sqlite3*,const char*,const char*,const char*,
+                                char const**,char const**,int*,int*,int*);
+  void  (*thread_cleanup)(void);
+  int  (*total_changes)(sqlite3*);
+  void * (*trace)(sqlite3*,void(*xTrace)(void*,const char*),void*);
+  int  (*transfer_bindings)(sqlite3_stmt*,sqlite3_stmt*);
+  void * (*update_hook)(sqlite3*,void(*)(void*,int ,char const*,char const*,
+                                         sqlite_int64),void*);
+  void * (*user_data)(sqlite3_context*);
+  const void * (*value_blob)(sqlite3_value*);
+  int  (*value_bytes)(sqlite3_value*);
+  int  (*value_bytes16)(sqlite3_value*);
+  double  (*value_double)(sqlite3_value*);
+  int  (*value_int)(sqlite3_value*);
+  sqlite_int64  (*value_int64)(sqlite3_value*);
+  int  (*value_numeric_type)(sqlite3_value*);
+  const unsigned char * (*value_text)(sqlite3_value*);
+  const void * (*value_text16)(sqlite3_value*);
+  const void * (*value_text16be)(sqlite3_value*);
+  const void * (*value_text16le)(sqlite3_value*);
+  int  (*value_type)(sqlite3_value*);
+  char *(*vmprintf)(const char*,va_list);
+  /* Added ??? */
+  int (*overload_function)(sqlite3*, const char *zFuncName, int nArg);
+  /* Added by 3.3.13 */
+  int (*prepare_v2)(sqlite3*,const char*,int,sqlite3_stmt**,const char**);
+  int (*prepare16_v2)(sqlite3*,const void*,int,sqlite3_stmt**,const void**);
+  int (*clear_bindings)(sqlite3_stmt*);
+  /* Added by 3.4.1 */
+  int (*create_module_v2)(sqlite3*,const char*,const sqlite3_module*,void*,
+                          void (*xDestroy)(void *));
+  /* Added by 3.5.0 */
+  int (*bind_zeroblob)(sqlite3_stmt*,int,int);
+  int (*blob_bytes)(sqlite3_blob*);
+  int (*blob_close)(sqlite3_blob*);
+  int (*blob_open)(sqlite3*,const char*,const char*,const char*,sqlite3_int64,
+                   int,sqlite3_blob**);
+  int (*blob_read)(sqlite3_blob*,void*,int,int);
+  int (*blob_write)(sqlite3_blob*,const void*,int,int);
+  int (*create_collation_v2)(sqlite3*,const char*,int,void*,
+                             int(*)(void*,int,const void*,int,const void*),
+                             void(*)(void*));
+  int (*file_control)(sqlite3*,const char*,int,void*);
+  sqlite3_int64 (*memory_highwater)(int);
+  sqlite3_int64 (*memory_used)(void);
+  sqlite3_mutex *(*mutex_alloc)(int);
+  void (*mutex_enter)(sqlite3_mutex*);
+  void (*mutex_free)(sqlite3_mutex*);
+  void (*mutex_leave)(sqlite3_mutex*);
+  int (*mutex_try)(sqlite3_mutex*);
+  int (*open_v2)(const char*,sqlite3**,int,const char*);
+  int (*release_memory)(int);
+  void (*result_error_nomem)(sqlite3_context*);
+  void (*result_error_toobig)(sqlite3_context*);
+  int (*sleep)(int);
+  void (*soft_heap_limit)(int);
+  sqlite3_vfs *(*vfs_find)(const char*);
+  int (*vfs_register)(sqlite3_vfs*,int);
+  int (*vfs_unregister)(sqlite3_vfs*);
+  int (*xthreadsafe)(void);
+  void (*result_zeroblob)(sqlite3_context*,int);
+  void (*result_error_code)(sqlite3_context*,int);
+  int (*test_control)(int, ...);
+  void (*randomness)(int,void*);
+  sqlite3 *(*context_db_handle)(sqlite3_context*);
+  int (*extended_result_codes)(sqlite3*,int);
+  int (*limit)(sqlite3*,int,int);
+  sqlite3_stmt *(*next_stmt)(sqlite3*,sqlite3_stmt*);
+  const char *(*sql)(sqlite3_stmt*);
+  int (*status)(int,int*,int*,int);
+  int (*backup_finish)(sqlite3_backup*);
+  sqlite3_backup *(*backup_init)(sqlite3*,const char*,sqlite3*,const char*);
+  int (*backup_pagecount)(sqlite3_backup*);
+  int (*backup_remaining)(sqlite3_backup*);
+  int (*backup_step)(sqlite3_backup*,int);
+  const char *(*compileoption_get)(int);
+  int (*compileoption_used)(const char*);
+  int (*create_function_v2)(sqlite3*,const char*,int,int,void*,
+                            void (*xFunc)(sqlite3_context*,int,sqlite3_value**),
+                            void (*xStep)(sqlite3_context*,int,sqlite3_value**),
+                            void (*xFinal)(sqlite3_context*),
+                            void(*xDestroy)(void*));
+  int (*db_config)(sqlite3*,int,...);
+  sqlite3_mutex *(*db_mutex)(sqlite3*);
+  int (*db_status)(sqlite3*,int,int*,int*,int);
+  int (*extended_errcode)(sqlite3*);
+  void (*log)(int,const char*,...);
+  sqlite3_int64 (*soft_heap_limit64)(sqlite3_int64);
+  const char *(*sourceid)(void);
+  int (*stmt_status)(sqlite3_stmt*,int,int);
+  int (*strnicmp)(const char*,const char*,int);
+  int (*unlock_notify)(sqlite3*,void(*)(void**,int),void*);
+  int (*wal_autocheckpoint)(sqlite3*,int);
+  int (*wal_checkpoint)(sqlite3*,const char*);
+  void *(*wal_hook)(sqlite3*,int(*)(void*,sqlite3*,const char*,int),void*);
+  int (*blob_reopen)(sqlite3_blob*,sqlite3_int64);
+  int (*vtab_config)(sqlite3*,int op,...);
+  int (*vtab_on_conflict)(sqlite3*);
+  /* Version 3.7.16 and later */
+  int (*close_v2)(sqlite3*);
+  const char *(*db_filename)(sqlite3*,const char*);
+  int (*db_readonly)(sqlite3*,const char*);
+  int (*db_release_memory)(sqlite3*);
+  const char *(*errstr)(int);
+  int (*stmt_busy)(sqlite3_stmt*);
+  int (*stmt_readonly)(sqlite3_stmt*);
+  int (*stricmp)(const char*,const char*);
+  int (*uri_boolean)(const char*,const char*,int);
+  sqlite3_int64 (*uri_int64)(const char*,const char*,sqlite3_int64);
+  const char *(*uri_parameter)(const char*,const char*);
+  char *(*xvsnprintf)(int,char*,const char*,va_list);
+  int (*wal_checkpoint_v2)(sqlite3*,const char*,int,int*,int*);
+  /* Version 3.8.7 and later */
+  int (*auto_extension)(void(*)(void));
+  int (*bind_blob64)(sqlite3_stmt*,int,const void*,sqlite3_uint64,
+                     void(*)(void*));
+  int (*bind_text64)(sqlite3_stmt*,int,const char*,sqlite3_uint64,
+                      void(*)(void*),unsigned char);
+  int (*cancel_auto_extension)(void(*)(void));
+  int (*load_extension)(sqlite3*,const char*,const char*,char**);
+  void *(*malloc64)(sqlite3_uint64);
+  sqlite3_uint64 (*msize)(void*);
+  void *(*realloc64)(void*,sqlite3_uint64);
+  void (*reset_auto_extension)(void);
+  void (*result_blob64)(sqlite3_context*,const void*,sqlite3_uint64,
+                        void(*)(void*));
+  void (*result_text64)(sqlite3_context*,const char*,sqlite3_uint64,
+                         void(*)(void*), unsigned char);
+  int (*strglob)(const char*,const char*);
+  /* Version 3.8.11 and later */
+  sqlite3_value *(*value_dup)(const sqlite3_value*);
+  void (*value_free)(sqlite3_value*);
+  int (*result_zeroblob64)(sqlite3_context*,sqlite3_uint64);
+  int (*bind_zeroblob64)(sqlite3_stmt*, int, sqlite3_uint64);
+  /* Version 3.9.0 and later */
+  unsigned int (*value_subtype)(sqlite3_value*);
+  void (*result_subtype)(sqlite3_context*,unsigned int);
+  /* Version 3.10.0 and later */
+  int (*status64)(int,sqlite3_int64*,sqlite3_int64*,int);
+  int (*strlike)(const char*,const char*,unsigned int);
+  int (*db_cacheflush)(sqlite3*);
+  /* Version 3.12.0 and later */
+  int (*system_errno)(sqlite3*);
+  /* Version 3.14.0 and later */
+  int (*trace_v2)(sqlite3*,unsigned,int(*)(unsigned,void*,void*,void*),void*);
+  char *(*expanded_sql)(sqlite3_stmt*);
+  /* Version 3.18.0 and later */
+  void (*set_last_insert_rowid)(sqlite3*,sqlite3_int64);
+  /* Version 3.20.0 and later */
+  int (*prepare_v3)(sqlite3*,const char*,int,unsigned int,
+                    sqlite3_stmt**,const char**);
+  int (*prepare16_v3)(sqlite3*,const void*,int,unsigned int,
+                      sqlite3_stmt**,const void**);
+  int (*bind_pointer)(sqlite3_stmt*,int,void*,const char*,void(*)(void*));
+  void (*result_pointer)(sqlite3_context*,void*,const char*,void(*)(void*));
+  void *(*value_pointer)(sqlite3_value*,const char*);
+  int (*vtab_nochange)(sqlite3_context*);
+  int (*value_nochange)(sqlite3_value*);
+  const char *(*vtab_collation)(sqlite3_index_info*,int);
+  /* Version 3.24.0 and later */
+  int (*keyword_count)(void);
+  int (*keyword_name)(int,const char**,int*);
+  int (*keyword_check)(const char*,int);
+  sqlite3_str *(*str_new)(sqlite3*);
+  char *(*str_finish)(sqlite3_str*);
+  void (*str_appendf)(sqlite3_str*, const char *zFormat, ...);
+  void (*str_vappendf)(sqlite3_str*, const char *zFormat, va_list);
+  void (*str_append)(sqlite3_str*, const char *zIn, int N);
+  void (*str_appendall)(sqlite3_str*, const char *zIn);
+  void (*str_appendchar)(sqlite3_str*, int N, char C);
+  void (*str_reset)(sqlite3_str*);
+  int (*str_errcode)(sqlite3_str*);
+  int (*str_length)(sqlite3_str*);
+  char *(*str_value)(sqlite3_str*);
+  /* Version 3.25.0 and later */
+  int (*create_window_function)(sqlite3*,const char*,int,int,void*,
+                            void (*xStep)(sqlite3_context*,int,sqlite3_value**),
+                            void (*xFinal)(sqlite3_context*),
+                            void (*xValue)(sqlite3_context*),
+                            void (*xInv)(sqlite3_context*,int,sqlite3_value**),
+                            void(*xDestroy)(void*));
+  /* Version 3.26.0 and later */
+  const char *(*normalized_sql)(sqlite3_stmt*);
+  /* Version 3.28.0 and later */
+  int (*stmt_isexplain)(sqlite3_stmt*);
+  int (*value_frombind)(sqlite3_value*);
+  /* Version 3.30.0 and later */
+  int (*drop_modules)(sqlite3*,const char**);
+  /* Version 3.31.0 and later */
+  sqlite3_int64 (*hard_heap_limit64)(sqlite3_int64);
+  const char *(*uri_key)(const char*,int);
+  const char *(*filename_database)(const char*);
+  const char *(*filename_journal)(const char*);
+  const char *(*filename_wal)(const char*);
+  /* Version 3.32.0 and later */
+  const char *(*create_filename)(const char*,const char*,const char*,
+                           int,const char**);
+  void (*free_filename)(const char*);
+  sqlite3_file *(*database_file_object)(const char*);
+  /* Version 3.34.0 and later */
+  int (*txn_state)(sqlite3*,const char*);
+  /* Version 3.36.1 and later */
+  sqlite3_int64 (*changes64)(sqlite3*);
+  sqlite3_int64 (*total_changes64)(sqlite3*);
+  /* Version 3.37.0 and later */
+  int (*autovacuum_pages)(sqlite3*,
+     unsigned int(*)(void*,const char*,unsigned int,unsigned int,unsigned int),
+     void*, void(*)(void*));
+  /* Version 3.38.0 and later */
+  int (*error_offset)(sqlite3*);
+  int (*vtab_rhs_value)(sqlite3_index_info*,int,sqlite3_value**);
+  int (*vtab_distinct)(sqlite3_index_info*);
+  int (*vtab_in)(sqlite3_index_info*,int,int);
+  int (*vtab_in_first)(sqlite3_value*,sqlite3_value**);
+  int (*vtab_in_next)(sqlite3_value*,sqlite3_value**);
+  /* Version 3.39.0 and later */
+  int (*deserialize)(sqlite3*,const char*,unsigned char*,
+                     sqlite3_int64,sqlite3_int64,unsigned);
+  unsigned char *(*serialize)(sqlite3*,const char *,sqlite3_int64*,
+                              unsigned int);
+  const char *(*db_name)(sqlite3*,int);
+  /* Version 3.40.0 and later */
+  int (*value_encoding)(sqlite3_value*);
+  /* Version 3.41.0 and later */
+  int (*is_interrupted)(sqlite3*);
+  /* Version 3.43.0 and later */
+  int (*stmt_explain)(sqlite3_stmt*,int);
+  /* Version 3.44.0 and later */
+  void *(*get_clientdata)(sqlite3*,const char*);
+  int (*set_clientdata)(sqlite3*, const char*, void*, void(*)(void*));
+  /* Version 3.50.0 and later */
+  int (*setlk_timeout)(sqlite3*,int,int);
+  /* Version 3.51.0 and later */
+  int (*set_errmsg)(sqlite3*,int,const char*);
+  int (*db_status64)(sqlite3*,int,sqlite3_int64*,sqlite3_int64*,int);
+  /* Version 3.52.0 and later */
+  void (*str_truncate)(sqlite3_str*,int);
+  void (*str_free)(sqlite3_str*);
+  int (*carray_bind)(sqlite3_stmt*,int,void*,int,int,void(*)(void*));
+  int (*carray_bind_v2)(sqlite3_stmt*,int,void*,int,int,void(*)(void*),void*);
+};
+
+/*
+** This is the function signature used for all extension entry points.  It
+** is also defined in the file "loadext.c".
+*/
+typedef int (*sqlite3_loadext_entry)(
+  sqlite3 *db,                       /* Handle to the database. */
+  char **pzErrMsg,                   /* Used to set error string on failure. */
+  const sqlite3_api_routines *pThunk /* Extension API function pointers. */
+);
+
+/*
+** The following macros redefine the API routines so that they are
+** redirected through the global sqlite3_api structure.
+**
+** This header file is also used by the loadext.c source file
+** (part of the main SQLite library - not an extension) so that
+** it can get access to the sqlite3_api_routines structure
+** definition.  But the main library does not want to redefine
+** the API.  So the redefinition macros are only valid if the
+** SQLITE_CORE macros is undefined.
+*/
+#if !defined(SQLITE_CORE) && !defined(SQLITE_OMIT_LOAD_EXTENSION)
+#define sqlite3_aggregate_context      sqlite3_api->aggregate_context
+#ifndef SQLITE_OMIT_DEPRECATED
+#define sqlite3_aggregate_count        sqlite3_api->aggregate_count
+#endif
+#define sqlite3_bind_blob              sqlite3_api->bind_blob
+#define sqlite3_bind_double            sqlite3_api->bind_double
+#define sqlite3_bind_int               sqlite3_api->bind_int
+#define sqlite3_bind_int64             sqlite3_api->bind_int64
+#define sqlite3_bind_null              sqlite3_api->bind_null
+#define sqlite3_bind_parameter_count   sqlite3_api->bind_parameter_count
+#define sqlite3_bind_parameter_index   sqlite3_api->bind_parameter_index
+#define sqlite3_bind_parameter_name    sqlite3_api->bind_parameter_name
+#define sqlite3_bind_text              sqlite3_api->bind_text
+#define sqlite3_bind_text16            sqlite3_api->bind_text16
+#define sqlite3_bind_value             sqlite3_api->bind_value
+#define sqlite3_busy_handler           sqlite3_api->busy_handler
+#define sqlite3_busy_timeout           sqlite3_api->busy_timeout
+#define sqlite3_changes                sqlite3_api->changes
+#define sqlite3_close                  sqlite3_api->close
+#define sqlite3_collation_needed       sqlite3_api->collation_needed
+#define sqlite3_collation_needed16     sqlite3_api->collation_needed16
+#define sqlite3_column_blob            sqlite3_api->column_blob
+#define sqlite3_column_bytes           sqlite3_api->column_bytes
+#define sqlite3_column_bytes16         sqlite3_api->column_bytes16
+#define sqlite3_column_count           sqlite3_api->column_count
+#define sqlite3_column_database_name   sqlite3_api->column_database_name
+#define sqlite3_column_database_name16 sqlite3_api->column_database_name16
+#define sqlite3_column_decltype        sqlite3_api->column_decltype
+#define sqlite3_column_decltype16      sqlite3_api->column_decltype16
+#define sqlite3_column_double          sqlite3_api->column_double
+#define sqlite3_column_int             sqlite3_api->column_int
+#define sqlite3_column_int64           sqlite3_api->column_int64
+#define sqlite3_column_name            sqlite3_api->column_name
+#define sqlite3_column_name16          sqlite3_api->column_name16
+#define sqlite3_column_origin_name     sqlite3_api->column_origin_name
+#define sqlite3_column_origin_name16   sqlite3_api->column_origin_name16
+#define sqlite3_column_table_name      sqlite3_api->column_table_name
+#define sqlite3_column_table_name16    sqlite3_api->column_table_name16
+#define sqlite3_column_text            sqlite3_api->column_text
+#define sqlite3_column_text16          sqlite3_api->column_text16
+#define sqlite3_column_type            sqlite3_api->column_type
+#define sqlite3_column_value           sqlite3_api->column_value
+#define sqlite3_commit_hook            sqlite3_api->commit_hook
+#define sqlite3_complete               sqlite3_api->complete
+#define sqlite3_complete16             sqlite3_api->complete16
+#define sqlite3_create_collation       sqlite3_api->create_collation
+#define sqlite3_create_collation16     sqlite3_api->create_collation16
+#define sqlite3_create_function        sqlite3_api->create_function
+#define sqlite3_create_function16      sqlite3_api->create_function16
+#define sqlite3_create_module          sqlite3_api->create_module
+#define sqlite3_create_module_v2       sqlite3_api->create_module_v2
+#define sqlite3_data_count             sqlite3_api->data_count
+#define sqlite3_db_handle              sqlite3_api->db_handle
+#define sqlite3_declare_vtab           sqlite3_api->declare_vtab
+#define sqlite3_enable_shared_cache    sqlite3_api->enable_shared_cache
+#define sqlite3_errcode                sqlite3_api->errcode
+#define sqlite3_errmsg                 sqlite3_api->errmsg
+#define sqlite3_errmsg16               sqlite3_api->errmsg16
+#define sqlite3_exec                   sqlite3_api->exec
+#ifndef SQLITE_OMIT_DEPRECATED
+#define sqlite3_expired                sqlite3_api->expired
+#endif
+#define sqlite3_finalize               sqlite3_api->finalize
+#define sqlite3_free                   sqlite3_api->free
+#define sqlite3_free_table             sqlite3_api->free_table
+#define sqlite3_get_autocommit         sqlite3_api->get_autocommit
+#define sqlite3_get_auxdata            sqlite3_api->get_auxdata
+#define sqlite3_get_table              sqlite3_api->get_table
+#ifndef SQLITE_OMIT_DEPRECATED
+#define sqlite3_global_recover         sqlite3_api->global_recover
+#endif
+#define sqlite3_interrupt              sqlite3_api->interruptx
+#define sqlite3_last_insert_rowid      sqlite3_api->last_insert_rowid
+#define sqlite3_libversion             sqlite3_api->libversion
+#define sqlite3_libversion_number      sqlite3_api->libversion_number
+#define sqlite3_malloc                 sqlite3_api->malloc
+#define sqlite3_mprintf                sqlite3_api->mprintf
+#define sqlite3_open                   sqlite3_api->open
+#define sqlite3_open16                 sqlite3_api->open16
+#define sqlite3_prepare                sqlite3_api->prepare
+#define sqlite3_prepare16              sqlite3_api->prepare16
+#define sqlite3_prepare_v2             sqlite3_api->prepare_v2
+#define sqlite3_prepare16_v2           sqlite3_api->prepare16_v2
+#define sqlite3_profile                sqlite3_api->profile
+#define sqlite3_progress_handler       sqlite3_api->progress_handler
+#define sqlite3_realloc                sqlite3_api->realloc
+#define sqlite3_reset                  sqlite3_api->reset
+#define sqlite3_result_blob            sqlite3_api->result_blob
+#define sqlite3_result_double          sqlite3_api->result_double
+#define sqlite3_result_error           sqlite3_api->result_error
+#define sqlite3_result_error16         sqlite3_api->result_error16
+#define sqlite3_result_int             sqlite3_api->result_int
+#define sqlite3_result_int64           sqlite3_api->result_int64
+#define sqlite3_result_null            sqlite3_api->result_null
+#define sqlite3_result_text            sqlite3_api->result_text
+#define sqlite3_result_text16          sqlite3_api->result_text16
+#define sqlite3_result_text16be        sqlite3_api->result_text16be
+#define sqlite3_result_text16le        sqlite3_api->result_text16le
+#define sqlite3_result_value           sqlite3_api->result_value
+#define sqlite3_rollback_hook          sqlite3_api->rollback_hook
+#define sqlite3_set_authorizer         sqlite3_api->set_authorizer
+#define sqlite3_set_auxdata            sqlite3_api->set_auxdata
+#define sqlite3_snprintf               sqlite3_api->xsnprintf
+#define sqlite3_step                   sqlite3_api->step
+#define sqlite3_table_column_metadata  sqlite3_api->table_column_metadata
+#define sqlite3_thread_cleanup         sqlite3_api->thread_cleanup
+#define sqlite3_total_changes          sqlite3_api->total_changes
+#define sqlite3_trace                  sqlite3_api->trace
+#ifndef SQLITE_OMIT_DEPRECATED
+#define sqlite3_transfer_bindings      sqlite3_api->transfer_bindings
+#endif
+#define sqlite3_update_hook            sqlite3_api->update_hook
+#define sqlite3_user_data              sqlite3_api->user_data
+#define sqlite3_value_blob             sqlite3_api->value_blob
+#define sqlite3_value_bytes            sqlite3_api->value_bytes
+#define sqlite3_value_bytes16          sqlite3_api->value_bytes16
+#define sqlite3_value_double           sqlite3_api->value_double
+#define sqlite3_value_int              sqlite3_api->value_int
+#define sqlite3_value_int64            sqlite3_api->value_int64
+#define sqlite3_value_numeric_type     sqlite3_api->value_numeric_type
+#define sqlite3_value_text             sqlite3_api->value_text
+#define sqlite3_value_text16           sqlite3_api->value_text16
+#define sqlite3_value_text16be         sqlite3_api->value_text16be
+#define sqlite3_value_text16le         sqlite3_api->value_text16le
+#define sqlite3_value_type             sqlite3_api->value_type
+#define sqlite3_vmprintf               sqlite3_api->vmprintf
+#define sqlite3_vsnprintf              sqlite3_api->xvsnprintf
+#define sqlite3_overload_function      sqlite3_api->overload_function
+#define sqlite3_prepare_v2             sqlite3_api->prepare_v2
+#define sqlite3_prepare16_v2           sqlite3_api->prepare16_v2
+#define sqlite3_clear_bindings         sqlite3_api->clear_bindings
+#define sqlite3_bind_zeroblob          sqlite3_api->bind_zeroblob
+#define sqlite3_blob_bytes             sqlite3_api->blob_bytes
+#define sqlite3_blob_close             sqlite3_api->blob_close
+#define sqlite3_blob_open              sqlite3_api->blob_open
+#define sqlite3_blob_read              sqlite3_api->blob_read
+#define sqlite3_blob_write             sqlite3_api->blob_write
+#define sqlite3_create_collation_v2    sqlite3_api->create_collation_v2
+#define sqlite3_file_control           sqlite3_api->file_control
+#define sqlite3_memory_highwater       sqlite3_api->memory_highwater
+#define sqlite3_memory_used            sqlite3_api->memory_used
+#define sqlite3_mutex_alloc            sqlite3_api->mutex_alloc
+#define sqlite3_mutex_enter            sqlite3_api->mutex_enter
+#define sqlite3_mutex_free             sqlite3_api->mutex_free
+#define sqlite3_mutex_leave            sqlite3_api->mutex_leave
+#define sqlite3_mutex_try              sqlite3_api->mutex_try
+#define sqlite3_open_v2                sqlite3_api->open_v2
+#define sqlite3_release_memory         sqlite3_api->release_memory
+#define sqlite3_result_error_nomem     sqlite3_api->result_error_nomem
+#define sqlite3_result_error_toobig    sqlite3_api->result_error_toobig
+#define sqlite3_sleep                  sqlite3_api->sleep
+#define sqlite3_soft_heap_limit        sqlite3_api->soft_heap_limit
+#define sqlite3_vfs_find               sqlite3_api->vfs_find
+#define sqlite3_vfs_register           sqlite3_api->vfs_register
+#define sqlite3_vfs_unregister         sqlite3_api->vfs_unregister
+#define sqlite3_threadsafe             sqlite3_api->xthreadsafe
+#define sqlite3_result_zeroblob        sqlite3_api->result_zeroblob
+#define sqlite3_result_error_code      sqlite3_api->result_error_code
+#define sqlite3_test_control           sqlite3_api->test_control
+#define sqlite3_randomness             sqlite3_api->randomness
+#define sqlite3_context_db_handle      sqlite3_api->context_db_handle
+#define sqlite3_extended_result_codes  sqlite3_api->extended_result_codes
+#define sqlite3_limit                  sqlite3_api->limit
+#define sqlite3_next_stmt              sqlite3_api->next_stmt
+#define sqlite3_sql                    sqlite3_api->sql
+#define sqlite3_status                 sqlite3_api->status
+#define sqlite3_backup_finish          sqlite3_api->backup_finish
+#define sqlite3_backup_init            sqlite3_api->backup_init
+#define sqlite3_backup_pagecount       sqlite3_api->backup_pagecount
+#define sqlite3_backup_remaining       sqlite3_api->backup_remaining
+#define sqlite3_backup_step            sqlite3_api->backup_step
+#define sqlite3_compileoption_get      sqlite3_api->compileoption_get
+#define sqlite3_compileoption_used     sqlite3_api->compileoption_used
+#define sqlite3_create_function_v2     sqlite3_api->create_function_v2
+#define sqlite3_db_config              sqlite3_api->db_config
+#define sqlite3_db_mutex               sqlite3_api->db_mutex
+#define sqlite3_db_status              sqlite3_api->db_status
+#define sqlite3_extended_errcode       sqlite3_api->extended_errcode
+#define sqlite3_log                    sqlite3_api->log
+#define sqlite3_soft_heap_limit64      sqlite3_api->soft_heap_limit64
+#define sqlite3_sourceid               sqlite3_api->sourceid
+#define sqlite3_stmt_status            sqlite3_api->stmt_status
+#define sqlite3_strnicmp               sqlite3_api->strnicmp
+#define sqlite3_unlock_notify          sqlite3_api->unlock_notify
+#define sqlite3_wal_autocheckpoint     sqlite3_api->wal_autocheckpoint
+#define sqlite3_wal_checkpoint         sqlite3_api->wal_checkpoint
+#define sqlite3_wal_hook               sqlite3_api->wal_hook
+#define sqlite3_blob_reopen            sqlite3_api->blob_reopen
+#define sqlite3_vtab_config            sqlite3_api->vtab_config
+#define sqlite3_vtab_on_conflict       sqlite3_api->vtab_on_conflict
+/* Version 3.7.16 and later */
+#define sqlite3_close_v2               sqlite3_api->close_v2
+#define sqlite3_db_filename            sqlite3_api->db_filename
+#define sqlite3_db_readonly            sqlite3_api->db_readonly
+#define sqlite3_db_release_memory      sqlite3_api->db_release_memory
+#define sqlite3_errstr                 sqlite3_api->errstr
+#define sqlite3_stmt_busy              sqlite3_api->stmt_busy
+#define sqlite3_stmt_readonly          sqlite3_api->stmt_readonly
+#define sqlite3_stricmp                sqlite3_api->stricmp
+#define sqlite3_uri_boolean            sqlite3_api->uri_boolean
+#define sqlite3_uri_int64              sqlite3_api->uri_int64
+#define sqlite3_uri_parameter          sqlite3_api->uri_parameter
+#define sqlite3_uri_vsnprintf          sqlite3_api->xvsnprintf
+#define sqlite3_wal_checkpoint_v2      sqlite3_api->wal_checkpoint_v2
+/* Version 3.8.7 and later */
+#define sqlite3_auto_extension         sqlite3_api->auto_extension
+#define sqlite3_bind_blob64            sqlite3_api->bind_blob64
+#define sqlite3_bind_text64            sqlite3_api->bind_text64
+#define sqlite3_cancel_auto_extension  sqlite3_api->cancel_auto_extension
+#define sqlite3_load_extension         sqlite3_api->load_extension
+#define sqlite3_malloc64               sqlite3_api->malloc64
+#define sqlite3_msize                  sqlite3_api->msize
+#define sqlite3_realloc64              sqlite3_api->realloc64
+#define sqlite3_reset_auto_extension   sqlite3_api->reset_auto_extension
+#define sqlite3_result_blob64          sqlite3_api->result_blob64
+#define sqlite3_result_text64          sqlite3_api->result_text64
+#define sqlite3_strglob                sqlite3_api->strglob
+/* Version 3.8.11 and later */
+#define sqlite3_value_dup              sqlite3_api->value_dup
+#define sqlite3_value_free             sqlite3_api->value_free
+#define sqlite3_result_zeroblob64      sqlite3_api->result_zeroblob64
+#define sqlite3_bind_zeroblob64        sqlite3_api->bind_zeroblob64
+/* Version 3.9.0 and later */
+#define sqlite3_value_subtype          sqlite3_api->value_subtype
+#define sqlite3_result_subtype         sqlite3_api->result_subtype
+/* Version 3.10.0 and later */
+#define sqlite3_status64               sqlite3_api->status64
+#define sqlite3_strlike                sqlite3_api->strlike
+#define sqlite3_db_cacheflush          sqlite3_api->db_cacheflush
+/* Version 3.12.0 and later */
+#define sqlite3_system_errno           sqlite3_api->system_errno
+/* Version 3.14.0 and later */
+#define sqlite3_trace_v2               sqlite3_api->trace_v2
+#define sqlite3_expanded_sql           sqlite3_api->expanded_sql
+/* Version 3.18.0 and later */
+#define sqlite3_set_last_insert_rowid  sqlite3_api->set_last_insert_rowid
+/* Version 3.20.0 and later */
+#define sqlite3_prepare_v3             sqlite3_api->prepare_v3
+#define sqlite3_prepare16_v3           sqlite3_api->prepare16_v3
+#define sqlite3_bind_pointer           sqlite3_api->bind_pointer
+#define sqlite3_result_pointer         sqlite3_api->result_pointer
+#define sqlite3_value_pointer          sqlite3_api->value_pointer
+/* Version 3.22.0 and later */
+#define sqlite3_vtab_nochange          sqlite3_api->vtab_nochange
+#define sqlite3_value_nochange         sqlite3_api->value_nochange
+#define sqlite3_vtab_collation         sqlite3_api->vtab_collation
+/* Version 3.24.0 and later */
+#define sqlite3_keyword_count          sqlite3_api->keyword_count
+#define sqlite3_keyword_name           sqlite3_api->keyword_name
+#define sqlite3_keyword_check          sqlite3_api->keyword_check
+#define sqlite3_str_new                sqlite3_api->str_new
+#define sqlite3_str_finish             sqlite3_api->str_finish
+#define sqlite3_str_appendf            sqlite3_api->str_appendf
+#define sqlite3_str_vappendf           sqlite3_api->str_vappendf
+#define sqlite3_str_append             sqlite3_api->str_append
+#define sqlite3_str_appendall          sqlite3_api->str_appendall
+#define sqlite3_str_appendchar         sqlite3_api->str_appendchar
+#define sqlite3_str_reset              sqlite3_api->str_reset
+#define sqlite3_str_errcode            sqlite3_api->str_errcode
+#define sqlite3_str_length             sqlite3_api->str_length
+#define sqlite3_str_value              sqlite3_api->str_value
+/* Version 3.25.0 and later */
+#define sqlite3_create_window_function sqlite3_api->create_window_function
+/* Version 3.26.0 and later */
+#define sqlite3_normalized_sql         sqlite3_api->normalized_sql
+/* Version 3.28.0 and later */
+#define sqlite3_stmt_isexplain         sqlite3_api->stmt_isexplain
+#define sqlite3_value_frombind         sqlite3_api->value_frombind
+/* Version 3.30.0 and later */
+#define sqlite3_drop_modules           sqlite3_api->drop_modules
+/* Version 3.31.0 and later */
+#define sqlite3_hard_heap_limit64      sqlite3_api->hard_heap_limit64
+#define sqlite3_uri_key                sqlite3_api->uri_key
+#define sqlite3_filename_database      sqlite3_api->filename_database
+#define sqlite3_filename_journal       sqlite3_api->filename_journal
+#define sqlite3_filename_wal           sqlite3_api->filename_wal
+/* Version 3.32.0 and later */
+#define sqlite3_create_filename        sqlite3_api->create_filename
+#define sqlite3_free_filename          sqlite3_api->free_filename
+#define sqlite3_database_file_object   sqlite3_api->database_file_object
+/* Version 3.34.0 and later */
+#define sqlite3_txn_state              sqlite3_api->txn_state
+/* Version 3.36.1 and later */
+#define sqlite3_changes64              sqlite3_api->changes64
+#define sqlite3_total_changes64        sqlite3_api->total_changes64
+/* Version 3.37.0 and later */
+#define sqlite3_autovacuum_pages       sqlite3_api->autovacuum_pages
+/* Version 3.38.0 and later */
+#define sqlite3_error_offset           sqlite3_api->error_offset
+#define sqlite3_vtab_rhs_value         sqlite3_api->vtab_rhs_value
+#define sqlite3_vtab_distinct          sqlite3_api->vtab_distinct
+#define sqlite3_vtab_in                sqlite3_api->vtab_in
+#define sqlite3_vtab_in_first          sqlite3_api->vtab_in_first
+#define sqlite3_vtab_in_next           sqlite3_api->vtab_in_next
+/* Version 3.39.0 and later */
+#ifndef SQLITE_OMIT_DESERIALIZE
+#define sqlite3_deserialize            sqlite3_api->deserialize
+#define sqlite3_serialize              sqlite3_api->serialize
+#endif
+#define sqlite3_db_name                sqlite3_api->db_name
+/* Version 3.40.0 and later */
+#define sqlite3_value_encoding         sqlite3_api->value_encoding
+/* Version 3.41.0 and later */
+#define sqlite3_is_interrupted         sqlite3_api->is_interrupted
+/* Version 3.43.0 and later */
+#define sqlite3_stmt_explain           sqlite3_api->stmt_explain
+/* Version 3.44.0 and later */
+#define sqlite3_get_clientdata         sqlite3_api->get_clientdata
+#define sqlite3_set_clientdata         sqlite3_api->set_clientdata
+/* Version 3.50.0 and later */
+#define sqlite3_setlk_timeout          sqlite3_api->setlk_timeout
+/* Version 3.51.0 and later */
+#define sqlite3_set_errmsg             sqlite3_api->set_errmsg
+#define sqlite3_db_status64            sqlite3_api->db_status64
+/* Version 3.52.0 and later */
+#define sqlite3_str_truncate           sqlite3_api->str_truncate
+#define sqlite3_str_free               sqlite3_api->str_free
+#define sqlite3_carray_bind            sqlite3_api->carray_bind
+#define sqlite3_carray_bind_v2         sqlite3_api->carray_bind_v2
+#endif /* !defined(SQLITE_CORE) && !defined(SQLITE_OMIT_LOAD_EXTENSION) */
+
+#if !defined(SQLITE_CORE) && !defined(SQLITE_OMIT_LOAD_EXTENSION)
+  /* This case when the file really is being compiled as a loadable
+  ** extension */
+# define SQLITE_EXTENSION_INIT1     const sqlite3_api_routines *sqlite3_api=0;
+# define SQLITE_EXTENSION_INIT2(v)  sqlite3_api=v;
+# define SQLITE_EXTENSION_INIT3     \
+    extern const sqlite3_api_routines *sqlite3_api;
+#else
+  /* This case when the file is being statically linked into the
+  ** application */
+# define SQLITE_EXTENSION_INIT1     /*no-op*/
+# define SQLITE_EXTENSION_INIT2(v)  (void)v; /* unused parameter */
+# define SQLITE_EXTENSION_INIT3     /*no-op*/
+#endif
+
+#endif /* SQLITE3EXT_H */
+/*** End of #include "sqlite3ext.h" ***/
+
+
+struct sqlite3mc_core_routines {
+  int (*initialize)(void);
+  int (*shutdown)(void);
+  int (*config)(int, ...);
+  int (*enable_load_extension)(sqlite3*, int);
+  int (*memory_alarm)(void(*)(void*, sqlite3_int64, int), void*, sqlite3_int64);
+  int (*mutex_held)(sqlite3_mutex*);
+  int (*mutex_notheld)(sqlite3_mutex*);
+  int (*os_init)(void);
+  int (*os_end)(void);
+  int (*preupdate_blobwrite)(sqlite3*);
+  int (*preupdate_count)(sqlite3*);
+  int (*preupdate_depth)(sqlite3*);
+  void* (*preupdate_hook)(sqlite3*,
+                          void(*xPreUpdate)(void*, sqlite3*, int, char const*, char const*, sqlite3_int64, sqlite3_int64),
+                          void*);
+  int (*preupdate_old)(sqlite3*, int, sqlite3_value**);
+  int (*preupdate_new)(sqlite3*, int, sqlite3_value**);
+
+  int (*snapshot_cmp)(sqlite3_snapshot*, sqlite3_snapshot*);
+  void (*snapshot_free)(sqlite3_snapshot*);
+  int (*snapshot_get)(sqlite3*, const char*, sqlite3_snapshot**);
+  int (*snapshot_open)(sqlite3*, const char*, sqlite3_snapshot*);
+  int (*snapshot_recover)(sqlite3*, const char*);
+
+  int (*stmt_scanstatus)(sqlite3_stmt*, int, int, void*);
+  int (*stmt_scanstatus_v2)(sqlite3_stmt*, int, int, int, void*);
+  void (*stmt_scanstatus_reset)(sqlite3_stmt*);
+
+  int (*win32_set_directory)(unsigned long type, void* zValue);
+  int (*win32_set_directory8)(unsigned long type, const char* zValue);
+  int (*win32_set_directory16)(unsigned long type, const void* zValue);
+};
+
+struct sqlite3mc_api_routines {
+    void (*activate_see)(const char* zPassPhrase);
+    int (*key)(sqlite3* db, const void* pKey, int nKey);
+    int (*key_v2)(sqlite3*, const char* zDbName, const void* pKey, int nKey);
+    int (*rekey)(sqlite3*, const void* pKey, int nKey);
+    int (*rekey_v2)(sqlite3*, const char* zDbName, const void* pKey, int nKey);
+
+    const char* (*mc_version)();
+    int (*mc_cipher_count)();
+    int (*mc_cipher_index)(const char* cipherName);
+    const char* (*mc_cipher_name)(int cipherIndex);
+    int (*mc_cipher_name_copy)(int cipherIndex, char* cipherName, int maxCipherNameSize);
+    int (*mc_config)(sqlite3* db, const char* paramName, int newValue);
+    int (*mc_config_cipher)(sqlite3* db, const char* cipherName, const char* paramName, int newValue);
+    unsigned char* (*mc_codec_data)(sqlite3* db, const char* zDbName, const char* paramName);
+
+    int (*mc_vfs_create)(const char* zVfsReal, int makeDefault);
+    void (*mc_vfs_destroy)(const char* zName);
+    void (*mc_vfs_shutdown)();
+};
+
+typedef struct sqlite3mc_core_routines sqlite3mc_core_routines;
+typedef struct sqlite3mc_api_routines sqlite3mc_api_routines;
+
+#ifndef SQLITE3MC_DISPATCH_API
+#if defined(_WIN32)
+#define SQLITE3MC_DISPATCH_API __declspec(dllexport)
+#else
+#define SQLITE3MC_DISPATCH_API
+#endif
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+SQLITE3MC_DISPATCH_API extern const sqlite3_api_routines*    SQLITE3MC_API_TABLE_EXT;
+SQLITE3MC_DISPATCH_API extern const sqlite3mc_core_routines* SQLITE3MC_API_TABLE_CORE;
+SQLITE3MC_DISPATCH_API extern const sqlite3mc_api_routines*  SQLITE3MC_API_TABLE_MC;
+
+#ifdef __cplusplus
+}  /* End of the 'extern "C"' block */
+#endif
+
+#if !defined(SQLITE_CORE)
+
+/* SQLite core API - not defined in sqlite3ext.h */
+
+#define sqlite3_initialize            SQLITE3MC_API_TABLE_CORE->initialize
+#define sqlite3_shutdown              SQLITE3MC_API_TABLE_CORE->shutdown
+#define sqlite3_config                SQLITE3MC_API_TABLE_CORE->config
+#define sqlite3_enable_load_extension SQLITE3MC_API_TABLE_CORE->enable_load_extension
+#define sqlite3_memory_alarm          SQLITE3MC_API_TABLE_CORE->memory_alarm
+#define sqlite3_mutex_held            SQLITE3MC_API_TABLE_CORE->mutex_held
+#define sqlite3_mutex_notheld         SQLITE3MC_API_TABLE_CORE->mutex_notheld
+#define sqlite3_os_init               SQLITE3MC_API_TABLE_CORE->os_init
+#define sqlite3_os_end                SQLITE3MC_API_TABLE_CORE->os_end
+#define sqlite3_preupdate_blobwrite   SQLITE3MC_API_TABLE_CORE->preupdate_blobwrite
+#define sqlite3_preupdate_count       SQLITE3MC_API_TABLE_CORE->preupdate_count
+#define sqlite3_preupdate_depth       SQLITE3MC_API_TABLE_CORE->preupdate_depth
+#define sqlite3_preupdate_hook        SQLITE3MC_API_TABLE_CORE->preupdate_hook
+#define sqlite3_preupdate_old         SQLITE3MC_API_TABLE_CORE->preupdate_old
+#define sqlite3_preupdate_new         SQLITE3MC_API_TABLE_CORE->preupdate_new
+
+#define sqlite3_snapshot_cmp          SQLITE3MC_API_TABLE_CORE->snapshot_cmp
+#define sqlite3_snapshot_free         SQLITE3MC_API_TABLE_CORE->snapshot_free
+#define sqlite3_snapshot_get          SQLITE3MC_API_TABLE_CORE->snapshot_get
+#define sqlite3_snapshot_open         SQLITE3MC_API_TABLE_CORE->snapshot_open
+#define sqlite3_snapshot_recover      SQLITE3MC_API_TABLE_CORE->snapshot_recover
+
+#define sqlite3_stmt_scanstatus       SQLITE3MC_API_TABLE_CORE->stmt_scanstatus
+#define sqlite3_stmt_scanstatus_v2    SQLITE3MC_API_TABLE_CORE->stmt_scanstatus_v2
+#define sqlite3_stmt_scanstatus_reset SQLITE3MC_API_TABLE_CORE->stmt_scanstatus_reset
+
+#define sqlite3_win32_set_directory   SQLITE3MC_API_TABLE_CORE->win32_set_directory
+#define sqlite3_win32_set_directory8  SQLITE3MC_API_TABLE_CORE->win32_set_directory8
+#define sqlite3_win32_set_directory16 SQLITE3MC_API_TABLE_CORE->win32_set_directory16
+
+/* SQLite3 Multiple Ciphers API */
+
+#define sqlite3_activate_see        SQLITE3MC_API_TABLE_MC->activate_see
+#define sqlite3_key                 SQLITE3MC_API_TABLE_MC->key
+#define sqlite3_key_v2              SQLITE3MC_API_TABLE_MC->key_v2
+#define sqlite3_rekey               SQLITE3MC_API_TABLE_MC->rekey
+#define sqlite3_rekey_v2            SQLITE3MC_API_TABLE_MC->rekey_v2
+
+#define sqlite3mc_version           SQLITE3MC_API_TABLE_MC->mc_version
+#define sqlite3mc_cipher_count      SQLITE3MC_API_TABLE_MC->mc_cipher_count
+#define sqlite3mc_cipher_index      SQLITE3MC_API_TABLE_MC->mc_cipher_index
+#define sqlite3mc_cipher_name       SQLITE3MC_API_TABLE_MC->mc_cipher_name
+#define sqlite3mc_cipher_name_copy  SQLITE3MC_API_TABLE_MC->mc_cipher_name_copy
+#define sqlite3mc_config            SQLITE3MC_API_TABLE_MC->mc_config
+#define sqlite3mc_config_cipher     SQLITE3MC_API_TABLE_MC->mc_config_cipher
+#define sqlite3mc_codec_data        SQLITE3MC_API_TABLE_MC->mc_codec_data
+
+#define sqlite3mc_vfs_create        SQLITE3MC_API_TABLE_MC->mc_vfs_create
+#define sqlite3mc_vfs_destroy       SQLITE3MC_API_TABLE_MC->mc_vfs_destroy
+#define sqlite3mc_vfs_shutdown      SQLITE3MC_API_TABLE_MC->mc_vfs_shutdown
+
+#endif /* !SQLITE_CORE */
+
+#endif /* SQLITE3MC_USE_DISPATCH_TABLE */
+
+#endif /* SQLITE3MC_H_ */
 /*** End of #include "sqlite3mc.h" ***/
 
 
@@ -290197,18 +291415,21 @@ void RijndaelInvalidate(Rijndael* rijndael)
 */
 
 #ifndef AEGIS_API
-#define AEGIS_API
+#define AEGIS_API static
 #endif
 #ifndef AEGIS_PRIVATE
 #define AEGIS_PRIVATE static
+#endif
+#ifndef AEGIS_EXTERN
+#define AEGIS_EXTERN static
 #endif
 
 /* Namespacing to avoid conflicts with libsodium 1.0.21+ */
 
 /* Base Implementation Structs */
 #define aegis128l_implementation             sqlite3mc_aegis128l_implementation
-#define aegis128lx2_implementation           sqlite3mc_aegis128lx2_implementation
-#define aegis128lx4_implementation           sqlite3mc_aegis128lx4_implementation
+#define aegis128x2_implementation            sqlite3mc_aegis128x2_implementation
+#define aegis128x4_implementation            sqlite3mc_aegis128x4_implementation
 #define aegis256_implementation              sqlite3mc_aegis256_implementation
 #define aegis256x2_implementation            sqlite3mc_aegis256x2_implementation
 #define aegis256x4_implementation            sqlite3mc_aegis256x4_implementation
@@ -290478,6 +291699,9 @@ int aegis_runtime_has_altivec(void);
 #endif
 #ifndef AEGIS_PRIVATE
 #define AEGIS_PRIVATE static
+#endif
+#ifndef AEGIS_EXTERN
+#define AEGIS_EXTERN extern
 #endif
 
 /* #include "aegis128l.h" */
@@ -293694,7 +294918,7 @@ softaes_block_encrypt(const SoftAesBlock block, const SoftAesBlock rk)
 }
 #else
 
-uint32_t _aes_lut[256] __attribute__((visibility("hidden"))) = {
+static uint32_t _aes_lut[256] = {
     0xa56363c6, 0x847c7cf8, 0x997777ee, 0x8d7b7bf6, 0x0df2f2ff, 0xbd6b6bd6, 0xb16f6fde, 0x54c5c591,
     0x50303060, 0x03010102, 0xa96767ce, 0x7d2b2b56, 0x19fefee7, 0x62d7d7b5, 0xe6abab4d, 0x9a7676ec,
     0x45caca8f, 0x9d82821f, 0x40c9c989, 0x877d7dfa, 0x15fafaef, 0xeb5959b2, 0xc947478e, 0x0bf0f0fb,
@@ -294203,7 +295427,7 @@ typedef struct aegis256x4_implementation {
 /* #include "implementations.h" */
 
 
-extern struct aegis128l_implementation aegis128l_soft_implementation;
+AEGIS_EXTERN struct aegis128l_implementation aegis128l_soft_implementation;
 
 #endif /* AEGIS128L_SOFT_H */
 /*** End of #include "aegis128l_soft.h" ***/
@@ -295047,6 +296271,7 @@ AEGIS_state_mac_clone(aegis128l_mac_state *dst, const aegis128l_mac_state *src)
 /*** End of #include "aegis128l_common.h" ***/
 
 
+AEGIS_API
 struct aegis128l_implementation aegis128l_soft_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -295187,7 +296412,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis128x2_implementation aegis128x2_soft_implementation;
+AEGIS_EXTERN struct aegis128x2_implementation aegis128x2_soft_implementation;
 
 #endif /* AEGIS128X2_SOFT_H */
 /*** End of #include "aegis128x2_soft.h" ***/
@@ -296143,6 +297368,7 @@ AEGIS_state_mac_clone(aegis128x2_mac_state *dst, const aegis128x2_mac_state *src
 /*** End of #include "aegis128x2_common.h" ***/
 
 
+AEGIS_API
 struct aegis128x2_implementation aegis128x2_soft_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -296283,7 +297509,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis128x4_implementation aegis128x4_soft_implementation;
+AEGIS_EXTERN struct aegis128x4_implementation aegis128x4_soft_implementation;
 
 #endif /* AEGIS128X4_SOFT_H */
 /*** End of #include "aegis128x4_soft.h" ***/
@@ -297261,6 +298487,7 @@ AEGIS_state_mac_clone(aegis128x4_mac_state *dst, const aegis128x4_mac_state *src
 /*** End of #include "aegis128x4_common.h" ***/
 
 
+AEGIS_API
 struct aegis128x4_implementation aegis128x4_soft_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -297401,7 +298628,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis256_implementation aegis256_soft_implementation;
+AEGIS_EXTERN struct aegis256_implementation aegis256_soft_implementation;
 
 #endif /* AEGIS256_SOFT_H */
 /*** End of #include "aegis256_soft.h" ***/
@@ -298226,6 +299453,7 @@ AEGIS_state_mac_clone(aegis256_mac_state *dst, const aegis256_mac_state *src)
 /*** End of #include "aegis256_common.h" ***/
 
 
+AEGIS_API
 struct aegis256_implementation aegis256_soft_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -298366,7 +299594,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis256x2_implementation aegis256x2_soft_implementation;
+AEGIS_EXTERN struct aegis256x2_implementation aegis256x2_soft_implementation;
 
 #endif /* AEGIS256X2_SOFT_H */
 /*** End of #include "aegis256x2_soft.h" ***/
@@ -299312,6 +300540,7 @@ AEGIS_state_mac_clone(aegis256x2_mac_state *dst, const aegis256x2_mac_state *src
 /*** End of #include "aegis256x2_common.h" ***/
 
 
+AEGIS_API
 struct aegis256x2_implementation aegis256x2_soft_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -299452,7 +300681,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis256x4_implementation aegis256x4_soft_implementation;
+AEGIS_EXTERN struct aegis256x4_implementation aegis256x4_soft_implementation;
 
 #endif /* AEGIS256X4_SOFT_H */
 /*** End of #include "aegis256x4_soft.h" ***/
@@ -300426,6 +301655,7 @@ AEGIS_state_mac_clone(aegis256x4_mac_state *dst, const aegis256x4_mac_state *src
 /*** End of #include "aegis256x4_common.h" ***/
 
 
+AEGIS_API
 struct aegis256x4_implementation aegis256x4_soft_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -300569,7 +301799,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis128l_implementation aegis128l_aesni_implementation;
+AEGIS_EXTERN struct aegis128l_implementation aegis128l_aesni_implementation;
 
 #endif /* AEGIS128L_AESNI_H */
 /*** End of #include "aegis128l_aesni.h" ***/
@@ -301422,6 +302652,7 @@ AEGIS_state_mac_clone(aegis128l_mac_state *dst, const aegis128l_mac_state *src)
 /*** End of #include "aegis128l_common.h" ***/
 
 
+AEGIS_API
 struct aegis128l_implementation aegis128l_aesni_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -301570,7 +302801,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis128x2_implementation aegis128x2_aesni_implementation;
+AEGIS_EXTERN struct aegis128x2_implementation aegis128x2_aesni_implementation;
 
 #endif /* AEGIS128X2_AESNI_H */
 /*** End of #include "aegis128x2_aesni.h" ***/
@@ -302537,6 +303768,7 @@ AEGIS_state_mac_clone(aegis128x2_mac_state *dst, const aegis128x2_mac_state *src
 /*** End of #include "aegis128x2_common.h" ***/
 
 
+AEGIS_API
 struct aegis128x2_implementation aegis128x2_aesni_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -302685,7 +303917,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis128x4_implementation aegis128x4_aesni_implementation;
+AEGIS_EXTERN struct aegis128x4_implementation aegis128x4_aesni_implementation;
 
 #endif /* AEGIS128X4_AESNI_H */
 /*** End of #include "aegis128x4_aesni.h" ***/
@@ -303675,6 +304907,7 @@ AEGIS_state_mac_clone(aegis128x4_mac_state *dst, const aegis128x4_mac_state *src
 /*** End of #include "aegis128x4_common.h" ***/
 
 
+AEGIS_API
 struct aegis128x4_implementation aegis128x4_aesni_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -303823,7 +305056,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis256_implementation aegis256_aesni_implementation;
+AEGIS_EXTERN struct aegis256_implementation aegis256_aesni_implementation;
 
 #endif /* AEGIS256_AESNI_H */
 /*** End of #include "aegis256_aesni.h" ***/
@@ -304658,6 +305891,7 @@ AEGIS_state_mac_clone(aegis256_mac_state *dst, const aegis256_mac_state *src)
 /*** End of #include "aegis256_common.h" ***/
 
 
+AEGIS_API
 struct aegis256_implementation aegis256_aesni_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -304806,7 +306040,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis256x2_implementation aegis256x2_aesni_implementation;
+AEGIS_EXTERN struct aegis256x2_implementation aegis256x2_aesni_implementation;
 
 #endif /* AEGIS256X2_AESNI_H */
 /*** End of #include "aegis256x2_aesni.h" ***/
@@ -305763,6 +306997,7 @@ AEGIS_state_mac_clone(aegis256x2_mac_state *dst, const aegis256x2_mac_state *src
 /*** End of #include "aegis256x2_common.h" ***/
 
 
+AEGIS_API
 struct aegis256x2_implementation aegis256x2_aesni_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -305911,7 +307146,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis256x4_implementation aegis256x4_aesni_implementation;
+AEGIS_EXTERN struct aegis256x4_implementation aegis256x4_aesni_implementation;
 
 #endif /* AEGIS256X4_AESNI_H */
 /*** End of #include "aegis256x4_aesni.h" ***/
@@ -306896,6 +308131,7 @@ AEGIS_state_mac_clone(aegis256x4_mac_state *dst, const aegis256x4_mac_state *src
 /*** End of #include "aegis256x4_common.h" ***/
 
 
+AEGIS_API
 struct aegis256x4_implementation aegis256x4_aesni_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -307047,7 +308283,7 @@ AEGIS_API_IMPL_LIST_MAC
 
 
 #ifdef HAVE_VAESINTRIN_H
-extern struct aegis128x2_implementation aegis128x2_avx2_implementation;
+AEGIS_EXTERN struct aegis128x2_implementation aegis128x2_avx2_implementation;
 #endif
 
 #endif /* AEGIS128X2_AVX2_H */
@@ -308010,6 +309246,7 @@ AEGIS_state_mac_clone(aegis128x2_mac_state *dst, const aegis128x2_mac_state *src
 /*** End of #include "aegis128x2_common.h" ***/
 
 
+AEGIS_API
 struct aegis128x2_implementation aegis128x2_avx2_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -308161,7 +309398,7 @@ AEGIS_API_IMPL_LIST_MAC
 
 
 #ifdef HAVE_VAESINTRIN_H
-extern struct aegis128x4_implementation aegis128x4_avx2_implementation;
+AEGIS_EXTERN struct aegis128x4_implementation aegis128x4_avx2_implementation;
 #endif
 
 #endif /* AEGIS128X4_AVX2_H */
@@ -309144,6 +310381,7 @@ AEGIS_state_mac_clone(aegis128x4_mac_state *dst, const aegis128x4_mac_state *src
 /*** End of #include "aegis128x4_common.h" ***/
 
 
+AEGIS_API
 struct aegis128x4_implementation aegis128x4_avx2_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -309295,7 +310533,7 @@ AEGIS_API_IMPL_LIST_MAC
 
 
 #ifdef HAVE_VAESINTRIN_H
-extern struct aegis256x2_implementation aegis256x2_avx2_implementation;
+AEGIS_EXTERN struct aegis256x2_implementation aegis256x2_avx2_implementation;
 #endif
 
 #endif /* AEGIS256X2_AVX2_H */
@@ -310248,6 +311486,7 @@ AEGIS_state_mac_clone(aegis256x2_mac_state *dst, const aegis256x2_mac_state *src
 /*** End of #include "aegis256x2_common.h" ***/
 
 
+AEGIS_API
 struct aegis256x2_implementation aegis256x2_avx2_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -310399,7 +311638,7 @@ AEGIS_API_IMPL_LIST_MAC
 
 
 #ifdef HAVE_VAESINTRIN_H
-extern struct aegis256x4_implementation aegis256x4_avx2_implementation;
+AEGIS_EXTERN struct aegis256x4_implementation aegis256x4_avx2_implementation;
 #endif
 
 #endif /* AEGIS256X4_AVX2_H */
@@ -311377,6 +312616,7 @@ AEGIS_state_mac_clone(aegis256x4_mac_state *dst, const aegis256x4_mac_state *src
 /*** End of #include "aegis256x4_common.h" ***/
 
 
+AEGIS_API
 struct aegis256x4_implementation aegis256x4_avx2_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -311530,7 +312770,7 @@ AEGIS_API_IMPL_LIST_MAC
 
 
 #ifdef HAVE_VAESINTRIN_H
-extern struct aegis128x4_implementation aegis128x4_avx512_implementation;
+AEGIS_EXTERN struct aegis128x4_implementation aegis128x4_avx512_implementation;
 #endif
 
 #endif /* AEGIS128X4_AVX512_H */
@@ -312524,6 +313764,7 @@ AEGIS_state_mac_clone(aegis128x4_mac_state *dst, const aegis128x4_mac_state *src
 /*** End of #include "aegis128x4_common.h" ***/
 
 
+AEGIS_API
 struct aegis128x4_implementation aegis128x4_avx512_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -312675,7 +313916,7 @@ AEGIS_API_IMPL_LIST_MAC
 
 
 #ifdef HAVE_VAESINTRIN_H
-extern struct aegis256x4_implementation aegis256x4_avx512_implementation;
+AEGIS_EXTERN struct aegis256x4_implementation aegis256x4_avx512_implementation;
 #endif
 
 #endif /* AEGIS256X4_AVX512_H */
@@ -313664,6 +314905,7 @@ AEGIS_state_mac_clone(aegis256x4_mac_state *dst, const aegis256x4_mac_state *src
 /*** End of #include "aegis256x4_common.h" ***/
 
 
+AEGIS_API
 struct aegis256x4_implementation aegis256x4_avx512_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -313816,7 +315058,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis128l_implementation aegis128l_altivec_implementation;
+AEGIS_EXTERN struct aegis128l_implementation aegis128l_altivec_implementation;
 
 #endif /* AEGIS128L_ALTIVEC_H */
 /*** End of #include "aegis128l_altivec.h" ***/
@@ -314665,6 +315907,7 @@ AEGIS_state_mac_clone(aegis128l_mac_state *dst, const aegis128l_mac_state *src)
 /*** End of #include "aegis128l_common.h" ***/
 
 
+AEGIS_API
 struct aegis128l_implementation aegis128l_altivec_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -314813,7 +316056,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis128x2_implementation aegis128x2_altivec_implementation;
+AEGIS_EXTERN struct aegis128x2_implementation aegis128x2_altivec_implementation;
 
 #endif /* AEGIS128X2_ALTIVEC_H */
 /*** End of #include "aegis128x2_altivec.h" ***/
@@ -315775,6 +317018,7 @@ AEGIS_state_mac_clone(aegis128x2_mac_state *dst, const aegis128x2_mac_state *src
 /*** End of #include "aegis128x2_common.h" ***/
 
 
+AEGIS_API
 struct aegis128x2_implementation aegis128x2_altivec_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -315923,7 +317167,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis128x4_implementation aegis128x4_altivec_implementation;
+AEGIS_EXTERN struct aegis128x4_implementation aegis128x4_altivec_implementation;
 
 #endif /* AEGIS128X4_ALTIVEC_H */
 /*** End of #include "aegis128x4_altivec.h" ***/
@@ -316907,6 +318151,7 @@ AEGIS_state_mac_clone(aegis128x4_mac_state *dst, const aegis128x4_mac_state *src
 /*** End of #include "aegis128x4_common.h" ***/
 
 
+AEGIS_API
 struct aegis128x4_implementation aegis128x4_altivec_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -317055,7 +318300,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis256_implementation aegis256_altivec_implementation;
+AEGIS_EXTERN struct aegis256_implementation aegis256_altivec_implementation;
 
 #endif /* AEGIS256_ALTIVEC_H */
 /*** End of #include "aegis256_altivec.h" ***/
@@ -317888,6 +319133,7 @@ AEGIS_state_mac_clone(aegis256_mac_state *dst, const aegis256_mac_state *src)
 /*** End of #include "aegis256_common.h" ***/
 
 
+AEGIS_API
 struct aegis256_implementation aegis256_altivec_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -318036,7 +319282,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis256x2_implementation aegis256x2_altivec_implementation;
+AEGIS_EXTERN struct aegis256x2_implementation aegis256x2_altivec_implementation;
 
 #endif /* AEGIS256X2_ALTIVEC_H */
 /*** End of #include "aegis256x2_altivec.h" ***/
@@ -318992,6 +320238,7 @@ AEGIS_state_mac_clone(aegis256x2_mac_state *dst, const aegis256x2_mac_state *src
 /*** End of #include "aegis256x2_common.h" ***/
 
 
+AEGIS_API
 struct aegis256x2_implementation aegis256x2_altivec_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -319140,7 +320387,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis256x4_implementation aegis256x4_altivec_implementation;
+AEGIS_EXTERN struct aegis256x4_implementation aegis256x4_altivec_implementation;
 
 #endif /* AEGIS256X4_ALTIVEC_H */
 /*** End of #include "aegis256x4_altivec.h" ***/
@@ -320122,6 +321369,7 @@ AEGIS_state_mac_clone(aegis256x4_mac_state *dst, const aegis256x4_mac_state *src
 /*** End of #include "aegis256x4_common.h" ***/
 
 
+AEGIS_API
 struct aegis256x4_implementation aegis256x4_altivec_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -320271,7 +321519,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis128l_implementation aegis128l_armcrypto_implementation;
+AEGIS_EXTERN struct aegis128l_implementation aegis128l_armcrypto_implementation;
 
 #endif /* AEGIS128L_ARMCRYPTO_H */
 /*** End of #include "aegis128l_armcrypto.h" ***/
@@ -321132,6 +322380,7 @@ AEGIS_state_mac_clone(aegis128l_mac_state *dst, const aegis128l_mac_state *src)
 /*** End of #include "aegis128l_common.h" ***/
 
 
+AEGIS_API
 struct aegis128l_implementation aegis128l_armcrypto_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -321278,7 +322527,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis128x2_implementation aegis128x2_armcrypto_implementation;
+AEGIS_EXTERN struct aegis128x2_implementation aegis128x2_armcrypto_implementation;
 
 #endif /* AEGIS128X2_ARMCRYPTO_H */
 /*** End of #include "aegis128x2_armcrypto.h" ***/
@@ -322252,6 +323501,7 @@ AEGIS_state_mac_clone(aegis128x2_mac_state *dst, const aegis128x2_mac_state *src
 /*** End of #include "aegis128x2_common.h" ***/
 
 
+AEGIS_API
 struct aegis128x2_implementation aegis128x2_armcrypto_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -322398,7 +323648,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis128x4_implementation aegis128x4_armcrypto_implementation;
+AEGIS_EXTERN struct aegis128x4_implementation aegis128x4_armcrypto_implementation;
 
 #endif /* AEGIS128X4_ARMCRYPTO_H */
 /*** End of #include "aegis128x4_armcrypto.h" ***/
@@ -323394,6 +324644,7 @@ AEGIS_state_mac_clone(aegis128x4_mac_state *dst, const aegis128x4_mac_state *src
 /*** End of #include "aegis128x4_common.h" ***/
 
 
+AEGIS_API
 struct aegis128x4_implementation aegis128x4_armcrypto_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -323540,7 +324791,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis256_implementation aegis256_armcrypto_implementation;
+AEGIS_EXTERN struct aegis256_implementation aegis256_armcrypto_implementation;
 
 #endif /* AEGIS256_ARMCRYPTO_H */
 /*** End of #include "aegis256_armcrypto.h" ***/
@@ -324385,6 +325636,7 @@ AEGIS_state_mac_clone(aegis256_mac_state *dst, const aegis256_mac_state *src)
 /*** End of #include "aegis256_common.h" ***/
 
 
+AEGIS_API
 struct aegis256_implementation aegis256_armcrypto_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -324531,7 +325783,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis256x2_implementation aegis256x2_armcrypto_implementation;
+AEGIS_EXTERN struct aegis256x2_implementation aegis256x2_armcrypto_implementation;
 
 #endif /* AEGIS256X2_ARMCRYPTO_H */
 /*** End of #include "aegis256x2_armcrypto.h" ***/
@@ -325498,6 +326750,7 @@ AEGIS_state_mac_clone(aegis256x2_mac_state *dst, const aegis256x2_mac_state *src
 /*** End of #include "aegis256x2_common.h" ***/
 
 
+AEGIS_API
 struct aegis256x2_implementation aegis256x2_armcrypto_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -325644,7 +326897,7 @@ AEGIS_API_IMPL_LIST_MAC
 /* #include "implementations.h" */
 
 
-extern struct aegis256x4_implementation aegis256x4_armcrypto_implementation;
+AEGIS_EXTERN struct aegis256x4_implementation aegis256x4_armcrypto_implementation;
 
 #endif /* AEGIS256X4_ARMCRYPTO_H */
 /*** End of #include "aegis256x4_armcrypto.h" ***/
@@ -326638,6 +327891,7 @@ AEGIS_state_mac_clone(aegis256x4_mac_state *dst, const aegis256x4_mac_state *src
 /*** End of #include "aegis256x4_common.h" ***/
 
 
+AEGIS_API
 struct aegis256x4_implementation aegis256x4_armcrypto_implementation = {
 /* #include "../common/func_table.h" */
 /*** Begin of #include "../common/func_table.h" ***/
@@ -328647,6 +329901,10 @@ aegis256x4_pick_best_implementation(void)
 #define ARGON2_API static
 #endif
 
+#ifndef ARGON2_EXTERN
+#define ARGON2_EXTERN static
+#endif
+
 #ifndef ARGON2_PRIVATE
 #define ARGON2_PRIVATE static
 #endif
@@ -328757,6 +330015,9 @@ extern "C" {
 #define ARGON2_LOCAL
 #endif
 #endif
+#ifndef ARGON2_EXTERN
+#define ARGON2_EXTERN extern
+#endif
 
 /*
  * Argon2 input parameter restrictions
@@ -328814,7 +330075,7 @@ extern "C" {
 
 /* Global flag to determine if we are wiping internal memory buffers. This flag
  * is defined in core.c and defaults to 1 (wipe internal memory). */
-extern int FLAG_clear_internal_memory;
+ARGON2_EXTERN int FLAG_clear_internal_memory;
 
 /* Error codes */
 typedef enum Argon2_ErrorCodes {
@@ -330823,6 +332084,7 @@ void NOT_OPTIMIZED _argon2_secure_wipe_memory(void *v, size_t n) {
 }
 
 /* Memory clear flag defaults to true. */
+ARGON2_PUBLIC
 int FLAG_clear_internal_memory = 1;
 
 ARGON2_PRIVATE
@@ -332160,7 +333422,7 @@ void argon2_thread_exit(void) {
 ** Purpose:     Header for the ciphers of SQLite3 Multiple Ciphers
 ** Author:      Ulrich Telle
 ** Created:     2020-02-02
-** Copyright:   (c) 2006-2022 Ulrich Telle
+** Copyright:   (c) 2006-2026 Ulrich Telle
 ** License:     MIT
 */
 
@@ -332270,7 +333532,7 @@ SQLITE_PRIVATE void sqlite3mcClearKeySalt(Codec* codec);
 
 SQLITE_PRIVATE int sqlite3mcCodecSetup(Codec* codec, int cipherType, char* userPassword, int passwordLength);
 
-SQLITE_PRIVATE int sqlite3mcSetupWriteCipher(Codec* codec, int cipherType, char* userPassword, int passwordLength);
+SQLITE_PRIVATE int sqlite3mcSetupWriteCipher(Codec* codec, int cipherType, char* userPassword, int passwordLength, int usesWal);
 
 SQLITE_PRIVATE void sqlite3mcSetIsEncrypted(Codec* codec, int isEncrypted);
 
@@ -332329,7 +333591,7 @@ SQLITE_PRIVATE int sqlite3mcCodecCopy(Codec* codec, Codec* other);
 
 SQLITE_PRIVATE void sqlite3mcGenerateReadKey(Codec* codec, char* userPassword, int passwordLength, unsigned char* cipherSalt);
 
-SQLITE_PRIVATE void sqlite3mcGenerateWriteKey(Codec* codec, char* userPassword, int passwordLength, unsigned char* cipherSalt);
+SQLITE_PRIVATE void sqlite3mcGenerateWriteKey(Codec* codec, char* userPassword, int passwordLength, unsigned char* cipherSalt, int usesWal);
 
 SQLITE_PRIVATE int sqlite3mcEncrypt(Codec* codec, int page, unsigned char* data, int len, int useWriteKey);
 
@@ -333283,7 +334545,7 @@ SQLITE_PRIVATE const CipherDescriptor mcAES256Descriptor =
 ** Purpose:     Implementation of cipher ChaCha20 - Poly1305
 ** Author:      Ulrich Telle
 ** Created:     2020-02-02
-** Copyright:   (c) 2006-2024 Ulrich Telle
+** Copyright:   (c) 2006-2026 Ulrich Telle
 ** License:     MIT
 */
 
@@ -333431,6 +334693,11 @@ GenerateKeyChaCha20Cipher(void* cipher, char* userPassword, int passwordLength, 
   ChaCha20Cipher* chacha20Cipher = (ChaCha20Cipher*) cipher;
 
   int keyOnly = 1;
+  if (rekey == 2)
+  {
+    /* (rekey == 2) means database is in WAL mode, thus don't change the cipher salt */
+    rekey = (cipherSalt != NULL) ? 0 : 1;
+  }
   if (rekey || cipherSalt == NULL)
   {
     chacha20_rng(chacha20Cipher->m_salt, SALTLENGTH_CHACHA20);
@@ -333667,7 +334934,7 @@ SQLITE_PRIVATE const CipherDescriptor mcChaCha20Descriptor =
 ** Purpose:     Implementation of cipher SQLCipher (version 1 to 4)
 ** Author:      Ulrich Telle
 ** Created:     2020-02-02
-** Copyright:   (c) 2006-2024 Ulrich Telle
+** Copyright:   (c) 2006-2026 Ulrich Telle
 ** License:     MIT
 */
 
@@ -333909,6 +335176,11 @@ GenerateKeySQLCipherCipher(void* cipher, char* userPassword, int passwordLength,
   SQLCipherCipher* sqlCipherCipher = (SQLCipherCipher*) cipher;
 
   int keyOnly = 1;
+  if (rekey == 2)
+  {
+    /* (rekey == 2) means database is in WAL mode, thus don't change the cipher salt */
+    rekey = (cipherSalt != NULL) ? 0 : 1;
+  }
   if (rekey || cipherSalt == NULL)
   {
     chacha20_rng(sqlCipherCipher->m_salt, SALTLENGTH_SQLCIPHER);
@@ -334384,7 +335656,7 @@ SQLITE_PRIVATE const CipherDescriptor mcRC4Descriptor =
 ** Purpose:     Implementation of cipher Ascon
 ** Author:      Ulrich Telle
 ** Created:     2023-11-13
-** Copyright:   (c) 2023-2024 Ulrich Telle
+** Copyright:   (c) 2023-2026 Ulrich Telle
 ** License:     MIT
 */
 
@@ -334403,6 +335675,11 @@ SQLITE_PRIVATE const CipherDescriptor mcRC4Descriptor =
 */
 
 #define ASCON128_KDF_ITER_DEFAULT 64007
+
+/* Make ASCON code static unless told otherwise */
+#ifndef ASCON_API
+#define ASCON_API static
+#endif
 
 /* #include "ascon/prolog.h" */
 /*** Begin of #include "ascon/prolog.h" ***/
@@ -334428,6 +335705,43 @@ SQLITE_PRIVATE const CipherDescriptor mcRC4Descriptor =
 
 #include <stdint.h>
 #include <string.h>
+
+/* #include "api.h" */
+/*** Begin of #include "api.h" ***/
+/*
+** Name:        api.h
+** Purpose:     Definition of preprocessor symbols
+** Based on:    Public domain Ascon reference implementation
+**              and optimized variants for 32- and 64-bit
+**              (see https://github.com/ascon/ascon-c)
+** Remarks:     API functions adapted for use in SQLite3 Multiple Ciphers
+**              Combined symbols from AEAD and HASH
+** Modified by: Ulrich Telle
+** Copyright:   (c) 2023-2026 Ulrich Telle
+** License:     MIT
+*/
+
+#define CRYPTO_VERSION "1.2.7"
+#define CRYPTO_KEYBYTES 16
+#define CRYPTO_NSECBYTES 0
+#define CRYPTO_NPUBBYTES 16
+#define CRYPTO_ABYTES 16
+#define CRYPTO_NOOVERLAP 1
+#define ASCON_AEAD_RATE 8
+
+#define CRYPTO_BYTES 32
+#define ASCON_HASH_BYTES 32 /* HASH */
+#define ASCON_HASH_ROUNDS 12
+
+#define ASCON_AEAD_KEY_LEN CRYPTO_KEYBYTES
+#define ASCON_AEAD_NONCE_LEN CRYPTO_NPUBBYTES
+#define ASCON_AEAD_TAG_LEN CRYPTO_ABYTES
+#define ASCON_SALT_LEN CRYPTO_NPUBBYTES
+
+#ifndef ASCON_API
+#define ASCON_API
+#endif
+/*** End of #include "api.h" ***/
 
 /* #include "bendian.h" */
 /*** Begin of #include "bendian.h" ***/
@@ -334511,12 +335825,15 @@ typedef union {
 #define ASCON_LOAD(b, n) ASCON_LOADBYTES(b, n)
 #define ASCON_STORE(b, w, n) ASCON_STOREBYTES(b, w, n)
 
+ASCON_API
 forceinline uint64_t ASCON_ROR(uint64_t x, int n) { return x >> n | x << (-n & 63); }
 
+ASCON_API
 forceinline uint64_t ASCON_KEYROT(uint64_t lo2hi, uint64_t hi2lo) {
   return lo2hi << 32 | hi2lo >> 32;
 }
 
+ASCON_API
 forceinline int ASCON_NOTZERO(uint64_t a, uint64_t b) {
   uint64_t result = a | b;
   result |= result >> 32;
@@ -334525,29 +335842,36 @@ forceinline int ASCON_NOTZERO(uint64_t a, uint64_t b) {
   return ((((int)(result & 0xff) - 1) >> 8) & 1) - 1;
 }
 
+ASCON_API
 forceinline uint64_t ASCON_PAD(int i) { return 0x80ull << (56 - 8 * i); }
 
+ASCON_API
 forceinline uint64_t ASCON_DSEP() { return 0x01; }
 
+ASCON_API
 forceinline uint64_t ASCON_PRFS_MLEN(uint64_t len) { return len << 51; }
 
+ASCON_API
 forceinline uint64_t ASCON_CLEAR(uint64_t w, int n) {
   /* undefined for n == 0 */
   uint64_t mask = ~0ull >> (8 * n);
   return w & mask;
 }
 
+ASCON_API
 forceinline uint64_t ASCON_MASK(int n) {
   /* undefined for n == 0 */
   return ~0ull >> (64 - 8 * n);
 }
 
+ASCON_API
 forceinline uint64_t ASCON_LOADBYTES(const uint8_t* bytes, int n) {
   uint64_t x = 0;
   memcpy(&x, bytes, n);
   return ASCON_U64TOWORD(x);
 }
 
+ASCON_API
 forceinline void ASCON_STOREBYTES(uint8_t* bytes, uint64_t w, int n) {
   uint64_t x = ASCON_WORDTOU64(w);
   memcpy(bytes, &x, n);
@@ -334575,37 +335899,6 @@ forceinline void ASCON_STOREBYTES(uint8_t* bytes, uint64_t w, int n) {
 */
 
 /* #include "api.h" */
-/*** Begin of #include "api.h" ***/
-/*
-** Name:        api.h
-** Purpose:     Definition of preprocessor symbols
-** Based on:    Public domain Ascon reference implementation
-**              and optimized variants for 32- and 64-bit
-**              (see https://github.com/ascon/ascon-c)
-** Remarks:     API functions adapted for use in SQLite3 Multiple Ciphers
-**              Combined symbols from AEAD and HASH
-** Modified by: Ulrich Telle
-** Copyright:   (c) 2023-2023 Ulrich Telle
-** License:     MIT
-*/
-
-#define CRYPTO_VERSION "1.2.7"
-#define CRYPTO_KEYBYTES 16
-#define CRYPTO_NSECBYTES 0
-#define CRYPTO_NPUBBYTES 16
-#define CRYPTO_ABYTES 16
-#define CRYPTO_NOOVERLAP 1
-#define ASCON_AEAD_RATE 8
-
-#define CRYPTO_BYTES 32
-#define ASCON_HASH_BYTES 32 /* HASH */
-#define ASCON_HASH_ROUNDS 12
-
-#define ASCON_AEAD_KEY_LEN CRYPTO_KEYBYTES
-#define ASCON_AEAD_NONCE_LEN CRYPTO_NPUBBYTES
-#define ASCON_AEAD_TAG_LEN CRYPTO_ABYTES
-#define ASCON_SALT_LEN CRYPTO_NPUBBYTES
-/*** End of #include "api.h" ***/
 
 /* #include "ascon.h" */
 /*** Begin of #include "ascon.h" ***/
@@ -334658,14 +335951,20 @@ typedef union {
 
 #if !ASCON_INLINE_MODE
 
+ASCON_API
 void ascon_loadkey(ascon_key_t* key, const uint8_t* k);
+ASCON_API
 void ascon_initaead(ascon_state_t* s, const ascon_key_t* key,
                     const uint8_t* npub);
+ASCON_API
 void ascon_adata(ascon_state_t* s, const uint8_t* ad, uint64_t adlen);
+ASCON_API
 void ascon_encrypt(ascon_state_t* s, uint8_t* c, const uint8_t* m,
                    uint64_t mlen);
+ASCON_API
 void ascon_decrypt(ascon_state_t* s, uint8_t* m, const uint8_t* c,
                    uint64_t clen);
+ASCON_API
 void ascon_final(ascon_state_t* s, const ascon_key_t* k);
 
 #endif
@@ -334676,8 +335975,11 @@ void ascon_final(ascon_state_t* s, const ascon_key_t* k);
 
 #if !ASCON_INLINE_MODE
 
+ASCON_API
 void ascon_inithash(ascon_state_t* s);
+ASCON_API
 void ascon_absorb(ascon_state_t* s, const uint8_t* in, uint64_t inlen);
+ASCON_API
 void ascon_squeeze(ascon_state_t* s, uint8_t* out, uint64_t outlen);
 
 #endif
@@ -334870,7 +336172,9 @@ int ascon_aead_decrypt(uint8_t* mtext, const uint8_t* ctext, uint64_t clen,
 /* #include "word.h" */
 
 
+ASCON_API
 void ascon_printword(const char* text, const uint64_t x);
+ASCON_API
 void ascon_printstate(const char* text, const ascon_state_t* s);
 
 #else
@@ -334926,6 +336230,7 @@ void ascon_printstate(const char* text, const ascon_state_t* s);
 /* #include "word.h" */
 
 
+ASCON_API
 forceinline void ASCON_ROUND(ascon_state_t* s, uint8_t C) {
   ascon_state_t t;
   /* round constant */
@@ -334957,6 +336262,7 @@ forceinline void ASCON_ROUND(ascon_state_t* s, uint8_t C) {
   ascon_printstate(" round output", s);
 }
 
+ASCON_API
 forceinline void ASCON_PROUNDS(ascon_state_t* s, int nr) {
   int i = ASCON_START(nr);
   do {
@@ -334986,6 +336292,7 @@ forceinline void ASCON_PROUNDS(ascon_state_t* s, int nr) {
 /* #include "word.h" */
 
 
+ASCON_API
 forceinline void ASCON_ROUND(ascon_state_t* s, uint8_t C) {
   uint64_t xtemp;
   /* round constant */
@@ -335018,6 +336325,7 @@ forceinline void ASCON_ROUND(ascon_state_t* s, uint8_t C) {
   ascon_printstate(" round output", s);
 }
 
+ASCON_API
 forceinline void ASCON_PROUNDS(ascon_state_t* s, int nr) {
   int i = ASCON_START(nr);
   do {
@@ -335035,6 +336343,7 @@ forceinline void ASCON_PROUNDS(ascon_state_t* s, int nr) {
 /*** End of #include "round.h" ***/
 
 
+ASCON_API
 forceinline void ASCON_P12ROUNDS(ascon_state_t* s) {
   ASCON_ROUND(s, ASCON_RC0);
   ASCON_ROUND(s, ASCON_RC1);
@@ -335050,6 +336359,7 @@ forceinline void ASCON_P12ROUNDS(ascon_state_t* s) {
   ASCON_ROUND(s, ASCON_RCb);
 }
 
+ASCON_API
 forceinline void ASCON_P8ROUNDS(ascon_state_t* s) {
   ASCON_ROUND(s, ASCON_RC4);
   ASCON_ROUND(s, ASCON_RC5);
@@ -335061,6 +336371,7 @@ forceinline void ASCON_P8ROUNDS(ascon_state_t* s) {
   ASCON_ROUND(s, ASCON_RCb);
 }
 
+ASCON_API
 forceinline void ASCON_P6ROUNDS(ascon_state_t* s) {
   ASCON_ROUND(s, ASCON_RC6);
   ASCON_ROUND(s, ASCON_RC7);
@@ -335072,6 +336383,7 @@ forceinline void ASCON_P6ROUNDS(ascon_state_t* s) {
 
 #if ASCON_INLINE_PERM && ASCON_UNROLL_LOOPS
 
+ASCON_API
 forceinline void ASCON_P(ascon_state_t* s, int nr) {
   if (nr == 12) ASCON_P12ROUNDS(s);
   if (nr == 8) ASCON_P8ROUNDS(s);
@@ -335080,10 +336392,14 @@ forceinline void ASCON_P(ascon_state_t* s, int nr) {
 
 #elif !ASCON_INLINE_PERM && ASCON_UNROLL_LOOPS
 
+ASCON_API
 void ASCON_P12(ascon_state_t* s);
+ASCON_API
 void ASCON_P8(ascon_state_t* s);
+ASCON_API
 void ASCON_P6(ascon_state_t* s);
 
+ASCON_API
 forceinline void ASCON_P(ascon_state_t* s, int nr) {
   if (nr == 12) ASCON_P12(s);
   if (nr == 8) ASCON_P8(s);
@@ -335092,10 +336408,12 @@ forceinline void ASCON_P(ascon_state_t* s, int nr) {
 
 #elif ASCON_INLINE_PERM && !ASCON_UNROLL_LOOPS
 
+ASCON_API
 forceinline void ASCON_P(ascon_state_t* s, int nr) { ASCON_PROUNDS(s, nr); }
 
 #else /* !ASCON_INLINE_PERM && !ASCON_UNROLL_LOOPS */
 
+ASCON_API
 void ASCON_P(ascon_state_t* s, int nr);
 
 #endif
@@ -335113,6 +336431,7 @@ void ASCON_P(ascon_state_t* s, int nr);
 
 #ifdef ASCON_AEAD_RATE
 
+ASCON_API
 forceinline void ascon_loadkey(ascon_key_t* key, const uint8_t* k) {
 #if CRYPTO_KEYBYTES == 16
   key->x[0] = ASCON_LOAD(k, 8);
@@ -335124,6 +336443,7 @@ forceinline void ascon_loadkey(ascon_key_t* key, const uint8_t* k) {
 #endif
 }
 
+ASCON_API
 forceinline void ascon_initaead(ascon_state_t* s, const ascon_key_t* key,
                                 const uint8_t* npub) {
 #if CRYPTO_KEYBYTES == 16
@@ -335151,6 +336471,7 @@ forceinline void ascon_initaead(ascon_state_t* s, const ascon_key_t* key,
   ascon_printstate("init 2nd key xor", s);
 }
 
+ASCON_API
 forceinline void ascon_adata(ascon_state_t* s, const uint8_t* ad,
                              uint64_t adlen) {
   const int nr = (ASCON_AEAD_RATE == 8) ? 6 : 8;
@@ -335182,6 +336503,7 @@ forceinline void ascon_adata(ascon_state_t* s, const uint8_t* ad,
   ascon_printstate("domain separation", s);
 }
 
+ASCON_API
 forceinline void ascon_encrypt(ascon_state_t* s, uint8_t* c, const uint8_t* m,
                                uint64_t mlen) {
   const int nr = (ASCON_AEAD_RATE == 8) ? 6 : 8;
@@ -335217,6 +336539,7 @@ forceinline void ascon_encrypt(ascon_state_t* s, uint8_t* c, const uint8_t* m,
   ascon_printstate("pad plaintext", s);
 }
 
+ASCON_API
 forceinline void ascon_decrypt(ascon_state_t* s, uint8_t* m, const uint8_t* c,
                                uint64_t clen) {
   const int nr = (ASCON_AEAD_RATE == 8) ? 6 : 8;
@@ -335261,6 +336584,7 @@ forceinline void ascon_decrypt(ascon_state_t* s, uint8_t* m, const uint8_t* c,
   ascon_printstate("pad ciphertext", s);
 }
 
+ASCON_API
 forceinline void ascon_final(ascon_state_t* s, const ascon_key_t* key) {
 #if CRYPTO_KEYBYTES == 16
   if (ASCON_AEAD_RATE == 8) {
@@ -335321,7 +336645,6 @@ int ascon_aead_decrypt(uint8_t* mtext,
 {
   int rc = 0;
   ascon_state_t s;
-  if (clen < CRYPTO_ABYTES) return -1;
   /* perform ascon computation */
   ascon_key_t key;
   ascon_loadkey(&key, k);
@@ -335407,6 +336730,7 @@ int ascon_hash(uint8_t* out, const uint8_t* in, uint64_t inlen);
 
 #ifdef ASCON_HASH_BYTES
 
+ASCON_API
 forceinline void ascon_inithash(ascon_state_t* s) {
   int i;
   /* initialize */
@@ -335441,6 +336765,7 @@ forceinline void ascon_inithash(ascon_state_t* s) {
   ascon_printstate("initialization", s);
 }
 
+ASCON_API
 forceinline void ascon_absorb(ascon_state_t* s, const uint8_t* in,
                               uint64_t inlen) {
   /* absorb full plaintext blocks */
@@ -335457,6 +336782,7 @@ forceinline void ascon_absorb(ascon_state_t* s, const uint8_t* in,
   ascon_printstate("pad plaintext", s);
 }
 
+ASCON_API
 forceinline void ascon_squeeze(ascon_state_t* s, uint8_t* out,
                                uint64_t outlen) {
   /* squeeze full output blocks */
@@ -335728,6 +337054,11 @@ GenerateKeyAscon128Cipher(void* cipher, char* userPassword, int passwordLength, 
   Ascon128Cipher* ascon128Cipher = (Ascon128Cipher*) cipher;
 
   int keyOnly = 1;
+  if (rekey == 2)
+  {
+    /* (rekey == 2) means database is in WAL mode, thus don't change the cipher salt */
+    rekey = (cipherSalt != NULL) ? 0 : 1;
+  }
   if (rekey || cipherSalt == NULL)
   {
     chacha20_rng(ascon128Cipher->m_salt, SALTLENGTH_ASCON128);
@@ -335965,7 +337296,7 @@ SQLITE_PRIVATE const CipherDescriptor mcAscon128Descriptor =
 ** Purpose:     Implementation of cipher AEGIS
 ** Author:      Ulrich Telle
 ** Created:     2024-12-10
-** Copyright:   (c) 2024-2024 Ulrich Telle
+** Copyright:   (c) 2024-2026 Ulrich Telle
 ** License:     MIT
 */
 
@@ -336217,6 +337548,11 @@ GenerateKeyAegisCipher(void* cipher, char* userPassword, int passwordLength, int
   AegisCipher* aegisCipher = (AegisCipher*) cipher;
 
   int keyOnly = 1;
+  if (rekey == 2)
+  {
+    /* (rekey == 2) means database is in WAL mode, thus don't change the cipher salt */
+    rekey = (cipherSalt != NULL) ? 0 : 1;
+  }
   if (rekey || cipherSalt == NULL)
   {
     chacha20_rng(aegisCipher->m_salt, SALTLENGTH_AEGIS);
@@ -336474,7 +337810,7 @@ SQLITE_PRIVATE const CipherDescriptor mcAegisDescriptor =
 ** Purpose:     Implementation of SQLite codecs
 ** Author:      Ulrich Telle
 ** Created:     2020-02-02
-** Copyright:   (c) 2006-2024 Ulrich Telle
+** Copyright:   (c) 2006-2026 Ulrich Telle
 ** License:     MIT
 */
 
@@ -336745,7 +338081,7 @@ sqlite3mcCodecSetup(Codec* codec, int cipherType, char* userPassword, int passwo
 }
 
 SQLITE_PRIVATE int
-sqlite3mcSetupWriteCipher(Codec* codec, int cipherType, char* userPassword, int passwordLength)
+sqlite3mcSetupWriteCipher(Codec* codec, int cipherType, char* userPassword, int passwordLength, int usesWal)
 {
   int rc = SQLITE_OK;
   CipherParams* globalParams = sqlite3mcGetCipherParams(codec->m_db, CIPHER_NAME_GLOBAL);
@@ -336766,7 +338102,7 @@ sqlite3mcSetupWriteCipher(Codec* codec, int cipherType, char* userPassword, int 
   if (codec->m_writeCipher != NULL)
   {
     unsigned char* keySalt = (codec->m_hasKeySalt != 0) ? codec->m_keySalt : NULL;
-    sqlite3mcGenerateWriteKey(codec, userPassword, passwordLength, keySalt);
+    sqlite3mcGenerateWriteKey(codec, userPassword, passwordLength, keySalt, usesWal);
   }
   else
   {
@@ -337090,11 +338426,11 @@ sqlite3mcGenerateReadKey(Codec* codec, char* userPassword, int passwordLength, u
 }
 
 SQLITE_PRIVATE void
-sqlite3mcGenerateWriteKey(Codec* codec, char* userPassword, int passwordLength, unsigned char* cipherSalt)
+sqlite3mcGenerateWriteKey(Codec* codec, char* userPassword, int passwordLength, unsigned char* cipherSalt, int usesWal)
 {
   unsigned char dbHeader[KEYSALT_LENGTH];
   unsigned char* pDbHeader = (cipherSalt == NULL) ? mcReadDatabaseHeader(codec, dbHeader) : cipherSalt;
-  globalCodecDescriptorTable[codec->m_writeCipherType-1].m_generateKey(codec->m_writeCipher, userPassword, passwordLength, 1, pDbHeader);
+  globalCodecDescriptorTable[codec->m_writeCipherType-1].m_generateKey(codec->m_writeCipher, userPassword, passwordLength, (usesWal) ? 2 : 1, pDbHeader);
 }
 
 SQLITE_PRIVATE int
@@ -338551,7 +339887,7 @@ sqlite3mcHandleMainKey(sqlite3* db, const char* zPath)
 ** Purpose:     Implementation of SQLite codec API
 ** Author:      Ulrich Telle
 ** Created:     2006-12-06
-** Copyright:   (c) 2006-2022 Ulrich Telle
+** Copyright:   (c) 2006-2026 Ulrich Telle
 ** License:     MIT
 */
 
@@ -338627,7 +339963,7 @@ sqlite3mcBtreeSetPageSize(Btree* p, int pageSize, int nReserve, int iFix)
 ** Change 4: Call sqlite3mcBtreeSetPageSize instead of sqlite3BtreeSetPageSize for main database
 **           (sqlite3mcBtreeSetPageSize allows to reduce the number of reserved bytes)
 **
-** This code is generated by the script rekeyvacuum.sh from SQLite version 3.53.2 amalgamation.
+** This code is generated by the script rekeyvacuum.sh from SQLite version 3.53.4 amalgamation.
 */
 SQLITE_PRIVATE SQLITE_NOINLINE int sqlite3mcRunVacuumForRekey(
   char **pzErrMsg,        /* Write error message here */
@@ -339274,6 +340610,7 @@ sqlite3_rekey_v2(sqlite3* db, const char* zDbName, const void* zKey, int nKey)
   int nReserved;
   Pager* pPager;
   Codec* codec;
+  int usesWal = 0;
   int codecAllocated = 0;
   int rc = SQLITE_ERROR;
   char* err = NULL;
@@ -339309,10 +340646,11 @@ sqlite3_rekey_v2(sqlite3* db, const char* zDbName, const void* zKey, int nKey)
 
   pPager = sqlite3BtreePager(pBt);
   codec = sqlite3mcGetCodec(db, zDbName);
+  usesWal = pagerUseWal(pPager);
 
-  if (pagerUseWal(pPager))
+  if (usesWal && (zKey != NULL) && (nKey > 0) && (codec == NULL || !sqlite3mcIsEncrypted(codec)))
   {
-    sqlite3ErrorWithMsg(db, rc, "Rekeying is not supported in WAL journal mode.");
+    sqlite3ErrorWithMsg(db, rc, "Rekeying an unencrypted database is not supported in WAL journal mode.");
     return rc;
   }
 
@@ -339337,7 +340675,7 @@ sqlite3_rekey_v2(sqlite3* db, const char* zDbName, const void* zKey, int nKey)
     {
       sqlite3mcSetDb(codec, db);
       sqlite3mcSetBtree(codec, pBt);
-      rc = sqlite3mcSetupWriteCipher(codec, sqlite3mcGetCipherType(db), (char*) zKey, nKey);
+      rc = sqlite3mcSetupWriteCipher(codec, sqlite3mcGetCipherType(db), (char*) zKey, nKey, usesWal);
     }
     if (rc == SQLITE_OK)
     {
@@ -339396,7 +340734,7 @@ sqlite3_rekey_v2(sqlite3* db, const char* zDbName, const void* zKey, int nKey)
   {
     /* Database encrypted and key specified, therefore re-encrypt database with new key */
     /* Keep read key, change write key to new key */
-    rc = sqlite3mcSetupWriteCipher(codec, sqlite3mcGetCipherType(db), (char*) zKey, nKey);
+    rc = sqlite3mcSetupWriteCipher(codec, sqlite3mcGetCipherType(db), (char*) zKey, nKey, usesWal);
     if (rc == SQLITE_OK)
     {
       int nPagesizeWriteCipher = sqlite3mcGetPageSizeWriteCipher(codec);
@@ -339727,6 +341065,7 @@ SQLITE_PRIVATE void sqlite3mcInitMemoryMethods()
 */
 #ifdef SQLITE_ENABLE_EXTFUNC
 /* Prototype for initialization function of EXTENSIONFUNCTIONS extension */
+SQLITE_API
 int RegisterExtensionFunctions(sqlite3* db);
 /* #include "extensionfunctions.c" */
 /*** Begin of #include "extensionfunctions.c" ***/
@@ -339861,748 +341200,6 @@ Original code 2006 June 05 by relicoder.
 
 #ifdef COMPILE_SQLITE_EXTENSIONS_AS_LOADABLE_MODULE
 /* #include "sqlite3ext.h" */
-/*** Begin of #include "sqlite3ext.h" ***/
-/*
-** 2006 June 7
-**
-** The author disclaims copyright to this source code.  In place of
-** a legal notice, here is a blessing:
-**
-**    May you do good and not evil.
-**    May you find forgiveness for yourself and forgive others.
-**    May you share freely, never taking more than you give.
-**
-*************************************************************************
-** This header file defines the SQLite interface for use by
-** shared libraries that want to be imported as extensions into
-** an SQLite instance.  Shared libraries that intend to be loaded
-** as extensions by SQLite should #include this file instead of
-** sqlite3.h.
-*/
-#ifndef SQLITE3EXT_H
-#define SQLITE3EXT_H
-/* #include "sqlite3.h" */
-
-
-/*
-** The following structure holds pointers to all of the SQLite API
-** routines.
-**
-** WARNING:  In order to maintain backwards compatibility, add new
-** interfaces to the end of this structure only.  If you insert new
-** interfaces in the middle of this structure, then older different
-** versions of SQLite will not be able to load each other's shared
-** libraries!
-*/
-struct sqlite3_api_routines {
-  void * (*aggregate_context)(sqlite3_context*,int nBytes);
-  int  (*aggregate_count)(sqlite3_context*);
-  int  (*bind_blob)(sqlite3_stmt*,int,const void*,int n,void(*)(void*));
-  int  (*bind_double)(sqlite3_stmt*,int,double);
-  int  (*bind_int)(sqlite3_stmt*,int,int);
-  int  (*bind_int64)(sqlite3_stmt*,int,sqlite_int64);
-  int  (*bind_null)(sqlite3_stmt*,int);
-  int  (*bind_parameter_count)(sqlite3_stmt*);
-  int  (*bind_parameter_index)(sqlite3_stmt*,const char*zName);
-  const char * (*bind_parameter_name)(sqlite3_stmt*,int);
-  int  (*bind_text)(sqlite3_stmt*,int,const char*,int n,void(*)(void*));
-  int  (*bind_text16)(sqlite3_stmt*,int,const void*,int,void(*)(void*));
-  int  (*bind_value)(sqlite3_stmt*,int,const sqlite3_value*);
-  int  (*busy_handler)(sqlite3*,int(*)(void*,int),void*);
-  int  (*busy_timeout)(sqlite3*,int ms);
-  int  (*changes)(sqlite3*);
-  int  (*close)(sqlite3*);
-  int  (*collation_needed)(sqlite3*,void*,void(*)(void*,sqlite3*,
-                           int eTextRep,const char*));
-  int  (*collation_needed16)(sqlite3*,void*,void(*)(void*,sqlite3*,
-                             int eTextRep,const void*));
-  const void * (*column_blob)(sqlite3_stmt*,int iCol);
-  int  (*column_bytes)(sqlite3_stmt*,int iCol);
-  int  (*column_bytes16)(sqlite3_stmt*,int iCol);
-  int  (*column_count)(sqlite3_stmt*pStmt);
-  const char * (*column_database_name)(sqlite3_stmt*,int);
-  const void * (*column_database_name16)(sqlite3_stmt*,int);
-  const char * (*column_decltype)(sqlite3_stmt*,int i);
-  const void * (*column_decltype16)(sqlite3_stmt*,int);
-  double  (*column_double)(sqlite3_stmt*,int iCol);
-  int  (*column_int)(sqlite3_stmt*,int iCol);
-  sqlite_int64  (*column_int64)(sqlite3_stmt*,int iCol);
-  const char * (*column_name)(sqlite3_stmt*,int);
-  const void * (*column_name16)(sqlite3_stmt*,int);
-  const char * (*column_origin_name)(sqlite3_stmt*,int);
-  const void * (*column_origin_name16)(sqlite3_stmt*,int);
-  const char * (*column_table_name)(sqlite3_stmt*,int);
-  const void * (*column_table_name16)(sqlite3_stmt*,int);
-  const unsigned char * (*column_text)(sqlite3_stmt*,int iCol);
-  const void * (*column_text16)(sqlite3_stmt*,int iCol);
-  int  (*column_type)(sqlite3_stmt*,int iCol);
-  sqlite3_value* (*column_value)(sqlite3_stmt*,int iCol);
-  void * (*commit_hook)(sqlite3*,int(*)(void*),void*);
-  int  (*complete)(const char*sql);
-  int  (*complete16)(const void*sql);
-  int  (*create_collation)(sqlite3*,const char*,int,void*,
-                           int(*)(void*,int,const void*,int,const void*));
-  int  (*create_collation16)(sqlite3*,const void*,int,void*,
-                             int(*)(void*,int,const void*,int,const void*));
-  int  (*create_function)(sqlite3*,const char*,int,int,void*,
-                          void (*xFunc)(sqlite3_context*,int,sqlite3_value**),
-                          void (*xStep)(sqlite3_context*,int,sqlite3_value**),
-                          void (*xFinal)(sqlite3_context*));
-  int  (*create_function16)(sqlite3*,const void*,int,int,void*,
-                            void (*xFunc)(sqlite3_context*,int,sqlite3_value**),
-                            void (*xStep)(sqlite3_context*,int,sqlite3_value**),
-                            void (*xFinal)(sqlite3_context*));
-  int (*create_module)(sqlite3*,const char*,const sqlite3_module*,void*);
-  int  (*data_count)(sqlite3_stmt*pStmt);
-  sqlite3 * (*db_handle)(sqlite3_stmt*);
-  int (*declare_vtab)(sqlite3*,const char*);
-  int  (*enable_shared_cache)(int);
-  int  (*errcode)(sqlite3*db);
-  const char * (*errmsg)(sqlite3*);
-  const void * (*errmsg16)(sqlite3*);
-  int  (*exec)(sqlite3*,const char*,sqlite3_callback,void*,char**);
-  int  (*expired)(sqlite3_stmt*);
-  int  (*finalize)(sqlite3_stmt*pStmt);
-  void  (*free)(void*);
-  void  (*free_table)(char**result);
-  int  (*get_autocommit)(sqlite3*);
-  void * (*get_auxdata)(sqlite3_context*,int);
-  int  (*get_table)(sqlite3*,const char*,char***,int*,int*,char**);
-  int  (*global_recover)(void);
-  void  (*interruptx)(sqlite3*);
-  sqlite_int64  (*last_insert_rowid)(sqlite3*);
-  const char * (*libversion)(void);
-  int  (*libversion_number)(void);
-  void *(*malloc)(int);
-  char * (*mprintf)(const char*,...);
-  int  (*open)(const char*,sqlite3**);
-  int  (*open16)(const void*,sqlite3**);
-  int  (*prepare)(sqlite3*,const char*,int,sqlite3_stmt**,const char**);
-  int  (*prepare16)(sqlite3*,const void*,int,sqlite3_stmt**,const void**);
-  void * (*profile)(sqlite3*,void(*)(void*,const char*,sqlite_uint64),void*);
-  void  (*progress_handler)(sqlite3*,int,int(*)(void*),void*);
-  void *(*realloc)(void*,int);
-  int  (*reset)(sqlite3_stmt*pStmt);
-  void  (*result_blob)(sqlite3_context*,const void*,int,void(*)(void*));
-  void  (*result_double)(sqlite3_context*,double);
-  void  (*result_error)(sqlite3_context*,const char*,int);
-  void  (*result_error16)(sqlite3_context*,const void*,int);
-  void  (*result_int)(sqlite3_context*,int);
-  void  (*result_int64)(sqlite3_context*,sqlite_int64);
-  void  (*result_null)(sqlite3_context*);
-  void  (*result_text)(sqlite3_context*,const char*,int,void(*)(void*));
-  void  (*result_text16)(sqlite3_context*,const void*,int,void(*)(void*));
-  void  (*result_text16be)(sqlite3_context*,const void*,int,void(*)(void*));
-  void  (*result_text16le)(sqlite3_context*,const void*,int,void(*)(void*));
-  void  (*result_value)(sqlite3_context*,sqlite3_value*);
-  void * (*rollback_hook)(sqlite3*,void(*)(void*),void*);
-  int  (*set_authorizer)(sqlite3*,int(*)(void*,int,const char*,const char*,
-                         const char*,const char*),void*);
-  void  (*set_auxdata)(sqlite3_context*,int,void*,void (*)(void*));
-  char * (*xsnprintf)(int,char*,const char*,...);
-  int  (*step)(sqlite3_stmt*);
-  int  (*table_column_metadata)(sqlite3*,const char*,const char*,const char*,
-                                char const**,char const**,int*,int*,int*);
-  void  (*thread_cleanup)(void);
-  int  (*total_changes)(sqlite3*);
-  void * (*trace)(sqlite3*,void(*xTrace)(void*,const char*),void*);
-  int  (*transfer_bindings)(sqlite3_stmt*,sqlite3_stmt*);
-  void * (*update_hook)(sqlite3*,void(*)(void*,int ,char const*,char const*,
-                                         sqlite_int64),void*);
-  void * (*user_data)(sqlite3_context*);
-  const void * (*value_blob)(sqlite3_value*);
-  int  (*value_bytes)(sqlite3_value*);
-  int  (*value_bytes16)(sqlite3_value*);
-  double  (*value_double)(sqlite3_value*);
-  int  (*value_int)(sqlite3_value*);
-  sqlite_int64  (*value_int64)(sqlite3_value*);
-  int  (*value_numeric_type)(sqlite3_value*);
-  const unsigned char * (*value_text)(sqlite3_value*);
-  const void * (*value_text16)(sqlite3_value*);
-  const void * (*value_text16be)(sqlite3_value*);
-  const void * (*value_text16le)(sqlite3_value*);
-  int  (*value_type)(sqlite3_value*);
-  char *(*vmprintf)(const char*,va_list);
-  /* Added ??? */
-  int (*overload_function)(sqlite3*, const char *zFuncName, int nArg);
-  /* Added by 3.3.13 */
-  int (*prepare_v2)(sqlite3*,const char*,int,sqlite3_stmt**,const char**);
-  int (*prepare16_v2)(sqlite3*,const void*,int,sqlite3_stmt**,const void**);
-  int (*clear_bindings)(sqlite3_stmt*);
-  /* Added by 3.4.1 */
-  int (*create_module_v2)(sqlite3*,const char*,const sqlite3_module*,void*,
-                          void (*xDestroy)(void *));
-  /* Added by 3.5.0 */
-  int (*bind_zeroblob)(sqlite3_stmt*,int,int);
-  int (*blob_bytes)(sqlite3_blob*);
-  int (*blob_close)(sqlite3_blob*);
-  int (*blob_open)(sqlite3*,const char*,const char*,const char*,sqlite3_int64,
-                   int,sqlite3_blob**);
-  int (*blob_read)(sqlite3_blob*,void*,int,int);
-  int (*blob_write)(sqlite3_blob*,const void*,int,int);
-  int (*create_collation_v2)(sqlite3*,const char*,int,void*,
-                             int(*)(void*,int,const void*,int,const void*),
-                             void(*)(void*));
-  int (*file_control)(sqlite3*,const char*,int,void*);
-  sqlite3_int64 (*memory_highwater)(int);
-  sqlite3_int64 (*memory_used)(void);
-  sqlite3_mutex *(*mutex_alloc)(int);
-  void (*mutex_enter)(sqlite3_mutex*);
-  void (*mutex_free)(sqlite3_mutex*);
-  void (*mutex_leave)(sqlite3_mutex*);
-  int (*mutex_try)(sqlite3_mutex*);
-  int (*open_v2)(const char*,sqlite3**,int,const char*);
-  int (*release_memory)(int);
-  void (*result_error_nomem)(sqlite3_context*);
-  void (*result_error_toobig)(sqlite3_context*);
-  int (*sleep)(int);
-  void (*soft_heap_limit)(int);
-  sqlite3_vfs *(*vfs_find)(const char*);
-  int (*vfs_register)(sqlite3_vfs*,int);
-  int (*vfs_unregister)(sqlite3_vfs*);
-  int (*xthreadsafe)(void);
-  void (*result_zeroblob)(sqlite3_context*,int);
-  void (*result_error_code)(sqlite3_context*,int);
-  int (*test_control)(int, ...);
-  void (*randomness)(int,void*);
-  sqlite3 *(*context_db_handle)(sqlite3_context*);
-  int (*extended_result_codes)(sqlite3*,int);
-  int (*limit)(sqlite3*,int,int);
-  sqlite3_stmt *(*next_stmt)(sqlite3*,sqlite3_stmt*);
-  const char *(*sql)(sqlite3_stmt*);
-  int (*status)(int,int*,int*,int);
-  int (*backup_finish)(sqlite3_backup*);
-  sqlite3_backup *(*backup_init)(sqlite3*,const char*,sqlite3*,const char*);
-  int (*backup_pagecount)(sqlite3_backup*);
-  int (*backup_remaining)(sqlite3_backup*);
-  int (*backup_step)(sqlite3_backup*,int);
-  const char *(*compileoption_get)(int);
-  int (*compileoption_used)(const char*);
-  int (*create_function_v2)(sqlite3*,const char*,int,int,void*,
-                            void (*xFunc)(sqlite3_context*,int,sqlite3_value**),
-                            void (*xStep)(sqlite3_context*,int,sqlite3_value**),
-                            void (*xFinal)(sqlite3_context*),
-                            void(*xDestroy)(void*));
-  int (*db_config)(sqlite3*,int,...);
-  sqlite3_mutex *(*db_mutex)(sqlite3*);
-  int (*db_status)(sqlite3*,int,int*,int*,int);
-  int (*extended_errcode)(sqlite3*);
-  void (*log)(int,const char*,...);
-  sqlite3_int64 (*soft_heap_limit64)(sqlite3_int64);
-  const char *(*sourceid)(void);
-  int (*stmt_status)(sqlite3_stmt*,int,int);
-  int (*strnicmp)(const char*,const char*,int);
-  int (*unlock_notify)(sqlite3*,void(*)(void**,int),void*);
-  int (*wal_autocheckpoint)(sqlite3*,int);
-  int (*wal_checkpoint)(sqlite3*,const char*);
-  void *(*wal_hook)(sqlite3*,int(*)(void*,sqlite3*,const char*,int),void*);
-  int (*blob_reopen)(sqlite3_blob*,sqlite3_int64);
-  int (*vtab_config)(sqlite3*,int op,...);
-  int (*vtab_on_conflict)(sqlite3*);
-  /* Version 3.7.16 and later */
-  int (*close_v2)(sqlite3*);
-  const char *(*db_filename)(sqlite3*,const char*);
-  int (*db_readonly)(sqlite3*,const char*);
-  int (*db_release_memory)(sqlite3*);
-  const char *(*errstr)(int);
-  int (*stmt_busy)(sqlite3_stmt*);
-  int (*stmt_readonly)(sqlite3_stmt*);
-  int (*stricmp)(const char*,const char*);
-  int (*uri_boolean)(const char*,const char*,int);
-  sqlite3_int64 (*uri_int64)(const char*,const char*,sqlite3_int64);
-  const char *(*uri_parameter)(const char*,const char*);
-  char *(*xvsnprintf)(int,char*,const char*,va_list);
-  int (*wal_checkpoint_v2)(sqlite3*,const char*,int,int*,int*);
-  /* Version 3.8.7 and later */
-  int (*auto_extension)(void(*)(void));
-  int (*bind_blob64)(sqlite3_stmt*,int,const void*,sqlite3_uint64,
-                     void(*)(void*));
-  int (*bind_text64)(sqlite3_stmt*,int,const char*,sqlite3_uint64,
-                      void(*)(void*),unsigned char);
-  int (*cancel_auto_extension)(void(*)(void));
-  int (*load_extension)(sqlite3*,const char*,const char*,char**);
-  void *(*malloc64)(sqlite3_uint64);
-  sqlite3_uint64 (*msize)(void*);
-  void *(*realloc64)(void*,sqlite3_uint64);
-  void (*reset_auto_extension)(void);
-  void (*result_blob64)(sqlite3_context*,const void*,sqlite3_uint64,
-                        void(*)(void*));
-  void (*result_text64)(sqlite3_context*,const char*,sqlite3_uint64,
-                         void(*)(void*), unsigned char);
-  int (*strglob)(const char*,const char*);
-  /* Version 3.8.11 and later */
-  sqlite3_value *(*value_dup)(const sqlite3_value*);
-  void (*value_free)(sqlite3_value*);
-  int (*result_zeroblob64)(sqlite3_context*,sqlite3_uint64);
-  int (*bind_zeroblob64)(sqlite3_stmt*, int, sqlite3_uint64);
-  /* Version 3.9.0 and later */
-  unsigned int (*value_subtype)(sqlite3_value*);
-  void (*result_subtype)(sqlite3_context*,unsigned int);
-  /* Version 3.10.0 and later */
-  int (*status64)(int,sqlite3_int64*,sqlite3_int64*,int);
-  int (*strlike)(const char*,const char*,unsigned int);
-  int (*db_cacheflush)(sqlite3*);
-  /* Version 3.12.0 and later */
-  int (*system_errno)(sqlite3*);
-  /* Version 3.14.0 and later */
-  int (*trace_v2)(sqlite3*,unsigned,int(*)(unsigned,void*,void*,void*),void*);
-  char *(*expanded_sql)(sqlite3_stmt*);
-  /* Version 3.18.0 and later */
-  void (*set_last_insert_rowid)(sqlite3*,sqlite3_int64);
-  /* Version 3.20.0 and later */
-  int (*prepare_v3)(sqlite3*,const char*,int,unsigned int,
-                    sqlite3_stmt**,const char**);
-  int (*prepare16_v3)(sqlite3*,const void*,int,unsigned int,
-                      sqlite3_stmt**,const void**);
-  int (*bind_pointer)(sqlite3_stmt*,int,void*,const char*,void(*)(void*));
-  void (*result_pointer)(sqlite3_context*,void*,const char*,void(*)(void*));
-  void *(*value_pointer)(sqlite3_value*,const char*);
-  int (*vtab_nochange)(sqlite3_context*);
-  int (*value_nochange)(sqlite3_value*);
-  const char *(*vtab_collation)(sqlite3_index_info*,int);
-  /* Version 3.24.0 and later */
-  int (*keyword_count)(void);
-  int (*keyword_name)(int,const char**,int*);
-  int (*keyword_check)(const char*,int);
-  sqlite3_str *(*str_new)(sqlite3*);
-  char *(*str_finish)(sqlite3_str*);
-  void (*str_appendf)(sqlite3_str*, const char *zFormat, ...);
-  void (*str_vappendf)(sqlite3_str*, const char *zFormat, va_list);
-  void (*str_append)(sqlite3_str*, const char *zIn, int N);
-  void (*str_appendall)(sqlite3_str*, const char *zIn);
-  void (*str_appendchar)(sqlite3_str*, int N, char C);
-  void (*str_reset)(sqlite3_str*);
-  int (*str_errcode)(sqlite3_str*);
-  int (*str_length)(sqlite3_str*);
-  char *(*str_value)(sqlite3_str*);
-  /* Version 3.25.0 and later */
-  int (*create_window_function)(sqlite3*,const char*,int,int,void*,
-                            void (*xStep)(sqlite3_context*,int,sqlite3_value**),
-                            void (*xFinal)(sqlite3_context*),
-                            void (*xValue)(sqlite3_context*),
-                            void (*xInv)(sqlite3_context*,int,sqlite3_value**),
-                            void(*xDestroy)(void*));
-  /* Version 3.26.0 and later */
-  const char *(*normalized_sql)(sqlite3_stmt*);
-  /* Version 3.28.0 and later */
-  int (*stmt_isexplain)(sqlite3_stmt*);
-  int (*value_frombind)(sqlite3_value*);
-  /* Version 3.30.0 and later */
-  int (*drop_modules)(sqlite3*,const char**);
-  /* Version 3.31.0 and later */
-  sqlite3_int64 (*hard_heap_limit64)(sqlite3_int64);
-  const char *(*uri_key)(const char*,int);
-  const char *(*filename_database)(const char*);
-  const char *(*filename_journal)(const char*);
-  const char *(*filename_wal)(const char*);
-  /* Version 3.32.0 and later */
-  const char *(*create_filename)(const char*,const char*,const char*,
-                           int,const char**);
-  void (*free_filename)(const char*);
-  sqlite3_file *(*database_file_object)(const char*);
-  /* Version 3.34.0 and later */
-  int (*txn_state)(sqlite3*,const char*);
-  /* Version 3.36.1 and later */
-  sqlite3_int64 (*changes64)(sqlite3*);
-  sqlite3_int64 (*total_changes64)(sqlite3*);
-  /* Version 3.37.0 and later */
-  int (*autovacuum_pages)(sqlite3*,
-     unsigned int(*)(void*,const char*,unsigned int,unsigned int,unsigned int),
-     void*, void(*)(void*));
-  /* Version 3.38.0 and later */
-  int (*error_offset)(sqlite3*);
-  int (*vtab_rhs_value)(sqlite3_index_info*,int,sqlite3_value**);
-  int (*vtab_distinct)(sqlite3_index_info*);
-  int (*vtab_in)(sqlite3_index_info*,int,int);
-  int (*vtab_in_first)(sqlite3_value*,sqlite3_value**);
-  int (*vtab_in_next)(sqlite3_value*,sqlite3_value**);
-  /* Version 3.39.0 and later */
-  int (*deserialize)(sqlite3*,const char*,unsigned char*,
-                     sqlite3_int64,sqlite3_int64,unsigned);
-  unsigned char *(*serialize)(sqlite3*,const char *,sqlite3_int64*,
-                              unsigned int);
-  const char *(*db_name)(sqlite3*,int);
-  /* Version 3.40.0 and later */
-  int (*value_encoding)(sqlite3_value*);
-  /* Version 3.41.0 and later */
-  int (*is_interrupted)(sqlite3*);
-  /* Version 3.43.0 and later */
-  int (*stmt_explain)(sqlite3_stmt*,int);
-  /* Version 3.44.0 and later */
-  void *(*get_clientdata)(sqlite3*,const char*);
-  int (*set_clientdata)(sqlite3*, const char*, void*, void(*)(void*));
-  /* Version 3.50.0 and later */
-  int (*setlk_timeout)(sqlite3*,int,int);
-  /* Version 3.51.0 and later */
-  int (*set_errmsg)(sqlite3*,int,const char*);
-  int (*db_status64)(sqlite3*,int,sqlite3_int64*,sqlite3_int64*,int);
-  /* Version 3.52.0 and later */
-  void (*str_truncate)(sqlite3_str*,int);
-  void (*str_free)(sqlite3_str*);
-  int (*carray_bind)(sqlite3_stmt*,int,void*,int,int,void(*)(void*));
-  int (*carray_bind_v2)(sqlite3_stmt*,int,void*,int,int,void(*)(void*),void*);
-};
-
-/*
-** This is the function signature used for all extension entry points.  It
-** is also defined in the file "loadext.c".
-*/
-typedef int (*sqlite3_loadext_entry)(
-  sqlite3 *db,                       /* Handle to the database. */
-  char **pzErrMsg,                   /* Used to set error string on failure. */
-  const sqlite3_api_routines *pThunk /* Extension API function pointers. */
-);
-
-/*
-** The following macros redefine the API routines so that they are
-** redirected through the global sqlite3_api structure.
-**
-** This header file is also used by the loadext.c source file
-** (part of the main SQLite library - not an extension) so that
-** it can get access to the sqlite3_api_routines structure
-** definition.  But the main library does not want to redefine
-** the API.  So the redefinition macros are only valid if the
-** SQLITE_CORE macros is undefined.
-*/
-#if !defined(SQLITE_CORE) && !defined(SQLITE_OMIT_LOAD_EXTENSION)
-#define sqlite3_aggregate_context      sqlite3_api->aggregate_context
-#ifndef SQLITE_OMIT_DEPRECATED
-#define sqlite3_aggregate_count        sqlite3_api->aggregate_count
-#endif
-#define sqlite3_bind_blob              sqlite3_api->bind_blob
-#define sqlite3_bind_double            sqlite3_api->bind_double
-#define sqlite3_bind_int               sqlite3_api->bind_int
-#define sqlite3_bind_int64             sqlite3_api->bind_int64
-#define sqlite3_bind_null              sqlite3_api->bind_null
-#define sqlite3_bind_parameter_count   sqlite3_api->bind_parameter_count
-#define sqlite3_bind_parameter_index   sqlite3_api->bind_parameter_index
-#define sqlite3_bind_parameter_name    sqlite3_api->bind_parameter_name
-#define sqlite3_bind_text              sqlite3_api->bind_text
-#define sqlite3_bind_text16            sqlite3_api->bind_text16
-#define sqlite3_bind_value             sqlite3_api->bind_value
-#define sqlite3_busy_handler           sqlite3_api->busy_handler
-#define sqlite3_busy_timeout           sqlite3_api->busy_timeout
-#define sqlite3_changes                sqlite3_api->changes
-#define sqlite3_close                  sqlite3_api->close
-#define sqlite3_collation_needed       sqlite3_api->collation_needed
-#define sqlite3_collation_needed16     sqlite3_api->collation_needed16
-#define sqlite3_column_blob            sqlite3_api->column_blob
-#define sqlite3_column_bytes           sqlite3_api->column_bytes
-#define sqlite3_column_bytes16         sqlite3_api->column_bytes16
-#define sqlite3_column_count           sqlite3_api->column_count
-#define sqlite3_column_database_name   sqlite3_api->column_database_name
-#define sqlite3_column_database_name16 sqlite3_api->column_database_name16
-#define sqlite3_column_decltype        sqlite3_api->column_decltype
-#define sqlite3_column_decltype16      sqlite3_api->column_decltype16
-#define sqlite3_column_double          sqlite3_api->column_double
-#define sqlite3_column_int             sqlite3_api->column_int
-#define sqlite3_column_int64           sqlite3_api->column_int64
-#define sqlite3_column_name            sqlite3_api->column_name
-#define sqlite3_column_name16          sqlite3_api->column_name16
-#define sqlite3_column_origin_name     sqlite3_api->column_origin_name
-#define sqlite3_column_origin_name16   sqlite3_api->column_origin_name16
-#define sqlite3_column_table_name      sqlite3_api->column_table_name
-#define sqlite3_column_table_name16    sqlite3_api->column_table_name16
-#define sqlite3_column_text            sqlite3_api->column_text
-#define sqlite3_column_text16          sqlite3_api->column_text16
-#define sqlite3_column_type            sqlite3_api->column_type
-#define sqlite3_column_value           sqlite3_api->column_value
-#define sqlite3_commit_hook            sqlite3_api->commit_hook
-#define sqlite3_complete               sqlite3_api->complete
-#define sqlite3_complete16             sqlite3_api->complete16
-#define sqlite3_create_collation       sqlite3_api->create_collation
-#define sqlite3_create_collation16     sqlite3_api->create_collation16
-#define sqlite3_create_function        sqlite3_api->create_function
-#define sqlite3_create_function16      sqlite3_api->create_function16
-#define sqlite3_create_module          sqlite3_api->create_module
-#define sqlite3_create_module_v2       sqlite3_api->create_module_v2
-#define sqlite3_data_count             sqlite3_api->data_count
-#define sqlite3_db_handle              sqlite3_api->db_handle
-#define sqlite3_declare_vtab           sqlite3_api->declare_vtab
-#define sqlite3_enable_shared_cache    sqlite3_api->enable_shared_cache
-#define sqlite3_errcode                sqlite3_api->errcode
-#define sqlite3_errmsg                 sqlite3_api->errmsg
-#define sqlite3_errmsg16               sqlite3_api->errmsg16
-#define sqlite3_exec                   sqlite3_api->exec
-#ifndef SQLITE_OMIT_DEPRECATED
-#define sqlite3_expired                sqlite3_api->expired
-#endif
-#define sqlite3_finalize               sqlite3_api->finalize
-#define sqlite3_free                   sqlite3_api->free
-#define sqlite3_free_table             sqlite3_api->free_table
-#define sqlite3_get_autocommit         sqlite3_api->get_autocommit
-#define sqlite3_get_auxdata            sqlite3_api->get_auxdata
-#define sqlite3_get_table              sqlite3_api->get_table
-#ifndef SQLITE_OMIT_DEPRECATED
-#define sqlite3_global_recover         sqlite3_api->global_recover
-#endif
-#define sqlite3_interrupt              sqlite3_api->interruptx
-#define sqlite3_last_insert_rowid      sqlite3_api->last_insert_rowid
-#define sqlite3_libversion             sqlite3_api->libversion
-#define sqlite3_libversion_number      sqlite3_api->libversion_number
-#define sqlite3_malloc                 sqlite3_api->malloc
-#define sqlite3_mprintf                sqlite3_api->mprintf
-#define sqlite3_open                   sqlite3_api->open
-#define sqlite3_open16                 sqlite3_api->open16
-#define sqlite3_prepare                sqlite3_api->prepare
-#define sqlite3_prepare16              sqlite3_api->prepare16
-#define sqlite3_prepare_v2             sqlite3_api->prepare_v2
-#define sqlite3_prepare16_v2           sqlite3_api->prepare16_v2
-#define sqlite3_profile                sqlite3_api->profile
-#define sqlite3_progress_handler       sqlite3_api->progress_handler
-#define sqlite3_realloc                sqlite3_api->realloc
-#define sqlite3_reset                  sqlite3_api->reset
-#define sqlite3_result_blob            sqlite3_api->result_blob
-#define sqlite3_result_double          sqlite3_api->result_double
-#define sqlite3_result_error           sqlite3_api->result_error
-#define sqlite3_result_error16         sqlite3_api->result_error16
-#define sqlite3_result_int             sqlite3_api->result_int
-#define sqlite3_result_int64           sqlite3_api->result_int64
-#define sqlite3_result_null            sqlite3_api->result_null
-#define sqlite3_result_text            sqlite3_api->result_text
-#define sqlite3_result_text16          sqlite3_api->result_text16
-#define sqlite3_result_text16be        sqlite3_api->result_text16be
-#define sqlite3_result_text16le        sqlite3_api->result_text16le
-#define sqlite3_result_value           sqlite3_api->result_value
-#define sqlite3_rollback_hook          sqlite3_api->rollback_hook
-#define sqlite3_set_authorizer         sqlite3_api->set_authorizer
-#define sqlite3_set_auxdata            sqlite3_api->set_auxdata
-#define sqlite3_snprintf               sqlite3_api->xsnprintf
-#define sqlite3_step                   sqlite3_api->step
-#define sqlite3_table_column_metadata  sqlite3_api->table_column_metadata
-#define sqlite3_thread_cleanup         sqlite3_api->thread_cleanup
-#define sqlite3_total_changes          sqlite3_api->total_changes
-#define sqlite3_trace                  sqlite3_api->trace
-#ifndef SQLITE_OMIT_DEPRECATED
-#define sqlite3_transfer_bindings      sqlite3_api->transfer_bindings
-#endif
-#define sqlite3_update_hook            sqlite3_api->update_hook
-#define sqlite3_user_data              sqlite3_api->user_data
-#define sqlite3_value_blob             sqlite3_api->value_blob
-#define sqlite3_value_bytes            sqlite3_api->value_bytes
-#define sqlite3_value_bytes16          sqlite3_api->value_bytes16
-#define sqlite3_value_double           sqlite3_api->value_double
-#define sqlite3_value_int              sqlite3_api->value_int
-#define sqlite3_value_int64            sqlite3_api->value_int64
-#define sqlite3_value_numeric_type     sqlite3_api->value_numeric_type
-#define sqlite3_value_text             sqlite3_api->value_text
-#define sqlite3_value_text16           sqlite3_api->value_text16
-#define sqlite3_value_text16be         sqlite3_api->value_text16be
-#define sqlite3_value_text16le         sqlite3_api->value_text16le
-#define sqlite3_value_type             sqlite3_api->value_type
-#define sqlite3_vmprintf               sqlite3_api->vmprintf
-#define sqlite3_vsnprintf              sqlite3_api->xvsnprintf
-#define sqlite3_overload_function      sqlite3_api->overload_function
-#define sqlite3_prepare_v2             sqlite3_api->prepare_v2
-#define sqlite3_prepare16_v2           sqlite3_api->prepare16_v2
-#define sqlite3_clear_bindings         sqlite3_api->clear_bindings
-#define sqlite3_bind_zeroblob          sqlite3_api->bind_zeroblob
-#define sqlite3_blob_bytes             sqlite3_api->blob_bytes
-#define sqlite3_blob_close             sqlite3_api->blob_close
-#define sqlite3_blob_open              sqlite3_api->blob_open
-#define sqlite3_blob_read              sqlite3_api->blob_read
-#define sqlite3_blob_write             sqlite3_api->blob_write
-#define sqlite3_create_collation_v2    sqlite3_api->create_collation_v2
-#define sqlite3_file_control           sqlite3_api->file_control
-#define sqlite3_memory_highwater       sqlite3_api->memory_highwater
-#define sqlite3_memory_used            sqlite3_api->memory_used
-#define sqlite3_mutex_alloc            sqlite3_api->mutex_alloc
-#define sqlite3_mutex_enter            sqlite3_api->mutex_enter
-#define sqlite3_mutex_free             sqlite3_api->mutex_free
-#define sqlite3_mutex_leave            sqlite3_api->mutex_leave
-#define sqlite3_mutex_try              sqlite3_api->mutex_try
-#define sqlite3_open_v2                sqlite3_api->open_v2
-#define sqlite3_release_memory         sqlite3_api->release_memory
-#define sqlite3_result_error_nomem     sqlite3_api->result_error_nomem
-#define sqlite3_result_error_toobig    sqlite3_api->result_error_toobig
-#define sqlite3_sleep                  sqlite3_api->sleep
-#define sqlite3_soft_heap_limit        sqlite3_api->soft_heap_limit
-#define sqlite3_vfs_find               sqlite3_api->vfs_find
-#define sqlite3_vfs_register           sqlite3_api->vfs_register
-#define sqlite3_vfs_unregister         sqlite3_api->vfs_unregister
-#define sqlite3_threadsafe             sqlite3_api->xthreadsafe
-#define sqlite3_result_zeroblob        sqlite3_api->result_zeroblob
-#define sqlite3_result_error_code      sqlite3_api->result_error_code
-#define sqlite3_test_control           sqlite3_api->test_control
-#define sqlite3_randomness             sqlite3_api->randomness
-#define sqlite3_context_db_handle      sqlite3_api->context_db_handle
-#define sqlite3_extended_result_codes  sqlite3_api->extended_result_codes
-#define sqlite3_limit                  sqlite3_api->limit
-#define sqlite3_next_stmt              sqlite3_api->next_stmt
-#define sqlite3_sql                    sqlite3_api->sql
-#define sqlite3_status                 sqlite3_api->status
-#define sqlite3_backup_finish          sqlite3_api->backup_finish
-#define sqlite3_backup_init            sqlite3_api->backup_init
-#define sqlite3_backup_pagecount       sqlite3_api->backup_pagecount
-#define sqlite3_backup_remaining       sqlite3_api->backup_remaining
-#define sqlite3_backup_step            sqlite3_api->backup_step
-#define sqlite3_compileoption_get      sqlite3_api->compileoption_get
-#define sqlite3_compileoption_used     sqlite3_api->compileoption_used
-#define sqlite3_create_function_v2     sqlite3_api->create_function_v2
-#define sqlite3_db_config              sqlite3_api->db_config
-#define sqlite3_db_mutex               sqlite3_api->db_mutex
-#define sqlite3_db_status              sqlite3_api->db_status
-#define sqlite3_extended_errcode       sqlite3_api->extended_errcode
-#define sqlite3_log                    sqlite3_api->log
-#define sqlite3_soft_heap_limit64      sqlite3_api->soft_heap_limit64
-#define sqlite3_sourceid               sqlite3_api->sourceid
-#define sqlite3_stmt_status            sqlite3_api->stmt_status
-#define sqlite3_strnicmp               sqlite3_api->strnicmp
-#define sqlite3_unlock_notify          sqlite3_api->unlock_notify
-#define sqlite3_wal_autocheckpoint     sqlite3_api->wal_autocheckpoint
-#define sqlite3_wal_checkpoint         sqlite3_api->wal_checkpoint
-#define sqlite3_wal_hook               sqlite3_api->wal_hook
-#define sqlite3_blob_reopen            sqlite3_api->blob_reopen
-#define sqlite3_vtab_config            sqlite3_api->vtab_config
-#define sqlite3_vtab_on_conflict       sqlite3_api->vtab_on_conflict
-/* Version 3.7.16 and later */
-#define sqlite3_close_v2               sqlite3_api->close_v2
-#define sqlite3_db_filename            sqlite3_api->db_filename
-#define sqlite3_db_readonly            sqlite3_api->db_readonly
-#define sqlite3_db_release_memory      sqlite3_api->db_release_memory
-#define sqlite3_errstr                 sqlite3_api->errstr
-#define sqlite3_stmt_busy              sqlite3_api->stmt_busy
-#define sqlite3_stmt_readonly          sqlite3_api->stmt_readonly
-#define sqlite3_stricmp                sqlite3_api->stricmp
-#define sqlite3_uri_boolean            sqlite3_api->uri_boolean
-#define sqlite3_uri_int64              sqlite3_api->uri_int64
-#define sqlite3_uri_parameter          sqlite3_api->uri_parameter
-#define sqlite3_uri_vsnprintf          sqlite3_api->xvsnprintf
-#define sqlite3_wal_checkpoint_v2      sqlite3_api->wal_checkpoint_v2
-/* Version 3.8.7 and later */
-#define sqlite3_auto_extension         sqlite3_api->auto_extension
-#define sqlite3_bind_blob64            sqlite3_api->bind_blob64
-#define sqlite3_bind_text64            sqlite3_api->bind_text64
-#define sqlite3_cancel_auto_extension  sqlite3_api->cancel_auto_extension
-#define sqlite3_load_extension         sqlite3_api->load_extension
-#define sqlite3_malloc64               sqlite3_api->malloc64
-#define sqlite3_msize                  sqlite3_api->msize
-#define sqlite3_realloc64              sqlite3_api->realloc64
-#define sqlite3_reset_auto_extension   sqlite3_api->reset_auto_extension
-#define sqlite3_result_blob64          sqlite3_api->result_blob64
-#define sqlite3_result_text64          sqlite3_api->result_text64
-#define sqlite3_strglob                sqlite3_api->strglob
-/* Version 3.8.11 and later */
-#define sqlite3_value_dup              sqlite3_api->value_dup
-#define sqlite3_value_free             sqlite3_api->value_free
-#define sqlite3_result_zeroblob64      sqlite3_api->result_zeroblob64
-#define sqlite3_bind_zeroblob64        sqlite3_api->bind_zeroblob64
-/* Version 3.9.0 and later */
-#define sqlite3_value_subtype          sqlite3_api->value_subtype
-#define sqlite3_result_subtype         sqlite3_api->result_subtype
-/* Version 3.10.0 and later */
-#define sqlite3_status64               sqlite3_api->status64
-#define sqlite3_strlike                sqlite3_api->strlike
-#define sqlite3_db_cacheflush          sqlite3_api->db_cacheflush
-/* Version 3.12.0 and later */
-#define sqlite3_system_errno           sqlite3_api->system_errno
-/* Version 3.14.0 and later */
-#define sqlite3_trace_v2               sqlite3_api->trace_v2
-#define sqlite3_expanded_sql           sqlite3_api->expanded_sql
-/* Version 3.18.0 and later */
-#define sqlite3_set_last_insert_rowid  sqlite3_api->set_last_insert_rowid
-/* Version 3.20.0 and later */
-#define sqlite3_prepare_v3             sqlite3_api->prepare_v3
-#define sqlite3_prepare16_v3           sqlite3_api->prepare16_v3
-#define sqlite3_bind_pointer           sqlite3_api->bind_pointer
-#define sqlite3_result_pointer         sqlite3_api->result_pointer
-#define sqlite3_value_pointer          sqlite3_api->value_pointer
-/* Version 3.22.0 and later */
-#define sqlite3_vtab_nochange          sqlite3_api->vtab_nochange
-#define sqlite3_value_nochange         sqlite3_api->value_nochange
-#define sqlite3_vtab_collation         sqlite3_api->vtab_collation
-/* Version 3.24.0 and later */
-#define sqlite3_keyword_count          sqlite3_api->keyword_count
-#define sqlite3_keyword_name           sqlite3_api->keyword_name
-#define sqlite3_keyword_check          sqlite3_api->keyword_check
-#define sqlite3_str_new                sqlite3_api->str_new
-#define sqlite3_str_finish             sqlite3_api->str_finish
-#define sqlite3_str_appendf            sqlite3_api->str_appendf
-#define sqlite3_str_vappendf           sqlite3_api->str_vappendf
-#define sqlite3_str_append             sqlite3_api->str_append
-#define sqlite3_str_appendall          sqlite3_api->str_appendall
-#define sqlite3_str_appendchar         sqlite3_api->str_appendchar
-#define sqlite3_str_reset              sqlite3_api->str_reset
-#define sqlite3_str_errcode            sqlite3_api->str_errcode
-#define sqlite3_str_length             sqlite3_api->str_length
-#define sqlite3_str_value              sqlite3_api->str_value
-/* Version 3.25.0 and later */
-#define sqlite3_create_window_function sqlite3_api->create_window_function
-/* Version 3.26.0 and later */
-#define sqlite3_normalized_sql         sqlite3_api->normalized_sql
-/* Version 3.28.0 and later */
-#define sqlite3_stmt_isexplain         sqlite3_api->stmt_isexplain
-#define sqlite3_value_frombind         sqlite3_api->value_frombind
-/* Version 3.30.0 and later */
-#define sqlite3_drop_modules           sqlite3_api->drop_modules
-/* Version 3.31.0 and later */
-#define sqlite3_hard_heap_limit64      sqlite3_api->hard_heap_limit64
-#define sqlite3_uri_key                sqlite3_api->uri_key
-#define sqlite3_filename_database      sqlite3_api->filename_database
-#define sqlite3_filename_journal       sqlite3_api->filename_journal
-#define sqlite3_filename_wal           sqlite3_api->filename_wal
-/* Version 3.32.0 and later */
-#define sqlite3_create_filename        sqlite3_api->create_filename
-#define sqlite3_free_filename          sqlite3_api->free_filename
-#define sqlite3_database_file_object   sqlite3_api->database_file_object
-/* Version 3.34.0 and later */
-#define sqlite3_txn_state              sqlite3_api->txn_state
-/* Version 3.36.1 and later */
-#define sqlite3_changes64              sqlite3_api->changes64
-#define sqlite3_total_changes64        sqlite3_api->total_changes64
-/* Version 3.37.0 and later */
-#define sqlite3_autovacuum_pages       sqlite3_api->autovacuum_pages
-/* Version 3.38.0 and later */
-#define sqlite3_error_offset           sqlite3_api->error_offset
-#define sqlite3_vtab_rhs_value         sqlite3_api->vtab_rhs_value
-#define sqlite3_vtab_distinct          sqlite3_api->vtab_distinct
-#define sqlite3_vtab_in                sqlite3_api->vtab_in
-#define sqlite3_vtab_in_first          sqlite3_api->vtab_in_first
-#define sqlite3_vtab_in_next           sqlite3_api->vtab_in_next
-/* Version 3.39.0 and later */
-#ifndef SQLITE_OMIT_DESERIALIZE
-#define sqlite3_deserialize            sqlite3_api->deserialize
-#define sqlite3_serialize              sqlite3_api->serialize
-#endif
-#define sqlite3_db_name                sqlite3_api->db_name
-/* Version 3.40.0 and later */
-#define sqlite3_value_encoding         sqlite3_api->value_encoding
-/* Version 3.41.0 and later */
-#define sqlite3_is_interrupted         sqlite3_api->is_interrupted
-/* Version 3.43.0 and later */
-#define sqlite3_stmt_explain           sqlite3_api->stmt_explain
-/* Version 3.44.0 and later */
-#define sqlite3_get_clientdata         sqlite3_api->get_clientdata
-#define sqlite3_set_clientdata         sqlite3_api->set_clientdata
-/* Version 3.50.0 and later */
-#define sqlite3_setlk_timeout          sqlite3_api->setlk_timeout
-/* Version 3.51.0 and later */
-#define sqlite3_set_errmsg             sqlite3_api->set_errmsg
-#define sqlite3_db_status64            sqlite3_api->db_status64
-/* Version 3.52.0 and later */
-#define sqlite3_str_truncate           sqlite3_api->str_truncate
-#define sqlite3_str_free               sqlite3_api->str_free
-#define sqlite3_carray_bind            sqlite3_api->carray_bind
-#define sqlite3_carray_bind_v2         sqlite3_api->carray_bind_v2
-#endif /* !defined(SQLITE_CORE) && !defined(SQLITE_OMIT_LOAD_EXTENSION) */
-
-#if !defined(SQLITE_CORE) && !defined(SQLITE_OMIT_LOAD_EXTENSION)
-  /* This case when the file really is being compiled as a loadable
-  ** extension */
-# define SQLITE_EXTENSION_INIT1     const sqlite3_api_routines *sqlite3_api=0;
-# define SQLITE_EXTENSION_INIT2(v)  sqlite3_api=v;
-# define SQLITE_EXTENSION_INIT3     \
-    extern const sqlite3_api_routines *sqlite3_api;
-#else
-  /* This case when the file is being statically linked into the
-  ** application */
-# define SQLITE_EXTENSION_INIT1     /*no-op*/
-# define SQLITE_EXTENSION_INIT2(v)  (void)v; /* unused parameter */
-# define SQLITE_EXTENSION_INIT3     /*no-op*/
-#endif
-
-#endif /* SQLITE3EXT_H */
-/*** End of #include "sqlite3ext.h" ***/
 
 SQLITE_EXTENSION_INIT1
 #else
@@ -340662,34 +341259,34 @@ typedef struct map{
 /*
 ** creates a map given a comparison function
 */
-map map_make(cmp_func cmp);
+static map map_make(cmp_func cmp);
 
 /*
 ** inserts the element e into map m
 */
-void map_insert(map *m, void *e);
+static void map_insert(map *m, void *e);
 
 /*
 ** executes function iter over all elements in the map, in key increasing order
 */
-void map_iterate(map *m, map_iterator iter, void* p);
+static void map_iterate(map *m, map_iterator iter, void* p);
 
 /*
 ** frees all memory used by a map
 */
-void map_destroy(map *m);
+static void map_destroy(map *m);
 
 /*
 ** compares 2 integers
 ** to use with map_make
 */
-int int_cmp(const void *a, const void *b);
+static int int_cmp(const void *a, const void *b);
 
 /*
 ** compares 2 doubles
 ** to use with map_make
 */
-int double_cmp(const void *a, const void *b);
+static int double_cmp(const void *a, const void *b);
 
 #endif /* _MAP_H_ */
 
@@ -342231,6 +342828,7 @@ static void lastRowsFunc(sqlite3_context *context, int argc, sqlite3_value **arg
 ** functions.  This should be the only routine in this file with
 ** external linkage.
 */
+SQLITE_API
 int RegisterExtensionFunctions(sqlite3 *db){
   static const struct FuncDef {
      char *zName;
@@ -347391,7 +347989,11 @@ static int fsdirColumn(
           }
         }
 
-        sqlite3_result_text(ctx, aBuf, n, SQLITE_TRANSIENT);
+        if( n>0 ){
+          sqlite3_result_text(ctx, aBuf, n, SQLITE_TRANSIENT);
+        }else{
+          sqlite3_result_null(ctx);
+        }
         if( aBuf!=aStatic ) sqlite3_free(aBuf);
 #endif
       }else{
@@ -348003,7 +348605,9 @@ SQLITE_EXTENSION_INIT1
 **   iOTerm = -9223372036854775808   iTerm = 9223372036854775807
 **   iOStep = -9223372036854775808   iStep = 9223372036854775808  bDesc = 0
 */
+#if 0
 typedef unsigned char u8;
+#endif
 typedef struct series_cursor series_cursor;
 struct series_cursor {
   sqlite3_vtab_cursor base;  /* Base class - must be first */
@@ -348241,6 +348845,16 @@ static double seriesFloor(double r){
 }
 #endif
 
+/* Convert a floating point value to its closest integer.  Do so in
+** a way that avoids 'outside the range of representable values' warnings
+** from UBSAN.
+*/
+static sqlite3_int64 seriesRealToI64(double r){
+  if( r<-9223372036854774784.0 ) return SMALLEST_INT64;
+  if( r>+9223372036854774784.0 ) return LARGEST_INT64;
+  return (sqlite3_int64)r;
+}
+
 /*
 ** This method is called to "rewind" the series_cursor object back
 ** to the first row of output.  This method is always called at least
@@ -348363,7 +348977,7 @@ static int seriesFilter(
          && r>=(double)SMALLEST_INT64
          && r<=(double)LARGEST_INT64
         ){
-          iMin = iMax = (sqlite3_int64)r;
+          iMin = iMax = seriesRealToI64(r);
         }else{
           goto series_no_rows;
         }
@@ -348371,15 +348985,19 @@ static int seriesFilter(
         iMin = iMax = sqlite3_value_int64(argv[iArg++]);
       }
     }else{
-      if( idxNum & 0x0300 ){  /* value>X or value>=X */
+      if( idxNum & 0x0300 ){  /* value>X (0x200) or value>=X (0x100) */
         if( sqlite3_value_numeric_type(argv[iArg])==SQLITE_FLOAT ){
           double r = sqlite3_value_double(argv[iArg++]);
-          if( r<(double)SMALLEST_INT64 ){
+          if( r<=(double)SMALLEST_INT64 ){
             iMin = SMALLEST_INT64;
-          }else if( (idxNum & 0x0200)!=0 && r==seriesCeil(r) ){
-            iMin = (sqlite3_int64)seriesCeil(r)+1;
+          }else if( r>(double)LARGEST_INT64 ){
+            goto series_no_rows;
           }else{
-            iMin = (sqlite3_int64)seriesCeil(r);
+            iMin = seriesRealToI64(seriesCeil(r));
+            if( (idxNum & 0x0200)!=0 && r==seriesCeil(r) ){
+              if( iMin==LARGEST_INT64 ) goto series_no_rows;
+              iMin++;
+            }
           }
         }else{
           iMin = sqlite3_value_int64(argv[iArg++]);
@@ -348392,15 +349010,19 @@ static int seriesFilter(
           }
         }
       }
-      if( idxNum & 0x3000 ){   /* value<X or value<=X */
+      if( idxNum & 0x3000 ){   /* value<X (0x2000) or value<=X (0x1000) */
         if( sqlite3_value_numeric_type(argv[iArg])==SQLITE_FLOAT ){
           double r = sqlite3_value_double(argv[iArg++]);
-          if( r>(double)LARGEST_INT64 ){
+          if( r>=(double)LARGEST_INT64 ){
             iMax = LARGEST_INT64;
-          }else if( (idxNum & 0x2000)!=0 && r==seriesFloor(r) ){
-            iMax = ((sqlite3_int64)r)-1;
+          }else if( r<=(double)SMALLEST_INT64 ){
+            goto series_no_rows;
           }else{
-            iMax = (sqlite3_int64)seriesFloor(r);
+            iMax = seriesRealToI64(seriesFloor(r));
+            if( (idxNum & 0x2000)!=0 && r==seriesFloor(r) ){
+              if( iMax==SMALLEST_INT64 ) goto series_no_rows;
+              iMax--;
+            }
           }
         }else{
           iMax = sqlite3_value_int64(argv[iArg++]);
@@ -361618,7 +362240,7 @@ static void zipfileFinal(sqlite3_context *pCtx){
     eocd.nSize = p->cds.n;
     eocd.iOffset = p->body.n;
 
-    nZip = p->body.n + p->cds.n + ZIPFILE_EOCD_FIXED_SZ;
+    nZip = (i64)p->body.n + (i64)p->cds.n + ZIPFILE_EOCD_FIXED_SZ;
     aZip = (u8*)sqlite3_malloc64(nZip);
     if( aZip==0 ){
       sqlite3_result_error_nomem(pCtx);
@@ -361698,6 +362320,853 @@ int sqlite3_zipfile_init(
   return zipfileRegister(db);
 }
 /*** End of #include "zipfile.c" ***/
+
+#endif
+
+/*
+** VLE - Value Level Encryption
+*/
+#define SQLITE3MC_ENABLE_VLE 1
+#ifdef SQLITE3MC_ENABLE_VLE
+SQLITE_API
+int sqlite3_vle_init(sqlite3* db, char** pzErrMsg, const sqlite3_api_routines* pApi);
+/* #include "sqlite3mc_vle.c" */
+/*** Begin of #include "sqlite3mc_vle.c" ***/
+/*
+** Name:        sqlite3mc_vle.c
+** Purpose:     Value Level Encryption extension for SQLite
+** Author:      Ulrich Telle
+** Created:     2026-07-17
+** Copyright:   (c) 2026-2026 Ulrich Telle
+** License:     MIT
+*/
+
+/*
+** This extension implements "Value Level Encryption" (VLE).
+** Currently, 2 encryption algorithms are supported: chacha20 and ascon128.
+** The implementation accesses functions provided by the corresponding
+** cipher schemes. Therefore it can be compiled only, if at least one
+** cipher scheme is enabled. To use both encryption algorithms, both
+** cipher schemes need to be enabled.
+*/
+#if HAVE_CIPHER_CHACHA20 || HAVE_CIPHER_ASCON128
+
+/* #include <sqlite3ext.h> */
+
+SQLITE_EXTENSION_INIT1
+#include <string.h>
+#include <stdlib.h>
+#include <stdint.h>
+
+#define VLE_MAGIC_NUM    0x1CAFEBA9
+
+#define VLE_MAGIC        0xEC
+#define VLE_VERSION      1
+#define VLE_DEFAULT_ALGO CODEC_TYPE_CHACHA20
+#define VLE_OTK_LEN      64
+#define VLE_KEY_LEN      32
+#define VLE_SALT_LEN     16
+#define VLE_NONCE_LEN    16
+#define VLE_TAG_LEN      16
+#define VLE_KEY_ID_LEN    8
+
+typedef struct _VleContext
+{
+  unsigned char key[VLE_KEY_LEN];
+  unsigned char salt[VLE_SALT_LEN];
+  size_t  keyLen;
+  uint8_t algorithm;
+  uint8_t flags;
+  uint8_t nonceLen;
+  uint8_t tagLen;
+} VleContext;
+
+typedef struct _VleHeader
+{
+  uint8_t magic;
+  uint8_t version;
+  uint8_t algorithm;
+  uint8_t flags;
+} VleHeader;
+
+// ----------------- Function Prototypes -----------------
+
+static VleContext* vle_getContext(sqlite3* db);
+
+static int vle_packValue(sqlite3_value* val, unsigned char** out, int* out_len);
+static int vle_unpackValue(sqlite3_context* ctx, VleHeader* header, const unsigned char* buf, int len);
+
+static uint32_t vle_readU32BE(const unsigned char* p);
+static void vle_writeU64BE(unsigned char* p, uint64_t v);
+static uint64_t vle_readU64BE(const unsigned char* p);
+
+static void vle_parseHeader(const unsigned char* buffer, VleHeader* hdr);
+
+
+static void vle_setKey(sqlite3_context* ctx, int argc, sqlite3_value** argv);
+static void vle_encrypt(sqlite3_context* ctx, int argc, sqlite3_value** argv);
+static void vle_decrypt(sqlite3_context* ctx, int argc, sqlite3_value** argv);
+
+SQLITE_API int sqlite3_vle_init(sqlite3* db, char** pzErrMsg, const sqlite3_api_routines* pApi);
+
+static uint32_t
+vle_readU32BE(const unsigned char* p)
+{
+  return   ((uint32_t) p[3] <<  0)
+         | ((uint32_t) p[2] <<  8)
+         | ((uint32_t) p[1] << 16)
+         | ((uint32_t) p[0] << 24);
+}
+
+static void
+vle_writeU64BE(unsigned char* p, uint64_t v)
+{
+  p[7] = (v >>  0) & 0xFF;
+  p[6] = (v >>  8) & 0xFF;
+  p[5] = (v >> 16) & 0xFF;
+  p[4] = (v >> 24) & 0xFF;
+  p[3] = (v >> 32) & 0xFF;
+  p[2] = (v >> 40) & 0xFF;
+  p[1] = (v >> 48) & 0xFF;
+  p[0] = (v >> 56) & 0xFF;
+}
+
+static uint64_t
+vle_readU64BE(const unsigned char* p)
+{
+  return   ((uint64_t) p[7] <<  0)
+         | ((uint64_t) p[6] <<  8)
+         | ((uint64_t) p[5] << 16)
+         | ((uint64_t) p[4] << 24)
+         | ((uint64_t) p[3] << 32)
+         | ((uint64_t) p[2] << 40)
+         | ((uint64_t) p[1] << 48)
+         | ((uint64_t) p[0] << 56);
+}
+
+
+static void
+vle_parseHeader(const unsigned char* buffer, VleHeader* hdr)
+{
+  hdr->magic     = buffer[0];
+  hdr->version   = buffer[1];
+  hdr->algorithm = buffer[2];
+  hdr->flags     = buffer[3];
+}
+
+/* Option parser */
+
+typedef int (*VleOptionSetter)(const char* value, size_t valueLength, void* target);
+
+typedef struct
+{
+  const char* name;
+  VleOptionSetter  setter;
+  void* target;
+} VleOptionDef;
+
+
+/*
+** Find an option definition.
+**
+** Unknown options are deliberately ignored.
+*/
+static const VleOptionDef*
+vle_findOption(const VleOptionDef* table, const char* name, int nameLength)
+{
+  const VleOptionDef* opt;
+  for (opt = table; opt->name != 0; opt++)
+  {
+    if (sqlite3_strnicmp(opt->name, name, nameLength) == 0)
+      return opt;
+  }
+  return 0;
+}
+
+/*
+** Generic integer setter.
+*/
+static int
+vle_optionSetInt(const char* value, size_t valueLength, void* target)
+{
+  i64 v;
+  char buffer[64];
+
+  /*
+  ** sqlite3DecOrHexToI64() expects a zero terminated string.
+  ** The option parser itself does not require one, therefore only
+  ** the value part is copied temporarily.
+  */
+  if (valueLength >= sizeof(buffer))
+    return SQLITE_ERROR;
+
+  memcpy(buffer, value, valueLength);
+  buffer[valueLength] = 0;
+
+  if (sqlite3DecOrHexToI64(buffer, &v))
+    return SQLITE_ERROR;
+
+  *(int*)target = (int)v;
+
+  return SQLITE_OK;
+}
+
+/*
+** Parse option string.
+**
+** Format:
+**
+**     name=value,name=value,...
+**
+** Unknown names are ignored.
+*/
+static int
+vle_parseOptions(const char* options, size_t optionsLength, const VleOptionDef* table)
+{
+  const char* p = options;
+  const char* end = options + optionsLength;
+
+  while (p < end)
+  {
+    const char* nameStart = p;
+    const char* nameEnd;
+    const char* valueStart;
+    const char* valueEnd;
+
+    while (p < end && *p != '=' && *p != ',')
+      p++;
+
+    if (p == end || *p != '=')
+      return SQLITE_ERROR;
+
+    nameEnd = p++;
+
+    valueStart = p;
+
+    while (p < end && *p != ',')
+      p++;
+
+    valueEnd = p;
+
+    const VleOptionDef* opt = vle_findOption(table, nameStart, (int)(nameEnd - nameStart));
+
+    if (opt != 0 && opt->setter != 0)
+    {
+      int rc = opt->setter(valueStart, (size_t)(valueEnd - valueStart), opt->target);
+
+      if (rc != SQLITE_OK)
+        return rc;
+    }
+
+    if (p < end)
+      p++; /* skip comma */
+  }
+
+  return SQLITE_OK;
+}
+
+#define VLE_DEFAULT_SCOPE "@vle:default-scope"
+
+static void
+vle_getScope(sqlite3_value* argv, const unsigned char** scope, int* scopeLen)
+{
+  /* Retrieve scope if given, otherwise set default scope */
+  *scope = NULL;
+  *scopeLen = 0;
+  if (argv != NULL)
+  {
+    int scope_type = sqlite3_value_type(argv);
+    if (scope_type == SQLITE_TEXT || scope_type == SQLITE_BLOB)
+    {
+      *scopeLen = sqlite3_value_bytes(argv);
+      *scope = (const unsigned char*) sqlite3_value_blob(argv);
+    }
+  }
+  if (scopeLen == 0)
+  {
+    *scopeLen = (int) strlen(VLE_DEFAULT_SCOPE);
+    *scope = (const unsigned char*) VLE_DEFAULT_SCOPE;
+  }
+}
+
+static void
+vle_aeadEncrypt(const VleContext* ctx,
+                const unsigned char* data, int dataLen,
+                unsigned char* ctext, int ctextLen,
+                unsigned char* tag, int tagLen,
+                unsigned char* nonce, int nonceLen,
+                const unsigned char* scope, int scopeLen)
+{
+  uint8_t otk[64];
+  unsigned char digest[SHA512_DIGEST_SIZE];
+  sha512(scope, scopeLen, digest);
+  memcpy(otk, digest, 64);
+
+  switch (ctx->algorithm)
+  {
+#if HAVE_CIPHER_ASCON128
+    case CODEC_TYPE_ASCON128:
+    {
+      chacha20_rng(nonce, nonceLen);
+      AsconGenOtk(otk, ctx->key, nonce, VLE_MAGIC_NUM);
+
+      ascon_aead_encrypt(ctext, tag, ctext, ctextLen,
+                         data, dataLen, nonce, otk);
+      break;
+    }
+#endif
+    case CODEC_TYPE_CHACHA20:
+    default:
+    {
+      chacha20_rng(nonce, nonceLen);
+      uint32_t counter = vle_readU32BE(nonce + nonceLen - 4) ^ VLE_MAGIC_NUM;
+      chacha20_xor(otk, 64, ctx->key, nonce, counter);
+
+      chacha20_xor(ctext, ctextLen, otk + 32, nonce, counter + 1);
+      poly1305(data, dataLen + ctextLen, otk, tag);
+      break;
+    }
+  }
+}
+
+
+static int
+vle_aeadDecrypt(const VleContext* ctx,
+                const unsigned char* data, int dataLen,
+                unsigned char* ctext, int ctextLen,
+                const unsigned char* tag, int tagLen,
+                const unsigned char* nonce, int nonceLen,
+                const unsigned char* scope, int scopeLen)
+{
+  int rc = SQLITE_OK;
+  uint8_t otk[64];
+  unsigned char digest[SHA512_DIGEST_SIZE];
+  sha512(scope, scopeLen, digest);
+  memcpy(otk, digest, 64);
+
+  switch (ctx->algorithm)
+  {
+#if HAVE_CIPHER_ASCON128
+    case CODEC_TYPE_ASCON128:
+    {
+      AsconGenOtk(otk, ctx->key, nonce, VLE_MAGIC_NUM);
+
+      int tagOk = ascon_aead_decrypt(ctext, ctext, ctextLen,
+                                     data, dataLen,
+                                     tag, nonce, otk);
+      if (tagOk != 0)
+      {
+        rc = SQLITE_CORRUPT;
+      }
+      break;
+    }
+#endif
+    case CODEC_TYPE_CHACHA20:
+    {
+      uint8_t tagCalc[16];
+      uint32_t counter = vle_readU32BE(nonce + nonceLen - 4) ^ VLE_MAGIC_NUM;
+      chacha20_xor(otk, 64, ctx->key, nonce, counter);
+
+      poly1305(data, dataLen + ctextLen, otk, tagCalc);
+      chacha20_xor(ctext, ctextLen, otk + 32, nonce, counter + 1);
+      /* Verify the MAC */
+      if (poly1305_tagcmp(tag, tagCalc))
+      {
+        rc = SQLITE_CORRUPT;
+      }
+      break;
+    }
+    default:
+      rc = SQLITE_ERROR;
+      break;
+  }
+  sqlite3mcSecureZeroMemory(otk, 64);
+  return rc;
+}
+
+static const char* VLE_CONTEXT_KEY = "vle_context";
+
+// ---------- Helper Functions ----------
+
+static VleContext* vle_getContext(sqlite3* db)
+{
+  VleContext* ctx = sqlite3_get_clientdata(db, VLE_CONTEXT_KEY);
+  if (!ctx)
+  {
+    ctx = sqlite3_malloc(sizeof(VleContext));
+    memset(ctx, 0, sizeof(VleContext));
+    ctx->algorithm = CODEC_TYPE_CHACHA20;
+    ctx->flags = 0;
+    ctx->nonceLen = VLE_NONCE_LEN;
+    ctx->tagLen = VLE_TAG_LEN;
+    sqlite3_set_clientdata(db, VLE_CONTEXT_KEY, ctx, sqlite3_free);
+  }
+  return ctx;
+}
+
+// ---------- Payload Packing / Unpacking ----------
+
+static int
+vle_packValue(sqlite3_value* val, unsigned char** out, int* out_len)
+{
+  int type = sqlite3_value_type(val);
+  unsigned char tmp[8];
+  const void* payload = NULL;
+  uint32_t payloadLen = 0;
+
+  switch(type)
+  {
+    case SQLITE_NULL:
+      payloadLen = 0;
+      break;
+    case SQLITE_INTEGER:
+    {
+      int64_t v = sqlite3_value_int64(val);
+      vle_writeU64BE(tmp, (uint64_t) v);
+      payload = tmp;
+      payloadLen = 8;
+      break;
+    }
+    case SQLITE_FLOAT:
+    {
+      double d = sqlite3_value_double(val);
+      uint64_t bits;
+      memcpy(&bits, &d, 8);
+      vle_writeU64BE(tmp, bits);
+      payload = tmp;
+      payloadLen = 8;
+      break;
+    }
+    case SQLITE_TEXT:
+      payloadLen = sqlite3_value_bytes(val);
+      payload = sqlite3_value_text(val);
+      break;
+    case SQLITE_BLOB:
+      payloadLen = sqlite3_value_bytes(val);
+      payload = sqlite3_value_blob(val);
+      break;
+    default:
+      return SQLITE_MISUSE;
+  }
+
+  *out = sqlite3_malloc(payloadLen);
+  if (!*out)
+  {
+    return SQLITE_NOMEM;
+  }
+  if (payloadLen > 0)
+  {
+    memcpy(*out, payload, payloadLen);
+  }
+  *out_len = payloadLen;
+  return SQLITE_OK;
+}
+
+static int
+vle_unpackValue(sqlite3_context* ctx, VleHeader* hdr, const unsigned char* buffer, int len)
+{
+  uint8_t type = buffer[0];
+  uint32_t payloadLen = len;
+
+  const unsigned char* payload = buffer+1;
+
+  switch (type)
+  {
+    case SQLITE_NULL:
+      sqlite3_result_null(ctx);
+      break;
+
+    case SQLITE_INTEGER:
+    {
+      int64_t v = (int64_t) vle_readU64BE(payload);
+      sqlite3_result_int64(ctx, v);
+      break;
+    }
+
+    case SQLITE_FLOAT:
+    {
+      uint64_t bits = vle_readU64BE(payload);
+      double d;
+      memcpy(&d, &bits, 8);
+      sqlite3_result_double(ctx, d);
+      break;
+    }
+
+    case SQLITE_TEXT:
+      sqlite3_result_text(ctx,
+                          (const char*) payload,
+                          payloadLen,
+                          SQLITE_TRANSIENT);
+      break;
+
+    case SQLITE_BLOB:
+      sqlite3_result_blob(ctx,
+                          payload,
+                          payloadLen,
+                          SQLITE_TRANSIENT);
+      break;
+
+    default:
+      return SQLITE_CORRUPT;
+  }
+
+  return SQLITE_OK;
+}
+
+// ---------- SQL Functions ----------
+
+static void vle_setKey(sqlite3_context* ctx, int argc, sqlite3_value** argv)
+{
+  sqlite3* db = sqlite3_context_db_handle(ctx);
+  VleContext* vle = vle_getContext(db);
+  if (argc < 1)
+  {
+    sqlite3_result_error(ctx, "The key parameter is required", -1);
+    return;
+  }
+
+  /* Passphrase type must be TEXT or BLOB */
+  int pswdType = sqlite3_value_type(argv[0]);
+  if (pswdType != SQLITE_TEXT && pswdType != SQLITE_BLOB)
+  {
+    sqlite3_result_error(ctx, "The passphrase parameter must have type TEXT or BLOB", -1);
+    return;
+  }
+
+  /* Salt */
+  static unsigned char* saltDefault = (unsigned char*) "vle:default-salt";
+  int saltLen = 0;
+  const unsigned char* salt = NULL;
+  if (argc >= 2)
+  {
+    int saltType = sqlite3_value_type(argv[1]);
+    if (saltType == SQLITE_TEXT || saltType == SQLITE_BLOB || saltType == SQLITE_NULL)
+    {
+      if (saltType != SQLITE_NULL)
+      {
+        saltLen = sqlite3_value_bytes(argv[1]);
+        salt = sqlite3_value_blob(argv[1]);
+      }
+    }
+    else
+    {
+      sqlite3_result_error(ctx, "The salt parameter must have type TEXT or BLOB, but can be NULL", -1);
+      return;
+    }
+  }
+  if (saltLen == 0)
+  {
+    salt = saltDefault;
+    saltLen = (int) strlen((const char*) salt);
+  }
+
+  unsigned char digest[SHA256_DIGEST_SIZE];
+  sha256(salt, saltLen, digest);
+  memcpy(vle->salt, digest, sizeof(vle->salt));
+
+  /* Algorithm */
+  vle->algorithm = CODEC_TYPE_CHACHA20;
+  if (argc >= 3)
+  {
+    int algorithmType = sqlite3_value_type(argv[2]);
+    if (algorithmType == SQLITE_TEXT)
+    {
+      int algorithmLen = sqlite3_value_bytes(argv[2]);
+      const char* algorithm = (const char*) sqlite3_value_text(argv[2]);
+      if (sqlite3_strnicmp(algorithm, "chacha20", algorithmLen) == 0)
+      {
+        vle->algorithm = CODEC_TYPE_CHACHA20;
+      }
+      else if (sqlite3_strnicmp(algorithm, "ascon128", algorithmLen) == 0)
+      {
+        vle->algorithm = CODEC_TYPE_ASCON128;
+      }
+      else
+      {
+        sqlite3_result_error(ctx, "Unsupported cipher type", -1);
+        return;
+      }
+    }
+    else
+    {
+      sqlite3_result_error(ctx, "The algorithm parameter must have type TEXT", -1);
+      return;
+    }
+  }
+
+  /* Options */
+  int optionsLen = 0;
+  char* options = NULL;
+  if (argc >= 4)
+  {
+    int optionsType = sqlite3_value_type(argv[3]);
+    if (optionsType == SQLITE_TEXT)
+    {
+      optionsLen = sqlite3_value_bytes(argv[3]);
+    }
+    else
+    {
+      sqlite3_result_error(ctx, "The options parameter must have type TEXT", -1);
+      return;
+    }
+    if (optionsLen > 0)
+    {
+      options = sqlite3_malloc(optionsLen);
+      if (!options)
+      {
+        sqlite3_result_error_nomem(ctx);
+        return;
+      }
+      memcpy(options, sqlite3_value_text(argv[3]), (size_t) optionsLen);
+    }
+  }
+
+  char optionsUsed[256] = "";
+  int pswdLen = sqlite3_value_bytes(argv[0]);
+  const unsigned char* pswd = sqlite3_value_blob(argv[0]);
+  switch (vle->algorithm)
+  {
+#if HAVE_CIPHER_CHACHA20
+  case CODEC_TYPE_CHACHA20:
+    {
+      int kdfIter = CHACHA20_KDF_ITER_DEFAULT;
+      const VleOptionDef chacha20KeyOptions[] =
+      {
+          { "kdf_iter", vle_optionSetInt, &kdfIter },
+          { 0,          0,                0        }
+      };
+      vle_parseOptions(options, optionsLen, chacha20KeyOptions);
+      if (kdfIter < 1)
+      {
+        kdfIter = CHACHA20_KDF_ITER_DEFAULT;
+      }
+      sqlite3_snprintf(sizeof(optionsUsed), optionsUsed, "kdf_iter=%d", kdfIter);
+      fastpbkdf2_hmac_sha256(pswd, pswdLen,
+                             vle->salt, SALTLENGTH_CHACHA20,
+                             kdfIter,
+                             vle->key, KEYLENGTH_CHACHA20);
+      vle->keyLen = KEYLENGTH_CHACHA20;
+      break;
+  }
+#endif
+#if HAVE_CIPHER_ASCON128
+    case CODEC_TYPE_ASCON128:
+    {
+      int kdfIter = ASCON128_KDF_ITER_DEFAULT;
+      const VleOptionDef chacha20KeyOptions[] =
+      {
+          { "kdf_iter", vle_optionSetInt, &kdfIter },
+          { 0,          0,                0        }
+      };
+      vle_parseOptions(options, optionsLen, chacha20KeyOptions);
+      if (kdfIter < 1)
+      {
+        kdfIter = ASCON128_KDF_ITER_DEFAULT;
+      }
+      sqlite3_snprintf(sizeof(optionsUsed), optionsUsed, "kdf_iter=%d", kdfIter);
+      ascon_pbkdf2(vle->key, KEYLENGTH_ASCON128,
+                   (const uint8_t*) pswd, pswdLen,
+                   vle->salt, SALTLENGTH_ASCON128, kdfIter);
+      vle->keyLen = KEYLENGTH_ASCON128;
+      break;
+    }
+#endif
+    default:
+      sqlite3_result_error(ctx, "Selected algorithm not supported", -1);
+      return;
+  }
+
+  char* result = sqlite3_mprintf("Ok. Options(%s)", optionsUsed);
+  sqlite3_result_text(ctx, result, -1, sqlite3_free);
+  if (options != NULL)
+  {
+    sqlite3_free(options);
+  }
+}
+
+static void
+vle_encrypt(sqlite3_context* ctx, int argc, sqlite3_value** argv)
+{
+  sqlite3* db = sqlite3_context_db_handle(ctx);
+  VleContext* vle = vle_getContext(db);
+  if (argc < 1)
+  {
+    sqlite3_result_error(ctx, "sqlite3mc_vle_encrypt requires a value", -1);
+    return;
+  }
+  if (vle->keyLen == 0)
+  {
+    sqlite3_result_error(ctx, "VLE key not set", -1);
+    return;
+  }
+
+  /* Retrieve scope if given, otherwise set default scope */
+  int scopeLen = 0;
+  const unsigned char* scope = NULL;
+  vle_getScope((argc > 1) ? argv[1] : NULL, &scope, &scopeLen);
+
+  /* Pack Value */
+  unsigned char* payload = NULL;
+  int payloadLen = 0;
+  if (vle_packValue(argv[0], &payload, &payloadLen) != SQLITE_OK)
+  {
+    sqlite3_result_error(ctx, "sqlite3mc_vle_encrypt: Failed to pack value", -1);
+    return;
+  }
+
+  // Determine length of nonce and tag and total length
+  int nonceLen = vle->nonceLen;
+  int tagLen = vle->tagLen;
+  int totalLen = sizeof(VleHeader) + nonceLen + 1 + payloadLen + tagLen;
+
+  /* Allocate memory for buffer */
+  unsigned char* buffer = sqlite3_malloc(totalLen);
+  if (!buffer)
+  {
+    sqlite3_free(payload);
+    sqlite3_result_error_nomem(ctx);
+    return;
+  }
+
+  /* Fill header */
+  buffer[0] = VLE_MAGIC;
+  buffer[1] = VLE_VERSION;
+  buffer[2] = vle->algorithm;
+  buffer[3] = vle->flags;
+
+  /* Define positions in output buffer */
+  unsigned char* nonce = buffer + sizeof(VleHeader);
+  unsigned char* ciphertext = nonce + nonceLen;
+  unsigned char* tag = ciphertext + payloadLen + 1;
+
+  /* Output SQLite value type and value */
+  ciphertext[0] = (uint8_t) sqlite3_value_type(argv[0]);
+  memcpy(ciphertext + 1, payload, payloadLen + 1);
+
+  /* Encrypt */
+  vle_aeadEncrypt(vle,
+                  buffer, sizeof(VleHeader) + nonceLen,
+                  ciphertext, payloadLen + 1,
+                  tag, tagLen, nonce, nonceLen,
+                  scope, scopeLen);
+
+  sqlite3_result_blob(ctx, buffer, totalLen, sqlite3_free);
+  sqlite3_free(payload);
+}
+
+static void
+vle_decrypt(sqlite3_context* ctx, int argc, sqlite3_value** argv)
+{
+  sqlite3* db = sqlite3_context_db_handle(ctx);
+  VleContext* vle = vle_getContext(db);
+
+  /* Check type of value parameter, must be blob */
+  if (argc < 1 || sqlite3_value_type(argv[0]) != SQLITE_BLOB)
+  {
+    sqlite3_result_error(ctx, "sqlite3mc_vle_decrypt requires a BLOB", -1);
+    return;
+  }
+
+  /* Check whether key was set */
+  if (vle->keyLen == 0)
+  {
+    sqlite3_result_error(ctx, "VLE key not set", -1);
+    return;
+  }
+
+  /* Retrieve scope if given, otherwise set default scope */
+  int scopeLen = 0;
+  const unsigned char* scope = NULL;
+  vle_getScope((argc > 1) ? argv[1] : NULL, &scope, &scopeLen);
+
+  /* Retrieve value */
+  int blobLen = sqlite3_value_bytes(argv[0]);
+  const unsigned char* blob = (const unsigned char*) sqlite3_value_blob(argv[0]);
+  if (blobLen < sizeof(VleHeader))
+  {
+    sqlite3_result_error(ctx, "Encrypted content too short", -1);
+    return;
+  }
+
+  /* Make writable copy of value */
+  unsigned char* buffer = sqlite3_malloc(blobLen);
+  if (!buffer)
+  {
+    sqlite3_result_error_nomem(ctx);
+    return;
+  }
+  memcpy(buffer, blob, blobLen);
+
+  /* Parse header */
+  VleHeader hdr;
+  vle_parseHeader(buffer, &hdr);
+  if (hdr.magic != VLE_MAGIC)
+  {
+    sqlite3_result_error(ctx, "Invalid VLE header in encrypted value", -1);
+    return;
+  }
+
+  /* Determine required lenghts and offsets */
+  int nonceLen = vle->nonceLen;
+  int tagLen = vle->tagLen;
+  int payloadLen = blobLen - sizeof(VleHeader) - nonceLen - tagLen - 1;
+
+  unsigned char* nonce = buffer + sizeof(VleHeader);
+  unsigned char* ciphertext = nonce + nonceLen;
+  unsigned char* tag = ciphertext + payloadLen + 1;
+
+  /* Decrypt value and check tag */
+  int rc = vle_aeadDecrypt(vle,
+                           buffer, sizeof(VleHeader) + nonceLen,
+                           ciphertext, payloadLen + 1,
+                           tag, tagLen,
+                           nonce, nonceLen,
+                           scope, scopeLen);
+  if (rc != SQLITE_OK)
+  {
+    sqlite3_result_error(ctx, "AEAD authentication failed", -1);
+  }
+
+  /* Unpack value and set return value */
+  vle_unpackValue(ctx, &hdr, ciphertext, payloadLen);
+}
+
+/*
+** ----------------- SQLite Extension Init -----------------
+*/
+
+SQLITE_API
+int sqlite3_vle_init(sqlite3* db, char** pzErrMsg, const sqlite3_api_routines* pApi)
+{
+  SQLITE_EXTENSION_INIT2(pApi);
+
+  /* Define function sqlite3mc_vle_key(passphrase [, salt [, algoritm [, options]]]) */
+  sqlite3_create_function(db, "sqlite3mc_vle_key", 1, SQLITE_UTF8|SQLITE_DETERMINISTIC,
+                          NULL, vle_setKey, NULL, NULL);
+  sqlite3_create_function(db, "sqlite3mc_vle_key", 2, SQLITE_UTF8 | SQLITE_DETERMINISTIC,
+                          NULL, vle_setKey, NULL, NULL);
+  sqlite3_create_function(db, "sqlite3mc_vle_key", 3, SQLITE_UTF8 | SQLITE_DETERMINISTIC,
+                          NULL, vle_setKey, NULL, NULL);
+  sqlite3_create_function(db, "sqlite3mc_vle_key", 4, SQLITE_UTF8 | SQLITE_DETERMINISTIC,
+                          NULL, vle_setKey, NULL, NULL);
+
+  /* Define function sqlite3mc_vle_encrypt(value [, scope]) */
+  sqlite3_create_function(db, "sqlite3mc_vle_encrypt", 1, SQLITE_UTF8|SQLITE_DETERMINISTIC,
+                          NULL, vle_encrypt, NULL, NULL);
+  sqlite3_create_function(db, "sqlite3mc_vle_encrypt", 2, SQLITE_UTF8|SQLITE_DETERMINISTIC,
+                          NULL, vle_encrypt, NULL, NULL);
+
+  /* Define function sqlite3mc_vle_decrypt(value [, scope]) */
+  sqlite3_create_function(db, "sqlite3mc_vle_decrypt", 1, SQLITE_UTF8|SQLITE_DETERMINISTIC,
+                          NULL, vle_decrypt, NULL, NULL);
+  sqlite3_create_function(db, "sqlite3mc_vle_decrypt", 2, SQLITE_UTF8|SQLITE_DETERMINISTIC,
+                          NULL, vle_decrypt, NULL, NULL);
+
+  return SQLITE_OK;
+}
+
+#endif
+/*** End of #include "sqlite3mc_vle.c" ***/
 
 #endif
 
@@ -363676,6 +365145,12 @@ sqlite3mc_builtin_extensions(sqlite3* db)
   if (rc == SQLITE_OK)
   {
     rc = sqlite3_zipfile_init(db, &errmsg, NULL);
+  }
+#endif
+#ifdef SQLITE3MC_ENABLE_VLE
+  if (rc == SQLITE_OK)
+  {
+    rc = sqlite3_vle_init(db, &errmsg, NULL);
   }
 #endif
   return rc;
@@ -368304,5 +369779,112 @@ int SQLITE_CDECL TCLSH_MAIN(int argc, char **argv){
 }
 #endif /* TCLSH */
 /*** End of #include "tclsqlite.c" ***/
+
+#endif
+
+#ifdef SQLITE3MC_USE_DISPATCH_TABLE
+
+/*
+** Dispatch table
+*/
+
+static const sqlite3mc_core_routines sqlite3mcCoreApis =
+{
+  sqlite3_initialize,
+  sqlite3_shutdown,
+  sqlite3_config,
+  sqlite3_enable_load_extension,
+#ifndef SQLITE_OMIT_DEPRECATED
+  sqlite3_memory_alarm,
+#else
+  0,
+#endif
+#ifndef NDEBUG
+  sqlite3_mutex_held,
+  sqlite3_mutex_notheld,
+#else
+  0,
+  0,
+#endif
+  sqlite3_os_init,
+  sqlite3_os_end,
+
+#ifdef SQLITE_ENABLE_PREUPDATE_HOOK
+  sqlite3_preupdate_blobwrite,
+  sqlite3_preupdate_count,
+  sqlite3_preupdate_depth,
+  sqlite3_preupdate_hook,
+  sqlite3_preupdate_new,
+  sqlite3_preupdate_old,
+#else
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+#endif
+#ifdef SQLITE_ENABLE_SNAPSHOT
+  sqlite3_snapshot_cmp,
+  sqlite3_snapshot_free,
+  sqlite3_snapshot_get,
+  sqlite3_snapshot_open,
+  sqlite3_snapshot_recover,
+#else
+  0,
+  0,
+  0,
+  0,
+  0,
+#endif
+#ifdef SQLITE_ENABLE_STMT_SCANSTATUS
+  sqlite3_stmt_scanstatus,
+  sqlite3_stmt_scanstatus_v2,
+  sqlite3_stmt_scanstatus_reset,
+#else
+  0,
+  0,
+  0,
+#endif
+#if SQLITE_OS_WIN == 1
+  sqlite3_win32_set_directory,
+  sqlite3_win32_set_directory16,
+  sqlite3_win32_set_directory8,
+#else
+  0,
+  0,
+  0,
+#endif
+};
+
+static const sqlite3mc_api_routines sqlite3mcApis =
+{
+  sqlite3_activate_see,
+  sqlite3_key,
+  sqlite3_key_v2,
+  sqlite3_rekey,
+  sqlite3_rekey_v2,
+
+  sqlite3mc_version,
+  sqlite3mc_cipher_count,
+  sqlite3mc_cipher_index,
+  sqlite3mc_cipher_name,
+  sqlite3mc_cipher_name_copy,
+  sqlite3mc_config,
+  sqlite3mc_config_cipher,
+  sqlite3mc_codec_data,
+
+  sqlite3mc_vfs_create,
+  sqlite3mc_vfs_destroy,
+  sqlite3mc_vfs_shutdown,
+};
+
+/*
+** Global pointers to the dispatch tables
+*/
+
+const sqlite3_api_routines*    SQLITE3MC_API_TABLE_EXT  = &sqlite3Apis;
+const sqlite3mc_core_routines* SQLITE3MC_API_TABLE_CORE = &sqlite3mcCoreApis;
+const sqlite3mc_api_routines*  SQLITE3MC_API_TABLE_MC   = &sqlite3mcApis;
 
 #endif
