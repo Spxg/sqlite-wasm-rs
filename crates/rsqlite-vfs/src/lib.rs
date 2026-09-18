@@ -26,7 +26,7 @@ use ffi::*;
 #[macro_export]
 macro_rules! bail {
     ($ex:expr) => {
-        bail!($ex, SQLITE_ERROR);
+        $crate::bail!($ex, $crate::ffi::SQLITE_ERROR);
     };
     ($ex:expr, $code: expr) => {
         if $ex {
@@ -41,7 +41,7 @@ macro_rules! bail {
 #[macro_export]
 macro_rules! check_option {
     ($ex:expr) => {
-        check_option!($ex, SQLITE_ERROR)
+        $crate::check_option!($ex, $crate::ffi::SQLITE_ERROR)
     };
     ($ex:expr, $code: expr) => {
         if let Some(v) = $ex {
@@ -58,7 +58,7 @@ macro_rules! check_option {
 #[macro_export]
 macro_rules! check_result {
     ($ex:expr) => {
-        check_result!($ex, SQLITE_ERROR)
+        $crate::check_result!($ex, $crate::ffi::SQLITE_ERROR)
     };
     ($ex:expr, $code: expr) => {
         if let Ok(v) = $ex {
