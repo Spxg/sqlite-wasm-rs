@@ -69,10 +69,8 @@ pub unsafe extern "C" fn fill_entropy(buf: *mut u8, len: usize) -> i32 {
     }
 }
 
-// C callers may supply uninitialized storage, or a null pointer for length zero.
-// For accepted lengths, the caller must guarantee writable storage in a single
-// allocation and exclusive access for the call. Reject invalid lengths before
-// touching memory or constructing a slice.
+// Caller provides one exclusively writable allocation; null is allowed at zero
+// length. Initialize C output storage before exposing it as a Rust slice.
 unsafe fn output_buffer<'a>(buf: *mut u8, len: usize) -> Result<&'a mut [u8]> {
     if len == 0 {
         return Ok(&mut []);

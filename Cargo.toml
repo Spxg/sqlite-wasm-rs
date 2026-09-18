@@ -33,6 +33,19 @@ bindgen = { version = "0.72.1", optional = true }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.54"
+sqlite-wasm-vfs = "0.2"
+
+[[test]]
+name = "memory"
+required-features = ["wasm-bindgen"]
+
+[[test]]
+name = "sahpool"
+required-features = ["wasm-bindgen"]
+
+[[test]]
+name = "sqlite3mc"
+required-features = ["wasm-bindgen", "sqlite3mc"]
 
 [package.metadata.docs.rs]
 targets = ["wasm32-unknown-unknown"]
@@ -41,7 +54,6 @@ targets = ["wasm32-unknown-unknown"]
 resolver = "2"
 exclude = ["examples/host-js", "examples/host-c"]
 members = [
-  "tests",
   "crates/rsqlite-vfs",
   "crates/sqlite-wasm-libc",
   "crates/sqlite-wasm-vfs",

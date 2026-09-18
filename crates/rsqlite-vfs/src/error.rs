@@ -107,13 +107,9 @@ impl VfsErrorCode {
         }
     }
 
-    /// Converts without dropping extended bits. Normal backend implementations
-    /// should use named variants instead of constructing integer codes.
-    ///
-    /// Returns `None` for negative values or an unrecognized primary error code.
-    /// In particular, `SQLITE_OK`, `SQLITE_ROW`, `SQLITE_DONE`, and codes with
-    /// those primary values are rejected. Unrecognized extended bits on a known
-    /// primary error code are preserved for forward compatibility.
+    /// Converts an error code, preserving extended bits. Prefer named variants.
+    /// Rejects negative values and unknown/non-error primary codes, including
+    /// `SQLITE_OK`, `SQLITE_ROW` and `SQLITE_DONE`.
     ///
     /// ```
     /// use rsqlite_vfs::{VfsErrorCode, ffi::*};

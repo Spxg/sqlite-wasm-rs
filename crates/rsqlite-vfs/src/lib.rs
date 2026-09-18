@@ -70,11 +70,9 @@ pub fn random_name(randomness: impl FnOnce(&mut [u8]) -> usize) -> VfsResult<Str
         .collect())
 }
 
-/// An in-memory file implementation that stores data in fixed-size chunks. Suitable for temporary files.
-/// File sizes are limited by the platform's address space and available memory.
-/// Truncation only shrinks the file; attempting to extend it returns an error.
-/// Synchronization and locking are no-ops: this type provides neither persistence
-/// nor coordination between connections sharing a file.
+/// Chunked temporary storage, limited by address space and available memory.
+/// Truncation only shrinks. Sync and locks are no-ops: no persistence or
+/// coordination between connections.
 pub struct MemChunksFile {
     chunks: Vec<Box<[u8]>>,
     chunk_size: Option<usize>,
@@ -108,10 +106,7 @@ impl MemChunksFile {
         }
     }
 
-    /// Creates a file whose chunk size is the length of its first successful,
-    /// nonempty write. Empty or failed writes leave the chunk size undecided.
-    ///
-    /// Useful when the first write supplies a database page.
+    /// Uses the first successful nonempty write's length as the chunk size.
     pub fn waiting_for_write() -> Self {
         MemChunksFile {
             chunks: Vec::new(),
@@ -270,21 +265,18 @@ impl VfsFile for MemChunksFile {
     }
 }
 
-/// The core file-handle structure for a custom VFS, designed to be compatible with SQLite's C interface.
-///
-/// `szOsFile` must be set to the size of `SQLiteVfsFile`.
+/// C-compatible file handle. Set `szOsFile` to this type's size.
 #[repr(C)]
 pub struct SQLiteVfsFile {
-    /// The first field must be of type sqlite3_file.
-    /// In C layout, the pointer to SQLiteVfsFile is the pointer to io_methods.
+    /// SQLite header; must remain the first field.
     pub io_methods: sqlite3_file,
-    /// The vfs where the file is located, usually used to manage files.
+    /// Owning VFS.
     pub vfs: *mut sqlite3_vfs,
     /// Flags used to open the database.
     pub flags: i32,
     /// SQLite-owned filename, valid until xClose. Null for anonymous files.
     pub name_ptr: *const u8,
-    /// Length of the file name, on wasm32 platform, usize is u32.
+    /// Filename length in bytes.
     pub name_length: usize,
     /// An owned box of the selected `VfsStore::File` type, initialized by
     /// xOpen and consumed by xClose. Must not be accessed after close.
@@ -292,9 +284,8 @@ pub struct SQLiteVfsFile {
 }
 
 impl SQLiteVfsFile {
-    /// Casts a SQLite file pointer without dereferencing it or creating a borrow.
-    /// Before dereferencing the result, the caller must ensure the pointer refers
-    /// to a live, initialized `SQLiteVfsFile` and respect its lifetime and aliasing.
+    /// Casts without dereferencing. Dereferencing requires a live, initialized
+    /// `SQLiteVfsFile` and valid lifetime/aliasing.
     pub fn from_file(file: *mut sqlite3_file) -> *mut SQLiteVfsFile {
         file.cast()
     }
@@ -381,8 +372,7 @@ pub enum RegisterVfsError {
     NameConflict(String),
 }
 
-/// Checks if a VFS with the given name is already registered with SQLite and returns a pointer to it if found.
-/// May automatically initialize SQLite. The pointer does not retain the VFS.
+/// Looks up a VFS without retaining it. May initialize SQLite.
 ///
 /// # Safety
 /// Obey the linked SQLite library's global initialization and threading rules.
@@ -395,12 +385,9 @@ pub unsafe fn registered_vfs(vfs_name: &str) -> Result<Option<*mut sqlite3_vfs>,
     Ok((!vfs.is_null()).then_some(vfs))
 }
 
-/// Owns the allocations retained by a successful VFS registration.
-///
-/// There is deliberately no automatic cleanup on drop: SQLite may still use
-/// the VFS through open connections or files. Keep this handle for explicit
-/// cleanup, or use `into_raw` to retain the allocation for the process lifetime.
-/// Dropping the handle without unregistering leaves the VFS and its data alive.
+/// Owns a VFS registration. Drop leaves it and its data alive for SQLite.
+/// Keep the handle for explicit [`Self::unregister`], or use [`Self::into_raw`]
+/// for process-lifetime registration.
 #[must_use = "keep the registration for explicit cleanup, or call into_raw for permanent registration"]
 pub struct VfsRegistration<T> {
     allocations: core::mem::ManuallyDrop<VfsAllocations<T>>,
@@ -451,18 +438,14 @@ impl<T> VfsRegistration<T> {
         self.allocations.vfs
     }
 
-    /// Unregisters the VFS and releases its backend data, structure and name.
-    /// On failure, returns the unchanged handle with the error so cleanup can
-    /// be retried; no allocations are freed in that case.
+    /// Unregisters and frees the VFS, name and data. Failure returns the intact
+    /// handle and error for retry.
     ///
     /// # Safety
-    /// All connections and files using this VFS must have been closed, and no
-    /// callbacks may be running. No external references or saved SQLite pointers
-    /// may remain in use, including wrappers that delegate to this VFS. Serialize
-    /// this operation against lookup, registration and use of the VFS, and obey
-    /// SQLite's initialization and the backend's threading requirements.
-    /// The owned allocations must not have been freed or replaced through raw
-    /// pointers. Raw unregistration alone is allowed before this call.
+    /// Close all connections/files and retire callbacks, saved pointers and
+    /// delegating wrappers. Serialize with VFS lookup, registration and use;
+    /// obey SQLite initialization and backend threading rules. Owned allocations
+    /// must not have been freed or replaced; prior raw unregistration is allowed.
     pub unsafe fn unregister(self) -> Result<(), (Self, RegisterVfsError)> {
         unsafe {
             let code = sqlite3_vfs_unregister(self.allocations.vfs);
@@ -481,25 +464,20 @@ impl<T> VfsRegistration<T> {
     }
 }
 
-/// Registers a custom VFS implementation, rejecting empty names and names already in use.
-/// The returned handle supports explicit cleanup once SQLite has stopped using
-/// the VFS. Dropping it does not unregister or free the VFS.
+/// Registers a VFS, rejecting empty or occupied names.
+/// The returned handle requires explicit cleanup; drop does not unregister it.
 ///
 /// # Safety
 ///
-/// The caller must verify that `V::vfs`, `IO::METHODS`, and their callbacks form
-/// a valid SQLite VFS: versions, file allocation size/layout, and application
-/// data types must match. `V::vfs` must preserve the supplied name and app-data
-/// pointers without taking ownership of or freeing their allocations.
-/// All resources used by callbacks must remain valid while SQLite can use them,
-/// including through open files after unregistration. Access must obey the
-/// threading and aliasing requirements of SQLite and the chosen backend;
-/// single-thread mode also requires serialization with all other SQLite use.
-/// Serialize this entire operation, including the name lookup and `V::vfs`
-/// construction, against other registrations of the same name (including raw C
-/// registrations). The constructor must not reentrantly register that name.
-/// SQLite's internal registry mutex protects individual calls, not this combined
-/// check-and-register operation. This requirement also applies in serialized mode.
+/// `V::vfs`, `IO::METHODS` and callbacks must agree on versions, file size/layout
+/// and app-data types. The constructor must preserve supplied name/app-data
+/// pointers without taking ownership. Callback resources must outlive all uses,
+/// including open files after raw unregistration.
+///
+/// Obey SQLite/backend threading and aliasing rules; single-thread mode requires
+/// serialization with all SQLite use. In every mode, serialize this entire
+/// lookup-and-register operation against same-name registrations, including C
+/// callers. The constructor must not reentrantly register that name.
 pub unsafe fn register_vfs<IO: SQLiteIoMethods, V: SQLiteVfs<IO>>(
     vfs_name: &str,
     app_data: <IO::Store as VfsStore>::AppData,
@@ -599,9 +577,8 @@ pub struct OpenedFile<F> {
     pub access: OpenAccess,
 }
 
-/// A wrapper for the `pAppData` pointer in `sqlite3_vfs`, providing a safe way
-/// to manage VFS-specific application data. This wrapper imposes no threading
-/// policy: sharing and synchronization are determined by `T` and the backend.
+/// Owns `sqlite3_vfs::pAppData`. Threading and synchronization follow `T`
+/// and the backend; this wrapper adds neither.
 pub struct VfsAppData<T> {
     data: T,
 }
@@ -611,13 +588,10 @@ impl<T> VfsAppData<T> {
     /// SQLite may independently mutate the registry's `pNext` field.
     ///
     /// # Safety
-    /// `vfs` must be valid and aligned, and its `pAppData` field must not change
-    /// during this call. `pAppData` must point to a live, properly aligned
-    /// `VfsAppData<T>` with exactly this `T` for the entire returned lifetime `'a`.
-    /// The caller chooses that lifetime and must prevent premature reclamation.
-    /// Access must obey Rust's shared
-    /// reference rules and the backend's threading requirements; this wrapper
-    /// does not make non-thread-safe data safe to share between threads.
+    /// `vfs` must be valid and aligned, with `pAppData` unchanged during this
+    /// call. It must point to an aligned `VfsAppData<T>` of exactly this type,
+    /// live for the caller-chosen `'a`. Obey Rust shared-reference rules and
+    /// backend threading requirements.
     pub unsafe fn get<'a>(vfs: *const sqlite3_vfs) -> &'a Self {
         unsafe { &*core::ptr::addr_of!((*vfs).pAppData).read().cast() }
     }
@@ -658,12 +632,9 @@ impl<T> Deref for VfsAppData<T> {
     }
 }
 
-/// I/O on an opened backend file handle. Each successful open returns its own
-/// handle, which may share underlying file data with other handles.
-///
-/// File offsets and sizes are byte counts independent of the platform's pointer width.
-/// Buffers remain limited by the address space; implementations must return an error
-/// when a requested offset or size exceeds their storage limits, never truncate it.
+/// I/O on an independently opened handle; underlying file data may be shared.
+/// Offsets/sizes are byte counts independent of pointer width. Reject values
+/// beyond backend limits rather than truncating them; buffers remain address-space limited.
 pub trait VfsFile {
     /// Optional preallocation hint, never a request to shrink the file.
     /// Return true when handled, false when unsupported. This is only an
@@ -684,13 +655,10 @@ pub trait VfsFile {
 
     /// Reads at most `buf.len()` bytes, returning the number written to `buf`.
     ///
-    /// Returns zero at or beyond EOF, or for an empty buffer. The returned count
-    /// must not exceed `buf.len()`. Implementations should read as much as is
-    /// available to fill the buffer; a short read is treated as EOF, not retried.
-    /// The unread remainder need not be zero-filled by the implementation:
-    /// `xRead` zero-fills it and returns `SQLITE_IOERR_SHORT_READ`.
-    /// Return `Ok(count)` for EOF, not an error with `SQLITE_IOERR_SHORT_READ`:
-    /// without a count, `xRead` cannot identify and zero-fill the unread tail.
+    /// Fill as much as available; return zero at/beyond EOF or for an empty buffer.
+    /// Short reads mean EOF and are not retried. Return `Ok(count)`, never
+    /// `IoShortRead`: `xRead` needs the count to zero-fill the unread tail and
+    /// report `SQLITE_IOERR_SHORT_READ`.
     fn read(&mut self, buf: &mut [u8], offset: u64) -> VfsResult<usize>;
 
     /// Writes the entire buffer or returns an error; partial success must not
@@ -740,26 +708,20 @@ pub trait VfsStore {
         None
     }
 
-    /// Opens a file for every `xOpen`, including when it already exists.
-    /// Honor SQLite's open flags, creating a missing file only with
-    /// `SQLITE_OPEN_CREATE` and rejecting an existing file when both
-    /// `SQLITE_OPEN_CREATE` and `SQLITE_OPEN_EXCLUSIVE` are set.
-    /// Report the actual access mode in `OpenedFile`, including read-only
-    /// fallback. Never upgrade a read-only request to read-write.
-    /// The handle must retain its underlying resource
-    /// until closed, independently of later changes to the file namespace.
-    /// On failure, clean up partial resources before returning: no close follows.
+    /// Returns a fresh handle for each `xOpen`. Create only with CREATE;
+    /// CREATE | EXCLUSIVE must reject existing files. Report actual access in
+    /// `OpenedFile`; read-only fallback is allowed, read-write upgrades are not.
+    /// Keep the resource alive until close, regardless of namespace changes.
+    /// Clean up failed opens here: no close follows.
     fn open_file(
         data: &Self::AppData,
         request: OpenRequest<'_>,
     ) -> VfsResult<OpenedFile<Self::File>>;
 
-    /// Closes an opened handle, even when returning an error.
-    /// The backend owns DELETEONCLOSE semantics: ensure the opened resource is
-    /// removed, not an unrelated replacement now using the same name. Native
-    /// backends may already have unlinked temporary files at open time.
+    /// Closes the handle even on error. DELETEONCLOSE must remove the opened
+    /// resource, not a same-name replacement; unlinking at open is allowed.
     /// `name` is absent for anonymous opens; `options` is the original request,
-    /// not the actual access mode reported by `OpenedFile`.
+    /// not the actual access reported by `OpenedFile`.
     fn close_file(
         data: &Self::AppData,
         name: Option<&str>,
@@ -795,9 +757,7 @@ pub trait OsCallback {
     fn epoch_timestamp_in_ms(&self) -> VfsResult<i64>;
 }
 
-/// A trait that abstracts the `sqlite3_vfs` struct, allowing for a more idiomatic Rust implementation.
-///
-/// Defaults translate the C interface to safe, typed `VfsStore` delegates.
+/// SQLite VFS callbacks, delegating to typed `VfsStore` methods by default.
 /// See the [SQLite VFS contract](https://www.sqlite.org/c3ref/vfs.html).
 ///
 /// # Raw callback safety
@@ -827,13 +787,10 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
     ///
     /// # Safety
     ///
-    /// `vfs_name` must point to a valid, NUL-terminated name and `app_data` to a
-    /// valid `VfsAppData<<IO::Store as VfsStore>::AppData>`. They must remain alive for every use of
-    /// the VFS and its open files. The caller must verify that the selected
-    /// versions, method table, file layout, and callback implementations agree,
-    /// and uphold their threading and aliasing requirements when using the VFS.
-    /// When used by `register_vfs`, overrides must also preserve its supplied
-    /// pointers and allocation ownership as documented there.
+    /// `vfs_name` must be NUL-terminated and `app_data` must point to a valid
+    /// `VfsAppData<<IO::Store as VfsStore>::AppData>`; both must outlive the VFS
+    /// and open files. Versions, method table, layout and callbacks must agree.
+    /// Obey their threading/aliasing rules and [`register_vfs`]'s ownership contract.
     unsafe fn vfs(
         vfs_name: *const ::core::ffi::c_char,
         app_data: *mut VfsAppData<<IO::Store as VfsStore>::AppData>,
@@ -1174,12 +1131,8 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
     }
 }
 
-/// A trait that abstracts the `sqlite3_io_methods` struct, allowing for a more idiomatic Rust implementation.
-///
-/// Default callbacks delegate locking and synchronization to `VfsFile`.
-/// Implementing this trait alone does not provide multi-connection locking or WAL
-/// shared-memory support: the backend must implement its lock policy explicitly,
-/// and override the shared-memory method table if needed.
+/// SQLite I/O callbacks, delegating to `VfsFile` by default.
+/// The backend supplies locking/sync; WAL requires shared-memory overrides.
 /// See the [SQLite I/O contract](https://www.sqlite.org/c3ref/io_methods.html).
 ///
 /// # Raw callback safety

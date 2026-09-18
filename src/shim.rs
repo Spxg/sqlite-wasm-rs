@@ -205,10 +205,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_calloc(num: c_size_t, size: c_size_t) 
     }
 }
 
-/// SQLite OS initialization entry point.
-///
-/// This function is called by SQLite when it is initialized. It sets up the
-/// default VFS for the environment, which in this case is the in-memory VFS.
+/// Installs the default memory VFS during SQLite initialization.
 #[no_mangle]
 pub unsafe extern "C" fn sqlite3_os_init() -> core::ffi::c_int {
     unsafe {
@@ -219,10 +216,7 @@ pub unsafe extern "C" fn sqlite3_os_init() -> core::ffi::c_int {
     }
 }
 
-/// SQLite OS shutdown entry point.
-///
-/// This function is called by SQLite when it is shut down. It cleans up
-/// any resources allocated by `sqlite3_os_init`.
+/// Reclaims the memory VFS during SQLite shutdown.
 #[no_mangle]
 pub unsafe extern "C" fn sqlite3_os_end() -> core::ffi::c_int {
     unsafe {
