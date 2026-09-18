@@ -2,7 +2,7 @@
 name = "sqlite-wasm-rs"
 links = "wsqlite3"
 version = "0.5.5"
-authors = ["Spxg <unsafe@outlook.es>"]
+authors = ["Spxg <noz@live.com>"]
 repository = "https://github.com/Spxg/sqlite-wasm-rs"
 description = "`wasm32-unknown-unknown` bindings to the libsqlite3 library."
 categories = ["development-tools::ffi", "wasm", "database"]
