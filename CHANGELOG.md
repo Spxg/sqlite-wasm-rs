@@ -5,6 +5,9 @@
 
 ### Added
 
+* `SQLITE_WASM_RS_SOURCE_DIR` selects a custom SQLite or SQLite3MC amalgamation
+  directory for compilation and optional binding generation.
+
 * C ABI host hooks for custom `wasm32-unknown-unknown` environments. The
   default `wasm-bindgen` feature preserves the JavaScript adapter; disabling it
   removes the core library's `wasm-bindgen` and `js-sys` dependencies. A custom

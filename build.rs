@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 // SQLite compile flags tuned for WASM: no threads/dlopen, keep common extensions.
 const FULL_FEATURED: [&str; 23] = [
     "-DSQLITE_OS_OTHER",
@@ -32,26 +34,49 @@ const FULL_FEATURED: [&str; 23] = [
 const SQLITE3_MC_FEATURED: [&str; 2] = ["-D__WASM__", "-DARGON2_NO_THREADS"];
 
 const UPDATE_BINDGEN_ENV: &str = "SQLITE_WASM_RS_UPDATE_BINDGEN";
+const SOURCE_DIR_ENV: &str = "SQLITE_WASM_RS_SOURCE_DIR";
 
 fn main() {
     println!("cargo::rerun-if-env-changed={UPDATE_BINDGEN_ENV}");
+    println!("cargo::rerun-if-env-changed={SOURCE_DIR_ENV}");
     println!("cargo::rerun-if-changed=shim");
 
     #[cfg(feature = "sqlite3mc")]
-    println!("cargo::rerun-if-changed=sqlite3mc");
-
+    let (default_dir, source_name, header_name) = (
+        "sqlite3mc",
+        "sqlite3mc_amalgamation.c",
+        "sqlite3mc_amalgamation.h",
+    );
     #[cfg(not(feature = "sqlite3mc"))]
-    println!("cargo::rerun-if-changed=sqlite3");
+    let (default_dir, source_name, header_name) = ("sqlite3", "sqlite3.c", "sqlite3.h");
 
-    compile();
+    let source_dir = match std::env::var_os(SOURCE_DIR_ENV) {
+        Some(dir) => {
+            assert!(!dir.is_empty(), "{SOURCE_DIR_ENV} must not be empty");
+            PathBuf::from(dir)
+        }
+        None => PathBuf::from(default_dir),
+    };
+    let source = source_dir.join(source_name);
+    let header = source_dir.join(header_name);
+    for file in [&source, &header] {
+        assert!(
+            file.is_file(),
+            "SQLite amalgamation file not found: {} (check {SOURCE_DIR_ENV} and the sqlite3mc feature)",
+            file.display()
+        );
+    }
+    // Watch the directory too, including any headers used by a custom amalgamation.
+    println!("cargo::rerun-if-changed={}", source_dir.display());
+
+    compile(&source);
 
     #[cfg(feature = "bindgen")]
     {
         let update_bindgen = std::env::var(UPDATE_BINDGEN_ENV).is_ok();
-        let output =
-            std::path::PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR env not set"))
-                .join("bindgen.rs");
-        bindgen(&output);
+        let output = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR env not set"))
+            .join("bindgen.rs");
+        bindgen(&header, &output);
 
         if update_bindgen {
             #[cfg(not(feature = "sqlite3mc"))]
@@ -64,12 +89,7 @@ fn main() {
 }
 
 #[cfg(feature = "bindgen")]
-fn bindgen(output: &std::path::PathBuf) {
-    #[cfg(not(feature = "sqlite3mc"))]
-    const SQLITE3_HEADER: &str = "sqlite3/sqlite3.h";
-    #[cfg(feature = "sqlite3mc")]
-    const SQLITE3_HEADER: &str = "sqlite3mc/sqlite3mc_amalgamation.h";
-
+fn bindgen(header: &Path, output: &Path) {
     use bindgen::callbacks::{IntKind, ParseCallbacks};
 
     #[derive(Debug)]
@@ -94,7 +114,11 @@ fn bindgen(output: &std::path::PathBuf) {
         .disable_nested_struct_naming()
         .generate_cstr(true)
         .trust_clang_mangling(false)
-        .header(SQLITE3_HEADER)
+        .header(
+            header
+                .to_str()
+                .expect("SQLite header path must be valid UTF-8"),
+        )
         .parse_callbacks(Box::new(SqliteTypeChooser));
 
     bindings = bindings
@@ -189,7 +213,7 @@ fn bindgen(output: &std::path::PathBuf) {
     bindings.write_to_file(output).unwrap();
 }
 
-fn compile() {
+fn compile(source: &Path) {
     const C_SOURCE: [&str; 36] = [
         // string
         "string/memchr.c",
@@ -235,11 +259,6 @@ fn compile() {
         "internal/shgetc.c",
     ];
 
-    #[cfg(not(feature = "sqlite3mc"))]
-    const SQLITE3_SOURCE: &str = "sqlite3/sqlite3.c";
-    #[cfg(feature = "sqlite3mc")]
-    const SQLITE3_SOURCE: &str = "sqlite3mc/sqlite3mc_amalgamation.c";
-
     let mut cc = cc::Build::new();
     cc.warnings(false)
         .flag("-Wno-macro-redefined")
@@ -247,7 +266,7 @@ fn compile() {
         .include("shim/musl/arch/generic")
         .include("shim/musl/include")
         .file("shim/printf/printf.c")
-        .file(SQLITE3_SOURCE)
+        .file(source)
         .files(C_SOURCE.map(|s| format!("shim/musl/{s}")))
         .flag("-DPRINTF_ALIAS_STANDARD_FUNCTION_NAMES_HARD")
         .flag("-include")
