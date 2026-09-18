@@ -7,7 +7,7 @@ const module = await WebAssembly.compile(await readFile(path));
 for (const entry of WebAssembly.Module.imports(module)) {
     if (entry.module !== 'env') throw new Error(`Unexpected import: ${entry.module}.${entry.name}`);
 }
-// Status codes from shim/host.h, unrelated to SQLite result codes.
+// Status codes from sqlite-wasm-rs.h, unrelated to SQLite result codes.
 const OK = 0, UNAVAILABLE = 2, INVALID_TIME = 3;
 let memory;
 function secureRandom(ptr, len) {

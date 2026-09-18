@@ -28,7 +28,9 @@ pub extern "C" fn sleep(seconds: u64, nanoseconds: u32) {
 
 #[unsafe(export_name = "rust_sqlite_wasm_host_random")]
 pub unsafe extern "C" fn random(buf: *mut u8, len: usize) -> usize {
-    let buf = unsafe { output_buffer(buf, len) };
+    let Ok(buf) = (unsafe { output_buffer(buf, len) }) else {
+        return 0;
+    };
     if fill_entropy_impl(buf).is_err() {
         // Preserve the non-cryptographic VFS fallback, never used for encryption.
         for byte in buf.iter_mut() {
@@ -61,22 +63,26 @@ extern "C" {
 
 #[unsafe(export_name = "rust_sqlite_wasm_host_fill_entropy")]
 pub unsafe extern "C" fn fill_entropy(buf: *mut u8, len: usize) -> i32 {
-    let buf = unsafe { output_buffer(buf, len) };
-    match fill_entropy_impl(buf) {
+    match unsafe { output_buffer(buf, len) }.and_then(fill_entropy_impl) {
         Ok(()) => OK,
         Err(error) => error as i32,
     }
 }
 
 // C callers may supply uninitialized storage, or a null pointer for length zero.
-// The caller must guarantee writable storage and exclusive access for the call.
-unsafe fn output_buffer<'a>(buf: *mut u8, len: usize) -> &'a mut [u8] {
+// For accepted lengths, the caller must guarantee writable storage in a single
+// allocation and exclusive access for the call. Reject invalid lengths before
+// touching memory or constructing a slice.
+unsafe fn output_buffer<'a>(buf: *mut u8, len: usize) -> Result<&'a mut [u8]> {
     if len == 0 {
-        return &mut [];
+        return Ok(&mut []);
+    }
+    if len > isize::MAX as usize || buf.is_null() {
+        return Err(Error::Unavailable);
     }
     unsafe {
         buf.write_bytes(0, len);
-        core::slice::from_raw_parts_mut(buf, len)
+        Ok(core::slice::from_raw_parts_mut(buf, len))
     }
 }
 
@@ -133,4 +139,29 @@ fn yday_from_date(date: &Date) -> u32 {
     let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
     let days = if leap { LEAP } else { REGULAR };
     days[date.get_month() as usize] + date.get_date() - 1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    #[wasm_bindgen_test]
+    fn random_buffer_boundaries() {
+        unsafe {
+            assert_eq!(random(core::ptr::null_mut(), 0), 0);
+            assert_eq!(fill_entropy(core::ptr::null_mut(), 0), OK);
+            assert_eq!(random(core::ptr::null_mut(), 1), 0);
+            assert_eq!(
+                fill_entropy(core::ptr::null_mut(), 1),
+                Error::Unavailable as i32
+            );
+            let mut byte = 42;
+            for len in [isize::MAX as usize + 1, usize::MAX] {
+                assert_eq!(random(&mut byte, len), 0);
+                assert_eq!(fill_entropy(&mut byte, len), Error::Unavailable as i32);
+                assert_eq!(byte, 42);
+            }
+        }
+    }
 }

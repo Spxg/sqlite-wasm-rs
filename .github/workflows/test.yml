@@ -51,6 +51,9 @@ jobs:
         printf "sqlite-wasm-rs = { path = \"..\" }\n" >> Cargo.toml
         printf "rsqlite-vfs = { path = \"../crates/rsqlite-vfs\" }\n" >> Cargo.toml
         printf "sqlite-wasm-vfs = { path = \"../crates/sqlite-wasm-vfs\" }\n" >> Cargo.toml
+        # xtask launches nested Cargo commands; enable the adapter in the dependency itself.
+        sed -i '/^sqlite-wasm-rs = /s/default-features = false/default-features = false, features = ["wasm-bindgen"]/' diesel/Cargo.toml
+        grep -E '^sqlite-wasm-rs = .*features = \["wasm-bindgen"\]' diesel/Cargo.toml
         wasm_bindgen_version=$(cargo metadata --format-version 1 --filter-platform wasm32-unknown-unknown --no-default-features --features diesel/sqlite | jq -er '[.packages[] | select(.name == "wasm-bindgen") | .version] | unique | if length == 1 then .[0] else error("expected one wasm-bindgen version") end')
         cargo install wasm-bindgen-cli --version "$wasm_bindgen_version" --locked
         DATABASE_URL=":memory:" cargo xtask run-tests --wasm sqlite --no-example-schema-check -- --no-fail-fast
@@ -69,7 +72,7 @@ jobs:
         printf "sqlite-wasm-rs = { path = \"..\" }\n" >> Cargo.toml
         printf "rsqlite-vfs = { path = \"../crates/rsqlite-vfs\" }\n" >> Cargo.toml
         printf "sqlite-wasm-vfs = { path = \"../crates/sqlite-wasm-vfs\" }\n" >> Cargo.toml
-        WASM_BINDGEN_TEST_TIMEOUT=60 wasm-pack test --node --features modern-full
+        WASM_BINDGEN_TEST_TIMEOUT=60 wasm-pack test --node --features modern-full,sqlite-wasm-rs/wasm-bindgen
 
   test_bindgen:
     runs-on: ubuntu-latest

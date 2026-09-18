@@ -83,7 +83,7 @@ enabling atomics does not make SQLite thread-safe.
 sqlite-wasm-rs = { version = "0.5", default-features = false }
 ```
 
-Provide the five C ABI hooks declared in [`shim/host.h`](./shim/host.h)
+Provide the five C ABI hooks declared in [`sqlite-wasm-rs.h`](https://github.com/Spxg/sqlite-wasm-rs/blob/master/sqlite-wasm-rs.h)
 for time, sleep, VFS randomness, secure entropy and local-time conversion.
 The core handles the C shim and default memory VFS; the adapter chooses how to
 communicate with its environment. No runtime host registration is needed.
@@ -95,6 +95,14 @@ C or Rust, or supplied directly as Wasm imports from module `env`.
 The example configures the linker to allow exactly these imports.
 The `bindgen` feature only generates
 SQLite C bindings and does not enable wasm-bindgen.
+
+When using rusqlite or Diesel with the JavaScript adapter, explicitly enable
+`sqlite-wasm-rs/wasm-bindgen`: these libraries disable our default features.
+An application can enable it with a direct dependency:
+
+```toml
+sqlite-wasm-rs = { version = "0.5", default-features = false, features = ["wasm-bindgen"] }
+```
 
 ## Use custom SQLite sources
 
