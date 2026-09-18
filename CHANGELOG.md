@@ -5,6 +5,11 @@
 
 ### Added
 
+* C ABI host hooks for custom `wasm32-unknown-unknown` environments. The
+  default `wasm-bindgen` feature preserves the JavaScript adapter; disabling it
+  removes the core library's `wasm-bindgen` and `js-sys` dependencies. A custom
+  host example runs SQLite with ordinary Wasm imports and no generated glue.
+
 * Public, doc-hidden `test_suite` with reusable file and store conformance checks
   for custom VFS implementations.
 
@@ -12,6 +17,10 @@
   implementation and its filesystem bindings to be disabled.
 
 ### Changed
+
+* **Breaking:** Replace `sqlite_wasm_rs::utils` with `sqlite_wasm_rs::vfs`,
+  re-exporting the complete `rsqlite-vfs` API. Access `MemVfsError` and
+  `MemVfsUtil` through `sqlite_wasm_rs::vfs::memvfs` instead of the crate root.
 
 * Align `code_to_str` with `libsqlite3-sys` by using SQLite's own error messages.
 

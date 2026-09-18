@@ -52,7 +52,7 @@ fn test_memory_vfs_util() {
     let ret = unsafe { sqlite3_close(db1) };
     assert_eq!(SQLITE_OK, ret);
 
-    let util = unsafe { sqlite_wasm_rs::MemVfsUtil::get().unwrap() };
+    let util = unsafe { vfs::memvfs::MemVfsUtil::get().unwrap() };
     assert!(util.exists("test_memory_vfs_util.db"));
     assert!(!util.exists("missing-memory-util.db"));
     assert!(!util.delete_db("missing-memory-util.db"));
@@ -67,11 +67,14 @@ fn test_memory_vfs_util() {
             let result = if checked {
                 util.import_db(&name, &db)
             } else {
-                let page_size = utils::check_import_db(&db).unwrap();
+                let page_size = vfs::check_import_db(&db).unwrap();
                 util.import_db_unchecked(&name, &db, page_size)
             };
             if length == 1017 {
-                assert!(matches!(result, Err(MemVfsError::InvalidFilename)));
+                assert!(matches!(
+                    result,
+                    Err(vfs::memvfs::MemVfsError::InvalidFilename)
+                ));
                 assert!(!util.exists(&name));
             } else {
                 result.unwrap();

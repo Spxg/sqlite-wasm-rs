@@ -82,6 +82,24 @@ jobs:
         wasm-pack test --node --features bindgen
         wasm-pack test --node --features bindgen,sqlite3mc
 
+  test_custom_host:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        features: ["", "sqlite3mc", "bindgen", "bindgen,sqlite3mc"]
+    steps:
+    - uses: actions/checkout@v4
+    - name: Test without wasm-bindgen
+      working-directory: examples/custom-host
+      run: |
+        rustup target add wasm32-unknown-unknown
+        cargo build --target wasm32-unknown-unknown --features '${{ matrix.features }}'
+        node run.mjs
+        cargo tree --target wasm32-unknown-unknown --edges normal --features '${{ matrix.features }}' > dependencies.txt
+        if grep -E 'wasm-bindgen|js-sys' dependencies.txt; then
+          exit 1
+        fi
+
   test_clippy:
     runs-on: ubuntu-latest
     steps:
@@ -90,6 +108,7 @@ jobs:
       run: |
         rustup target add wasm32-unknown-unknown
         cargo clippy --no-default-features --target wasm32-unknown-unknown -- -D warnings
+        cargo clippy --all-features --target wasm32-unknown-unknown -- -D warnings
 
   test_implement_a_vfs:
     runs-on: ubuntu-latest
@@ -107,7 +126,9 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Test rustfmt
-      run: cargo fmt --check
+      run: |
+        cargo fmt --check
+        cargo fmt --manifest-path examples/custom-host/Cargo.toml --check
 
   test_atomics:
     strategy:

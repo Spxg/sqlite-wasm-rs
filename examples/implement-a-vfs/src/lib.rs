@@ -4,7 +4,7 @@
 
 use sqlite_wasm_rs::{
     sqlite3_close, sqlite3_exec, sqlite3_open_v2,
-    utils::{
+    vfs::{
         ffi::{SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_READWRITE},
         register_vfs, AccessMode, LockLevel, OpenAccess, OpenOptions, OpenedFile, SQLiteIoMethods,
         SQLiteVfs, SyncOptions, VfsError, VfsErrorCode, VfsFile, VfsResult, VfsStore,
@@ -149,7 +149,7 @@ impl VfsStore for MemFileStore {
     /// Return a fresh handle, creating the underlying data only when requested.
     fn open_file(
         app_data: &MemAppData,
-        request: sqlite_wasm_rs::utils::OpenRequest<'_>,
+        request: sqlite_wasm_rs::vfs::OpenRequest<'_>,
     ) -> VfsResult<OpenedFile<MemFile>> {
         let options = request.options;
         let Some(filename) = request.filename else {
