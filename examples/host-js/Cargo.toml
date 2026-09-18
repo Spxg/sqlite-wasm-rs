@@ -1,7 +1,7 @@
 [package]
 name = "host-js"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 publish = false
 
 # A separate workspace keeps other examples from enabling the default adapter.

@@ -1,6 +1,6 @@
 //! This module fills in the external functions needed to link to `sqlite.o`
 
-use crate::{WasmOsCallback, host};
+use crate::{host, WasmOsCallback};
 use core::alloc::Layout;
 use core::ffi::{c_char, c_int, c_long, c_longlong, c_void};
 use core::ptr;
@@ -33,7 +33,7 @@ pub struct tm {
 /// # Safety
 /// For a nonzero length, `buf` must be writable for `buf_len` bytes in a single
 /// allocation, with `buf_len <= isize::MAX`. Its contents may be uninitialized.
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_getentropy(buf: *mut u8, buf_len: c_size_t) -> c_int {
     if buf_len == 0 {
         return 0;
@@ -48,7 +48,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_getentropy(buf: *mut u8, buf_len: c_si
     }
 }
 
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_assert_fail(
     expr: *const c_char,
     file: *const c_char,
@@ -63,13 +63,13 @@ pub unsafe extern "C" fn rust_sqlite_wasm_assert_fail(
     }
 }
 
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_abort() {
     core::unreachable!();
 }
 
 /// Converts host calendar fields to the C ABI. A failed conversion returns null.
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_localtime(t: *const c_time_t) -> *mut tm {
     unsafe {
         // Single shared buffer, matches libc behavior; assumes no concurrent callers.
@@ -127,7 +127,7 @@ fn allocation_layout(size: usize) -> Option<Layout> {
     Layout::from_size_align(size.checked_add(ALIGN)?, ALIGN).ok()
 }
 
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_malloc(size: c_size_t) -> *mut c_void {
     let Some(layout) = allocation_layout(size) else {
         return ptr::null_mut();
@@ -145,7 +145,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_malloc(size: c_size_t) -> *mut c_void 
     }
 }
 
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_free(ptr: *mut c_void) {
     if ptr.is_null() {
         return;
@@ -161,7 +161,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_free(ptr: *mut c_void) {
     }
 }
 
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_realloc(
     ptr: *mut c_void,
     new_size: c_size_t,
@@ -191,7 +191,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_realloc(
     }
 }
 
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_calloc(num: c_size_t, size: c_size_t) -> *mut c_void {
     let Some(total) = num.checked_mul(size) else {
         return ptr::null_mut();
@@ -209,7 +209,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_calloc(num: c_size_t, size: c_size_t) 
 ///
 /// This function is called by SQLite when it is initialized. It sets up the
 /// default VFS for the environment, which in this case is the in-memory VFS.
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn sqlite3_os_init() -> core::ffi::c_int {
     unsafe {
         match rsqlite_vfs::memvfs::install(WasmOsCallback, true) {
@@ -223,7 +223,7 @@ pub unsafe extern "C" fn sqlite3_os_init() -> core::ffi::c_int {
 ///
 /// This function is called by SQLite when it is shut down. It cleans up
 /// any resources allocated by `sqlite3_os_init`.
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn sqlite3_os_end() -> core::ffi::c_int {
     unsafe {
         match rsqlite_vfs::memvfs::uninstall() {
@@ -237,9 +237,9 @@ pub unsafe extern "C" fn sqlite3_os_end() -> core::ffi::c_int {
 mod tests {
     use super::*;
     use crate::{
-        SQLITE_DONE, SQLITE_OK, SQLITE_ROW, SQLITE_TEXT, sqlite3_close, sqlite3_column_count,
-        sqlite3_column_text, sqlite3_column_type, sqlite3_finalize, sqlite3_initialize,
-        sqlite3_open, sqlite3_prepare_v3, sqlite3_shutdown, sqlite3_step,
+        sqlite3_close, sqlite3_column_count, sqlite3_column_text, sqlite3_column_type,
+        sqlite3_finalize, sqlite3_initialize, sqlite3_open, sqlite3_prepare_v3, sqlite3_shutdown,
+        sqlite3_step, SQLITE_DONE, SQLITE_OK, SQLITE_ROW, SQLITE_TEXT,
     };
 
     use wasm_bindgen_test::wasm_bindgen_test;
@@ -256,10 +256,9 @@ mod tests {
                     Err(crate::vfs::memvfs::MemVfsError::InvalidFilename)
                 ));
             }
-            assert!(
-                util.import_db_unchecked("invalid-page-size.db", &[42; 512], 0)
-                    .is_err()
-            );
+            assert!(util
+                .import_db_unchecked("invalid-page-size.db", &[42; 512], 0)
+                .is_err());
             assert_eq!(util.count(), 0);
             assert_eq!(crate::sqlite3_vfs_find(core::ptr::null()), original_default);
             util.import_db_unchecked("survives-shutdown.db", &[42; 512], 512)
@@ -278,7 +277,7 @@ mod tests {
             // Raw unregistration removes registry membership, not ownership.
             use alloc::rc::Rc;
             use core::time::Duration;
-            use rsqlite_vfs::{OsCallback, VfsResult, memvfs};
+            use rsqlite_vfs::{memvfs, OsCallback, VfsResult};
             struct TrackedOs {
                 _token: Rc<()>,
             }

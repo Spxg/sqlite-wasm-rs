@@ -83,7 +83,7 @@ SQLITE_WASM_RS_SOURCE_DIR=/path/to/sqlite cargo build --target wasm32-unknown-un
 
 ## Minimum supported Rust version (MSRV)
 
-The minimal officially supported rustc version is 1.85.0.
+The minimal officially supported rustc version is 1.81.0.
 
 ## Extensions
 

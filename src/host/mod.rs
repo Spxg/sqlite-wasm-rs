@@ -15,7 +15,7 @@
 //! The C declarations and layout are provided in
 //! [`sqlite-wasm-rs.h`](https://github.com/Spxg/sqlite-wasm-rs/blob/master/sqlite-wasm-rs.h).
 //! Rust adapters use
-//! `#[unsafe(no_mangle)] pub unsafe extern "C" fn` with the corresponding raw
+//! `#[no_mangle] pub unsafe extern "C" fn` with the corresponding raw
 //! pointer and integer types. A runtime can also supply these as Wasm imports
 //! from module `env` by explicitly allowing these undefined symbols at link time
 //! (see `examples/host-js`). For a statically linked C adapter, see
@@ -117,7 +117,7 @@ pub struct LocalTime {
 mod ffi {
     use super::LocalTime;
 
-    unsafe extern "C" {
+    extern "C" {
         #[link_name = "rust_sqlite_wasm_host_sleep"]
         pub fn sleep(seconds: u64, nanoseconds: u32);
         #[link_name = "rust_sqlite_wasm_host_random"]

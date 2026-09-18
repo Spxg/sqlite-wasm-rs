@@ -22,6 +22,8 @@
 
 ### Changed
 
+* Lower the minimum supported Rust version to 1.81.0 and use Edition 2021.
+
 * **Breaking:** Replace `sqlite_wasm_rs::utils` with `sqlite_wasm_rs::vfs`,
   re-exporting the complete `rsqlite-vfs` API. Access `MemVfsError` and
   `MemVfsUtil` through `sqlite_wasm_rs::vfs::memvfs` instead of the crate root.

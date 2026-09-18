@@ -11,9 +11,9 @@
 use crate::ffi as bindings;
 
 use crate::{
-    AccessMode, FileKind, ImportDbError, LockLevel, MemChunksFile, OpenAccess, OpenOptions,
-    OpenedFile, OsCallback, SQLiteIoMethods, SQLiteVfs, SyncOptions, VfsAppData, VfsError,
-    VfsErrorCode, VfsFile, VfsResult, VfsStore, check_db_and_page_size, check_import_db,
+    check_db_and_page_size, check_import_db, AccessMode, FileKind, ImportDbError, LockLevel,
+    MemChunksFile, OpenAccess, OpenOptions, OpenedFile, OsCallback, SQLiteIoMethods, SQLiteVfs,
+    SyncOptions, VfsAppData, VfsError, VfsErrorCode, VfsFile, VfsResult, VfsStore,
 };
 
 use alloc::boxed::Box;
@@ -534,9 +534,9 @@ pub unsafe fn uninstall() -> core::result::Result<(), crate::RegisterVfsError> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        AccessMode, FileKind, OpenAccess, OpenOptions, VfsAppData,
         memvfs::{MemAppData, MemStore},
         test_suite::test_vfs_store,
+        AccessMode, FileKind, OpenAccess, OpenOptions, VfsAppData,
     };
 
     #[test]
@@ -628,7 +628,7 @@ mod tests {
 
     #[test]
     fn exclusive_create_preserves_existing_file() {
-        use crate::{VfsFile, VfsStore, ffi::*};
+        use crate::{ffi::*, VfsFile, VfsStore};
 
         let data = MemAppData::new(crate::test_support::CallbackOs::<0>);
         let flags = OpenOptions::new(OpenAccess::ReadWrite, FileKind::MainDb).with_create();
@@ -661,8 +661,8 @@ mod tests {
     #[test]
     fn handles_keep_identity_and_access_mode() {
         use crate::{
-            VfsFile, VfsStore,
             ffi::{SQLITE_CANTOPEN, SQLITE_READONLY},
+            VfsFile, VfsStore,
         };
 
         let data = MemAppData::new(crate::test_support::CallbackOs::<0>);
@@ -730,7 +730,7 @@ mod tests {
     #[test]
     fn callbacks_own_handles_and_release_them_on_close_errors() {
         use super::*;
-        use crate::{SQLiteVfsFile, ffi::*};
+        use crate::{ffi::*, SQLiteVfsFile};
 
         struct TestOs;
         impl OsCallback for TestOs {

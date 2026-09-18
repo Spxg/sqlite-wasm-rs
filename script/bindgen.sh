@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-toolchain=1.85.0
+toolchain=1.81.0
 target=wasm32-unknown-unknown
 
 rustup toolchain install "$toolchain"

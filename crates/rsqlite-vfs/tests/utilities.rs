@@ -2,7 +2,7 @@ use rsqlite_vfs::{test_suite::test_vfs_store, *};
 
 #[test]
 fn import_rejects_invalid_header_and_page_boundaries() {
-    use rsqlite_vfs::{ImportDbError, check_db_and_page_size, check_import_db};
+    use rsqlite_vfs::{check_db_and_page_size, check_import_db, ImportDbError};
     let mut db = std::vec![0; 65536];
     db[..16].copy_from_slice(b"SQLite format 3\0");
     db[16..18].copy_from_slice(&1u16.to_be_bytes());

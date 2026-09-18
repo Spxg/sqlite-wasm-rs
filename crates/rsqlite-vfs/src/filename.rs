@@ -1,6 +1,6 @@
-use core::ffi::{CStr, c_char};
+use core::ffi::{c_char, CStr};
 
-use crate::{OpenOptions, ffi};
+use crate::{ffi, OpenOptions};
 
 /// A filename borrowed for a backend call. Only names supplied by SQLite
 /// carry URI metadata; constructing this from a Rust string never fabricates

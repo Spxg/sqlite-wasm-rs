@@ -745,18 +745,18 @@ pub struct sqlite3_vfs {
     >,
 }
 
-unsafe extern "C" {
+extern "C" {
     pub fn sqlite3_vfs_find(zVfsName: *const ::core::ffi::c_char) -> *mut sqlite3_vfs;
 }
 
-unsafe extern "C" {
+extern "C" {
     pub fn sqlite3_vfs_register(
         arg1: *mut sqlite3_vfs,
         makeDflt: ::core::ffi::c_int,
     ) -> ::core::ffi::c_int;
 }
 
-unsafe extern "C" {
+extern "C" {
     pub fn sqlite3_vfs_unregister(arg1: *mut sqlite3_vfs) -> ::core::ffi::c_int;
 
     pub fn sqlite3_uri_parameter(filename: *const ::core::ffi::c_char, key: *const ::core::ffi::c_char) -> *const ::core::ffi::c_char;

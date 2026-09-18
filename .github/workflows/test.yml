@@ -158,7 +158,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@1.85.0
+    # Keep Rust 1.81 compile compatibility; run CI validation on 1.82.
+    - uses: dtolnay/rust-toolchain@1.82.0
       with:
         targets: wasm32-unknown-unknown
         components: rust-src
