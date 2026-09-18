@@ -1,0 +1,5 @@
+rust_sqlite_wasm_host_sleep
+rust_sqlite_wasm_host_random
+rust_sqlite_wasm_host_epoch_timestamp_in_ms
+rust_sqlite_wasm_host_fill_entropy
+rust_sqlite_wasm_host_localtime

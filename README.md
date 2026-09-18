@@ -1,6 +1,7 @@
 [![Crates.io](https://img.shields.io/crates/v/sqlite-wasm-rs.svg)](https://crates.io/crates/sqlite-wasm-rs)
 
-`wasm32-unknown-unknown` bindings to the libsqlite3 library. 
+`wasm32-unknown-unknown` bindings to the libsqlite3 library, with a default
+wasm-bindgen host adapter and support for custom link-time host adapters.
 
 ## Usage 
 
@@ -67,14 +68,33 @@ Here is an example showing how to use `sqlite-wasm-rs` to implement a simple in-
 
 ## About multithreading
 
-This library is not thread-safe:
+This library is not thread-safe: SQLite is compiled with `-DSQLITE_THREADSAFE=0`.
+Using a custom host adapter does not change this or the memory VFS's
+single-threaded access requirements.
 
-* `JsValue` is not cross-threaded, see <https://github.com/rustwasm/wasm-bindgen/pull/955> for details.
-* sqlite is compiled with `-DSQLITE_THREADSAFE=0`.
-
-Without Wasm atomics, `sqlite3_sleep` does not block. With atomics, synchronous
-sleep requires a host context that permits waiting, such as a browser worker;
+With the default adapter and without Wasm atomics, `sqlite3_sleep` does not block.
+With atomics, synchronous sleep requires a host context that permits waiting,
+such as a browser worker;
 enabling atomics does not make SQLite thread-safe.
+
+## Custom hosts without wasm-bindgen
+
+```toml
+sqlite-wasm-rs = { version = "0.5", default-features = false }
+```
+
+Provide the five C ABI hooks declared in [`shim/host.h`](./shim/host.h)
+for time, sleep, VFS randomness, secure entropy and local-time conversion.
+The core handles the C shim and default memory VFS; the adapter chooses how to
+communicate with its environment. No runtime host registration is needed.
+
+See [`custom-host`](./examples/custom-host) for ordinary Wasm imports and a plain
+Node loader without generated glue. Keep `wasm-bindgen` disabled throughout the
+dependency graph, since Cargo features are additive. Hooks can be linked from
+C or Rust, or supplied directly as Wasm imports from module `env`.
+The example configures the linker to allow exactly these imports.
+The `bindgen` feature only generates
+SQLite C bindings and does not enable wasm-bindgen.
 
 ## Use prebuild libsqlite3.a
 

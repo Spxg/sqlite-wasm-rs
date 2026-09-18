@@ -1158,7 +1158,7 @@ mod tests {
 
     #[wasm_bindgen_test]
     async fn install_rejects_foreign_vfs() {
-        let memory = unsafe { sqlite_wasm_rs::MemVfsUtil::get().unwrap() };
+        let memory = unsafe { sqlite_wasm_rs::vfs::memvfs::MemVfsUtil::get().unwrap() };
         let before = unsafe { super::registered_vfs("memvfs").unwrap().unwrap() };
         let options = OpfsSAHPoolCfgBuilder::new().vfs_name("memvfs").build();
         let result = super::install::<sqlite_wasm_rs::WasmOsCallback>(&options, false).await;

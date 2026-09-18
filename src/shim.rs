@@ -1,136 +1,15 @@
 //! This module fills in the external functions needed to link to `sqlite.o`
 
+use crate::{WasmOsCallback, host};
 use core::alloc::Layout;
 use core::ffi::{c_char, c_int, c_long, c_longlong, c_void};
 use core::ptr;
-use core::time::Duration;
-
-use js_sys::{Date, Math, Number};
-use rsqlite_vfs::OsCallback;
-use wasm_bindgen::JsValue;
-use wasm_bindgen::prelude::wasm_bindgen;
-
-#[derive(Default)]
-pub struct WasmOsCallback;
-
-impl OsCallback for WasmOsCallback {
-    /// thread::sleep is available when atomics is enabled
-    #[cfg(target_feature = "atomics")]
-    fn sleep(&self, dur: Duration) {
-        let mut nanos = dur.as_nanos();
-        while nanos > 0 {
-            let amt = core::cmp::min(i64::MAX as u128, nanos);
-            let mut x = 0;
-            // memory_atomic_wait32 returns 2 on timeout; loop until elapsed.
-            let val = unsafe { core::arch::wasm32::memory_atomic_wait32(&mut x, 0, amt as i64) };
-            debug_assert_eq!(val, 2);
-            nanos -= amt;
-        }
-    }
-
-    #[cfg(not(target_feature = "atomics"))]
-    // Browsers provide no synchronous sleep primitive here. This platform
-    // limitation also applies to VFS xSleep/sqlite3_sleep; do not busy-wait.
-    fn sleep(&self, _dur: Duration) {}
-
-    fn random(&self, buf: &mut [u8]) -> usize {
-        fn fallback(buf: &mut [u8]) {
-            // Non-cryptographic fallback when crypto.getRandomValues is unavailable.
-            for b in buf {
-                *b = (Math::random() * 255000.0) as u32 as u8;
-            }
-        }
-
-        fill_random(buf).unwrap_or_else(|_| fallback(buf));
-        buf.len()
-    }
-
-    fn epoch_timestamp_in_ms(&self) -> rsqlite_vfs::VfsResult<i64> {
-        Ok(Date::new_0().get_time() as i64)
-    }
-}
 
 #[allow(non_camel_case_types)]
 type c_size_t = usize;
 
 #[allow(non_camel_case_types)]
 type c_time_t = c_longlong;
-
-#[wasm_bindgen]
-extern "C" {
-    // crypto.getRandomValues()
-    #[cfg(not(target_feature = "atomics"))]
-    #[wasm_bindgen(js_namespace = ["globalThis", "crypto"], js_name = getRandomValues, catch)]
-    fn get_random_values(buf: &mut [u8]) -> Result<(), JsValue>;
-    #[cfg(target_feature = "atomics")]
-    #[wasm_bindgen(js_namespace = ["globalThis", "crypto"], js_name = getRandomValues, catch)]
-    fn get_random_values(buf: &js_sys::Uint8Array) -> Result<(), JsValue>;
-}
-
-fn fill_random(buf: &mut [u8]) -> Result<(), JsValue> {
-    // Web Crypto limits each getRandomValues request to 65,536 bytes.
-    for chunk in buf.chunks_mut(65_536) {
-        #[cfg(not(target_feature = "atomics"))]
-        get_random_values(chunk)?;
-
-        #[cfg(target_feature = "atomics")]
-        {
-            // Web Crypto cannot fill a view backed by shared Wasm memory.
-            let array = js_sys::Uint8Array::new_with_length(chunk.len() as u32);
-            get_random_values(&array)?;
-            array.copy_to(chunk);
-        }
-    }
-    Ok(())
-}
-
-fn yday_from_date(date: &Date) -> u32 {
-    const MONTH_DAYS_LEAP_CUMULATIVE: [u32; 12] =
-        [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335];
-
-    const MONTH_DAYS_REGULAR_CUMULATIVE: [u32; 12] =
-        [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
-
-    let year = date.get_full_year();
-    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-
-    let month_days_cumulative = if leap {
-        MONTH_DAYS_LEAP_CUMULATIVE
-    } else {
-        MONTH_DAYS_REGULAR_CUMULATIVE
-    };
-    month_days_cumulative[date.get_month() as usize] + date.get_date() - 1
-}
-
-/// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/emscripten_internal.h#L42
-///
-/// https://github.com/sqlite/sqlite-wasm/blob/7c1b309c3bd07d8e6d92f82344108cebbd14f161/sqlite-wasm/jswasm/sqlite3-bundler-friendly.mjs#L3404
-// Mirrors emscripten/sqlite-wasm localtime handling, including DST logic.
-unsafe fn localtime_js(t: c_time_t, tm: *mut tm) {
-    unsafe {
-        let date = Date::new(&Number::from((t * 1000) as f64).into());
-
-        (*tm).tm_sec = date.get_seconds() as _;
-        (*tm).tm_min = date.get_minutes() as _;
-        (*tm).tm_hour = date.get_hours() as _;
-        (*tm).tm_mday = date.get_date() as _;
-        (*tm).tm_mon = date.get_month() as _;
-        (*tm).tm_year = (date.get_full_year() - 1900) as _;
-        (*tm).tm_wday = date.get_day() as _;
-        (*tm).tm_yday = yday_from_date(&date) as _;
-
-        let start = Date::new_with_year_month_day(date.get_full_year(), 0, 1);
-        let tz_offset = date.get_timezone_offset();
-        let summer_offset =
-            Date::new_with_year_month_day(date.get_full_year(), 6, 1).get_timezone_offset();
-        let winter_offset = start.get_timezone_offset();
-        (*tm).tm_isdst = i32::from(
-            summer_offset != winter_offset && tz_offset == winter_offset.min(summer_offset),
-        );
-
-        (*tm).tm_gmtoff = -(tz_offset * 60.0) as _;
-    }
-}
 
 /// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/musl/include/time.h#L40
 #[repr(C)]
@@ -149,7 +28,7 @@ pub struct tm {
 }
 
 /// Internal SQLite3MC entropy hook: returns 0 on success and -1 on failure.
-/// Uses only Web Crypto, without a weak fallback or POSIX errno reporting.
+/// Uses the host's secure entropy hook, without a weak fallback or errno reporting.
 ///
 /// # Safety
 /// For a nonzero length, `buf` must be writable for `buf_len` bytes in a single
@@ -162,7 +41,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_getentropy(buf: *mut u8, buf_len: c_si
     unsafe {
         // C output buffers need not be initialized, but a Rust byte slice must be.
         ptr::write_bytes(buf, 0, buf_len);
-        match fill_random(core::slice::from_raw_parts_mut(buf, buf_len)) {
+        match host::fill_entropy(core::slice::from_raw_parts_mut(buf, buf_len)) {
             Ok(()) => 0,
             Err(_) => -1,
         }
@@ -189,7 +68,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_abort() {
     core::unreachable!();
 }
 
-/// See <https://github.com/emscripten-core/emscripten/blob/089590d17eeb705424bf32f8a1afe34a034b4682/system/lib/libc/mktime.c#L28>.
+/// Converts host calendar fields to the C ABI. A failed conversion returns null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rust_sqlite_wasm_localtime(t: *const c_time_t) -> *mut tm {
     unsafe {
@@ -207,7 +86,36 @@ pub unsafe extern "C" fn rust_sqlite_wasm_localtime(t: *const c_time_t) -> *mut 
             tm_gmtoff: 0,
             tm_zone: ptr::null_mut(),
         };
-        localtime_js(*t, ptr::addr_of_mut!(TM));
+        let Ok(local) = host::localtime(*t) else {
+            return ptr::null_mut();
+        };
+        let Some(year) = local.year.checked_sub(1900) else {
+            return ptr::null_mut();
+        };
+        if !(1..=12).contains(&local.month)
+            || !(1..=31).contains(&local.day)
+            || !(0..=23).contains(&local.hour)
+            || !(0..=59).contains(&local.minute)
+            || !(0..=60).contains(&local.second)
+            || !(0..=6).contains(&local.weekday)
+            || !(0..=365).contains(&local.yearday)
+            || !(-1..=1).contains(&local.is_dst)
+        {
+            return ptr::null_mut();
+        }
+        ptr::addr_of_mut!(TM).write(tm {
+            tm_sec: local.second,
+            tm_min: local.minute,
+            tm_hour: local.hour,
+            tm_mday: local.day,
+            tm_mon: local.month - 1,
+            tm_year: year,
+            tm_wday: local.weekday,
+            tm_yday: local.yearday,
+            tm_isdst: local.is_dst,
+            tm_gmtoff: local.utc_offset_seconds,
+            tm_zone: ptr::null_mut(),
+        });
         ptr::addr_of_mut!(TM)
     }
 }
@@ -325,7 +233,7 @@ pub unsafe extern "C" fn sqlite3_os_end() -> core::ffi::c_int {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "wasm-bindgen"))]
 mod tests {
     use super::*;
     use crate::{
@@ -340,12 +248,12 @@ mod tests {
     fn test_initialize_shutdown() {
         unsafe {
             assert_eq!(sqlite3_initialize(), SQLITE_OK, "failed to initialize");
-            let util = crate::MemVfsUtil::get().unwrap();
+            let util = crate::vfs::memvfs::MemVfsUtil::get().unwrap();
             let original_default = crate::sqlite3_vfs_find(core::ptr::null());
             for name in ["", "hidden\0suffix"] {
                 assert!(matches!(
                     util.import_db_unchecked(name, &[42; 512], 512),
-                    Err(crate::MemVfsError::InvalidFilename)
+                    Err(crate::vfs::memvfs::MemVfsError::InvalidFilename)
                 ));
             }
             assert!(
@@ -358,11 +266,11 @@ mod tests {
                 .unwrap();
             assert!(matches!(
                 util.import_db_unchecked("survives-shutdown.db", &[99; 512], 512),
-                Err(crate::MemVfsError::AlreadyExists(_))
+                Err(crate::vfs::memvfs::MemVfsError::AlreadyExists(_))
             ));
             assert_eq!(sqlite3_shutdown(), SQLITE_OK, "failed to shutdown");
             assert_eq!(util.export_db("survives-shutdown.db").unwrap(), [42; 512]);
-            let new_util = crate::MemVfsUtil::get().unwrap();
+            let new_util = crate::vfs::memvfs::MemVfsUtil::get().unwrap();
             assert!(!new_util.exists("survives-shutdown.db"));
             util.delete_db("survives-shutdown.db");
             assert_eq!(sqlite3_shutdown(), SQLITE_OK, "failed to shutdown again");
@@ -426,7 +334,7 @@ mod tests {
 
         // Must succeed using crypto itself, not the VFS's Math.random fallback.
         let mut large = alloc::vec![0; 65_537];
-        fill_random(&mut large).unwrap();
+        host::fill_entropy(&mut large).unwrap();
     }
 
     #[wasm_bindgen_test]
@@ -490,22 +398,9 @@ mod tests {
 
     #[wasm_bindgen_test]
     fn test_localtime() {
-        let mut tm = tm {
-            tm_sec: 0,
-            tm_min: 0,
-            tm_hour: 0,
-            tm_mday: 0,
-            tm_mon: 0,
-            tm_year: 0,
-            tm_wday: 0,
-            tm_yday: 0,
-            tm_isdst: 0,
-            tm_gmtoff: 0,
-            tm_zone: core::ptr::null_mut(),
-        };
-        unsafe {
-            localtime_js(1733976732, &mut tm as *mut tm);
-        };
+        let tm = unsafe { rust_sqlite_wasm_localtime(&1733976732) };
+        assert!(!tm.is_null());
+        let tm = unsafe { &*tm };
         let gmtoff = tm.tm_gmtoff / 3600;
 
         assert_eq!(tm.tm_year, 2024 - 1900);
