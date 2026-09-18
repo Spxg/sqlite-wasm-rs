@@ -1,7 +1,7 @@
 [package]
 name = "sqlite-wasm-rs"
 links = "wsqlite3"
-version = "0.5.5"
+version = "0.6.0"
 authors = ["Spxg <noz@live.com>"]
 repository = "https://github.com/Spxg/sqlite-wasm-rs"
 description = "`wasm32-unknown-unknown` bindings to the libsqlite3 library."
@@ -14,7 +14,7 @@ rust-version.workspace = true
 include.workspace = true
 
 [dependencies]
-rsqlite-vfs = "0.1.0"
+rsqlite-vfs = "0.2"
 wasm-bindgen = { version = "0.2.104", default-features = false, optional = true }
 js-sys = { version = "0.3.81", default-features = false, optional = true }
 
@@ -33,7 +33,7 @@ bindgen = { version = "0.72.1", optional = true }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.54"
-sqlite-wasm-vfs = "0.2"
+sqlite-wasm-vfs = "0.3"
 
 [[test]]
 name = "memory"
