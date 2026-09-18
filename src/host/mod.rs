@@ -18,7 +18,8 @@
 //! `#[unsafe(no_mangle)] pub unsafe extern "C" fn` with the corresponding raw
 //! pointer and integer types. A runtime can also supply these as Wasm imports
 //! from module `env` by explicitly allowing these undefined symbols at link time
-//! (see `examples/custom-host`). Pointers refer to
+//! (see `examples/host-js`). For a statically linked C adapter, see
+//! `examples/host-c`. Pointers refer to
 //! the module's linear memory; Wasm `i64` arguments reach JavaScript as `BigInt`.
 //! Do not enable the default adapter anywhere in the dependency graph when
 //! providing these symbols yourself (Cargo features are additive). Ensure a

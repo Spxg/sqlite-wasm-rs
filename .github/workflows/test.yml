@@ -85,15 +85,16 @@ jobs:
         wasm-pack test --node --features bindgen
         wasm-pack test --node --features bindgen,sqlite3mc
 
-  test_custom_host:
+  test_host_examples:
     runs-on: ubuntu-latest
     strategy:
       matrix:
+        example: [host-js, host-c]
         features: ["", "sqlite3mc", "bindgen", "bindgen,sqlite3mc"]
     steps:
     - uses: actions/checkout@v4
     - name: Test without wasm-bindgen
-      working-directory: examples/custom-host
+      working-directory: examples/${{ matrix.example }}
       run: |
         rustup target add wasm32-unknown-unknown
         cargo build --target wasm32-unknown-unknown --features '${{ matrix.features }}'
@@ -131,7 +132,8 @@ jobs:
     - name: Test rustfmt
       run: |
         cargo fmt --check
-        cargo fmt --manifest-path examples/custom-host/Cargo.toml --check
+        cargo fmt --manifest-path examples/host-js/Cargo.toml --check
+        cargo fmt --manifest-path examples/host-c/Cargo.toml --check
 
   test_atomics:
     strategy:
