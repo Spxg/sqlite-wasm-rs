@@ -1,15 +1,11 @@
-//! Reusable checks for developers implementing `VfsFile` and `VfsStore`.
-//! These ordinary functions are available to dependent crates, including with
-//! `no_std` and `alloc`. Call individual cases or the aggregate entry points.
+//! Reusable `VfsFile`/`VfsStore` checks, also available with `no_std` + `alloc`.
+//! File checks overwrite inputs. Store checks require an isolated writable
+//! namespace and reserve `___test_vfs_store*` names. Cleanup is best-effort on
+//! failure/unwinding; backend panics are not caught.
 //!
-//! File checks overwrite their input. Store checks require an isolated, writable
-//! namespace without concurrent users; names starting with `___test_vfs_store`
-//! are reserved. Successfully opened handles are closed, with best-effort cleanup
-//! on failure or unwinding. Backend panics are not caught.
-//!
-//! Contract failures return `VfsErrorCode::Io` with case/operation details.
-//! Backend errors retain their SQLite and system codes, with added context.
-//! These checks do not establish durability, locking or crash-recovery safety.
+//! Contract failures return `VfsErrorCode::Io`; backend errors retain their codes.
+//! Both include case/operation context. These do not verify durability, locking
+//! or crash recovery.
 
 use alloc::{format, vec};
 use core::fmt::Debug;

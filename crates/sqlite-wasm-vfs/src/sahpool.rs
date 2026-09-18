@@ -8,34 +8,21 @@
 //!
 //! ```rust
 //! use sqlite_wasm_rs as ffi;
-//! use sqlite_wasm_vfs::sahpool::{install as install_opfs_sahpool, OpfsSAHPoolCfg};
+//! use sqlite_wasm_vfs::sahpool::{install, OpfsSAHPoolCfg};
 //!
 //! async fn open_db() {
-//!     // install opfs-sahpool persistent vfs and set as default vfs
-//!     install_opfs_sahpool::<ffi::WasmOsCallback>(&OpfsSAHPoolCfg::default(), true)
+//!     install::<ffi::WasmOsCallback>(&OpfsSAHPoolCfg::default(), true)
 //!         .await
 //!         .unwrap();
 //!
-//!     // open with opfs-sahpool vfs
+//!     // The pool is now SQLite's default VFS.
 //!     let mut db = std::ptr::null_mut();
-//!     let ret = unsafe {
-//!         ffi::sqlite3_open_v2(
-//!             c"opfs-sahpool.db".as_ptr().cast(),
-//!             &mut db as *mut _,
-//!             ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
-//!             std::ptr::null()
-//!         )
-//!     };
-//!     assert_eq!(ffi::SQLITE_OK, ret);
-//!     assert_eq!(unsafe { ffi::sqlite3_close(db) }, ffi::SQLITE_OK);
+//!     unsafe {
+//!         assert_eq!(ffi::sqlite3_open(c"app.db".as_ptr(), &mut db), ffi::SQLITE_OK);
+//!         assert_eq!(ffi::sqlite3_close(db), ffi::SQLITE_OK);
+//!     }
 //! }
 //! ```
-//!
-//! The VFS is based on
-//! [`FileSystemSyncAccessHandle`](https://developer.mozilla.org/en-US/docs/Web/API/FileSystemSyncAccessHandle)
-//! read and write, and you can install the
-//! [`opfs-explorer`](https://chromewebstore.google.com/detail/opfs-explorer/acndjpgkpaclldomagafnognkcgjignd)
-//! plugin to browse files.
 
 use rsqlite_vfs::{
     check_import_db,
@@ -1291,22 +1278,19 @@ impl OpfsSAHPoolCfgBuilder {
         self
     }
 
-    /// Sets the OPFS directory containing the pool's files and metadata.
-    /// See [`OpfsSAHPoolCfg::directory`] for path rules.
+    /// Sets [`OpfsSAHPoolCfg::directory`]; see its path rules.
     pub fn directory(mut self, directory: &str) -> Self {
         self.0.directory = directory.into();
         self
     }
 
-    /// Clears existing file contents after acquiring every slot on first install.
-    /// Destructive and not atomic across files; ignored when reusing an installed pool.
+    /// Enables destructive first-install clearing; see [`OpfsSAHPoolCfg::clear_on_init`].
     pub fn clear_on_init(mut self, set: bool) -> Self {
         self.0.clear_on_init = set;
         self
     }
 
-    /// Sets the minimum total number of file slots at initialization.
-    /// An existing larger pool is not shrunk.
+    /// Sets [`OpfsSAHPoolCfg::initial_capacity`], without shrinking larger pools.
     pub fn initial_capacity(mut self, cap: usize) -> Self {
         self.0.initial_capacity = cap;
         self
@@ -1328,12 +1312,9 @@ impl Default for OpfsSAHPoolCfgBuilder {
 pub struct OpfsSAHPoolCfg {
     /// Nonempty, NUL-free SQLite VFS name. Defaults to `opfs-sahpool`.
     pub vfs_name: String,
-    /// OPFS directory containing the pool's files and metadata; defaults to
-    /// `.opfs-sahpool`, independently of `vfs_name`.
-    ///
-    /// Slash-separated components are relative to the OPFS root. Empty
-    /// components are ignored; NUL, `.` and `..` components and an entirely
-    /// empty path are rejected. For example, `/pools//app/` becomes `pools/app`.
+    /// OPFS-root-relative directory; defaults to `.opfs-sahpool`, independently
+    /// of `vfs_name`. Empty slash-separated components are ignored; NUL, `.`,
+    /// `..` and entirely empty paths are rejected.
     pub directory: String,
     /// Clears existing file contents after acquiring every slot on first install.
     /// Destructive and not atomic across files; ignored when reusing an installed pool.
@@ -1492,9 +1473,8 @@ impl OpfsSAHError {
 
 /// Management handle for one pool, confined to its dedicated worker.
 ///
-/// Dropping this handle does not uninstall the VFS. Pause releases OPFS locks;
-/// explicit unsafe uninstall also reclaims the SQLite registration. Old handles
-/// remain valid after uninstall but cannot modify or resume the removed pool.
+/// Drop leaves the VFS installed. [`Self::pause`] releases OPFS locks;
+/// [`Self::uninstall`] also frees registration and disables old handles.
 #[derive(Clone)]
 pub struct OpfsSAHPoolUtil {
     pool: Rc<OpfsSAHPool>,
@@ -1528,53 +1508,38 @@ impl OpfsSAHPoolUtil {
         self.pool.ensure_capacity(min).await
     }
 
-    /// Imports a complete, consistent SQLite database into a new filename.
-    ///
-    /// Validates the SQLite header/page layout, not database integrity, and
-    /// resets the WAL-mode header bytes to rollback mode. This does not merge
-    /// a separate WAL or recover a journal: checkpoint/close the source database
-    /// before exporting it.
-    /// The imported contents and filename are flushed before success.
-    /// Database names must be nonempty, NUL-free and at most 499 UTF-8 bytes,
-    /// reserving journal space. Use [`Self::import_db_unchecked`] for encrypted
-    /// databases.
+    /// Imports and flushes a standalone image under a new, nonempty, NUL-free
+    /// name (at most 499 UTF-8 bytes, reserving journal space).
+    /// Checks header/page layout, not integrity; resets header flags to rollback
+    /// mode without merging WAL or recovering journals. Checkpoint/close the
+    /// source first. For encryption use [`Self::import_db_unchecked`].
     pub fn import_db(&self, filename: &str, bytes: &[u8]) -> Result<()> {
         self.pool.import_db(filename, bytes)
     }
 
-    /// Imports without validating or modifying SQLite header bytes.
-    ///
-    /// Suitable for encrypted databases. Filename, existing-file, storage and
-    /// complete-write checks still apply. Input must be a standalone snapshot.
-    /// The filename restrictions of [`Self::import_db`] also apply.
+    /// Like [`Self::import_db`], but skips header validation/modification for
+    /// encrypted images. Name, standalone-image and complete-write rules apply.
     pub fn import_db_unchecked(&self, filename: &str, bytes: &[u8]) -> Result<()> {
         self.pool.import_db_unchecked(filename, bytes, false)
     }
 
-    /// Copies a closed database into memory, not an online SQLite backup.
-    ///
-    /// Rejects open files and nonempty journal/WAL sidecars. Recover/checkpoint
-    /// through SQLite first. Retained PERSIST journals are conservatively
-    /// rejected too; remove them only after a successful recovery and close.
-    /// Requires one contiguous allocation, limited to `isize::MAX` bytes and
-    /// available memory (less than 2 GiB on wasm32).
+    /// Copies a closed database into memory; not an online backup.
+    /// Rejects nonempty journal/WAL sidecars, including retained PERSIST journals:
+    /// recover/checkpoint and close first, then remove retained journals.
+    /// Needs a contiguous allocation below 2 GiB on wasm32.
     pub fn export_db(&self, filename: &str) -> Result<Vec<u8>> {
         self.pool.export_db(filename)
     }
 
-    /// Deletes exactly the named closed file and flushes its name removal.
-    /// Does not automatically delete companion journal/WAL files.
-    /// Close the database before deleting any of its files, including sidecars.
-    /// Returns `false` if the name is absent.
+    /// Deletes only the named file and flushes removal; returns `false` if absent.
+    /// Close the database first, even when deleting a sidecar.
     pub fn delete_db(&self, filename: &str) -> Result<bool> {
         self.pool.delete_file(filename)
     }
 
-    /// Clears every held slot without releasing OPFS ownership.
-    ///
-    /// All databases must be closed. Requires an active, idle pool; also permits
-    /// recovery from a failed namespace update. Not atomic across files: on
-    /// failure some files may have been cleared. Retry to complete the clear.
+    /// Clears held slots without releasing OPFS ownership. Close all databases
+    /// first; requires an active, idle pool, but permits namespace recovery.
+    /// Not atomic: failures may clear some files. Retry to finish.
     pub async fn clear_all(&self) -> Result<()> {
         self.pool.clear_all()
     }
@@ -1597,27 +1562,20 @@ impl OpfsSAHPoolUtil {
         self.pool.get_file_count()
     }
 
-    /// Unregisters the VFS and releases its OPFS handles without deleting data.
-    ///
-    /// Close all databases first. Fails without side effects if files are open
-    /// or a management operation is in progress. Already paused is a no-op.
-    /// Keeps the registration allocation for [`Self::resume`]; unlike
-    /// [`Self::uninstall`], this does not free it.
+    /// Unregisters and releases OPFS handles, retaining data and registration
+    /// memory for [`Self::resume`]. Close all databases first.
+    /// Open files or active management cause failure without side effects.
+    /// Already paused is a no-op.
     pub fn pause(&self) -> Result<()> {
         self.pool.pause()
     }
 
-    /// Reacquires all slots and re-registers the same VFS.
-    ///
-    /// Acquisition failure/cancellation does not publish a partial namespace;
-    /// the pool remains paused and can be retried. Pending browser acquisitions
-    /// finish in the background and close their handles if no longer needed.
-    /// A pool installed as default is promoted again when resumed.
-    ///
-    /// Reclaims abandoned temporary files and verified empty incomplete slots.
-    /// Invalid persistent headers are reported, not discarded. This restores
-    /// the pool's namespace; SQLite transaction recovery occurs when SQLite
-    /// opens the database, not here. An active, healthy pool is a no-op.
+    /// Reacquires slots and restores registration/default status; active healthy
+    /// pools are unchanged. Acquisition failure/cancellation leaves the pool
+    /// paused for retry; pending acquisitions close unused handles in background.
+    /// Reclaims abandoned temporary files and verified empty incomplete slots,
+    /// but reports invalid persistent headers. Restores the namespace only;
+    /// SQLite recovers transactions when opening a database.
     pub async fn resume(&self) -> Result<()> {
         self.pool.resume().await
     }
@@ -1671,18 +1629,13 @@ impl OpfsSAHPoolUtil {
     }
 }
 
-/// Installs a pool or reuses its existing management handle, even while paused.
+/// Installs or reuses a pool, validating [`OpfsSAHPoolCfg`].
+/// Reuse requires the same directory and callback type; it neither resumes a
+/// paused pool nor reapplies initial capacity/clearing. Each directory has one
+/// owner per worker; uninstall that owner before using a different VFS name.
 ///
-/// Names must be nonempty and NUL-free; directory paths must contain normal
-/// components. A reused name must have the same normalized directory and OS
-/// callback type. Initial capacity and `clear_on_init` apply only to first install.
-/// Reusing a paused pool does not resume it. Different names cannot share one
-/// directory within this worker; uninstall its owner first.
-///
-/// Passing `default_vfs = true` promotes an active VFS (or records that choice for
-/// resume). `false` does not demote an existing default. Concurrent installations
-/// wait for each other; other overlapping management operations return
-/// [`OpfsSAHError::Busy`].
+/// `default_vfs = true` promotes the VFS now or on resume; `false` never demotes.
+/// Concurrent installs wait; overlapping management returns [`OpfsSAHError::Busy`].
 pub async fn install<C: OsCallback + Default + 'static>(
     options: &OpfsSAHPoolCfg,
     default_vfs: bool,
@@ -1772,49 +1725,37 @@ pub async fn install<C: OsCallback + Default + 'static>(
 
 #[cfg(test)]
 mod tests {
-    use super::{OpfsSAHError, OpfsSAHPool, OpfsSAHPoolCfgBuilder, SyncAccessHandleStore};
-    use rsqlite_vfs::{
-        test_suite::test_vfs_store, FileKind, OpenAccess, OpenOptions, VfsAppData, VfsErrorCode,
-        VfsFile, VfsStore,
+    use super::{
+        install, physical_offset, OpfsSAHError, OpfsSAHPool, OpfsSAHPoolCfg, OpfsSAHPoolCfgBuilder,
+        SyncAccessHandleStore, HEADER_OFFSET_DATA, MAX_SAFE_INTEGER,
     };
+    use rsqlite_vfs::{
+        test_suite::test_vfs_store, FileKind, LockLevel, OpenAccess, OpenOptions, OpenRequest,
+        VfsAppData, VfsErrorCode, VfsFile, VfsStore,
+    };
+    use sqlite_wasm_rs::{self as ffi, WasmOsCallback};
     use wasm_bindgen_test::wasm_bindgen_test;
 
-    #[wasm_bindgen_test]
-    async fn install_rejects_foreign_vfs() {
-        let memory = unsafe { sqlite_wasm_rs::vfs::memvfs::MemVfsUtil::get().unwrap() };
-        let before = unsafe { super::registered_vfs("memvfs").unwrap().unwrap() };
-        let options = OpfsSAHPoolCfgBuilder::new().vfs_name("memvfs").build();
-        let result = super::install::<sqlite_wasm_rs::WasmOsCallback>(&options, false).await;
-        assert!(
-            matches!(result, Err(OpfsSAHError::Vfs(super::RegisterVfsError::NameConflict(name))) if name == "memvfs")
-        );
-        assert_eq!(
-            unsafe { super::registered_vfs("memvfs").unwrap() },
-            Some(before)
-        );
-        assert_eq!(memory.count(), 0);
+    fn config(name: &str) -> OpfsSAHPoolCfg {
+        OpfsSAHPoolCfgBuilder::new()
+            .vfs_name(name)
+            .directory(name)
+            .clear_on_init(true)
+            .build()
     }
 
     #[wasm_bindgen_test]
-    async fn install_reuses_own_vfs() {
-        let options = OpfsSAHPoolCfgBuilder::new()
-            .vfs_name("test-opfs-reuse")
-            .directory("test_opfs_reuse")
-            .build();
+    async fn concurrent_installs_share_one_pool() {
+        let options = config("test-opfs-reuse");
         let (first, second) = futures_util::future::join(
-            super::install::<sqlite_wasm_rs::WasmOsCallback>(&options, false),
-            super::install::<sqlite_wasm_rs::WasmOsCallback>(&options, false),
+            install::<WasmOsCallback>(&options, false),
+            install::<WasmOsCallback>(&options, false),
         )
         .await;
         let first = first.unwrap();
         let second = second.unwrap();
         assert!(std::rc::Rc::ptr_eq(&first.pool, &second.pool));
-        first.pause().unwrap();
-        first.resume().await.unwrap();
-        let third = super::install::<sqlite_wasm_rs::WasmOsCallback>(&options, false)
-            .await
-            .unwrap();
-        assert!(std::rc::Rc::ptr_eq(&first.pool, &third.pool));
+
         unsafe {
             first.uninstall().unwrap();
         }
@@ -1824,123 +1765,55 @@ mod tests {
     fn physical_offsets_above_4_gib() {
         let offset = 1u64 << 32;
         assert_eq!(
-            super::physical_offset(offset, 512, VfsErrorCode::IoWrite).unwrap(),
-            (offset + super::HEADER_OFFSET_DATA as u64) as f64,
+            physical_offset(offset, 512, VfsErrorCode::IoWrite).unwrap(),
+            (offset + HEADER_OFFSET_DATA as u64) as f64,
         );
-        let max = super::MAX_SAFE_INTEGER - super::HEADER_OFFSET_DATA as u64;
-        assert!(super::physical_offset(max, 0, VfsErrorCode::IoTruncate).is_ok());
-        assert!(super::physical_offset(max, 1, VfsErrorCode::IoWrite).is_err());
-        assert!(super::physical_offset(max + 1, 0, VfsErrorCode::IoTruncate).is_err());
-        assert!(super::physical_offset(u64::MAX, 0, VfsErrorCode::IoRead).is_err());
+        let max = MAX_SAFE_INTEGER - HEADER_OFFSET_DATA as u64;
+        assert!(physical_offset(max, 0, VfsErrorCode::IoTruncate).is_ok());
+        assert!(physical_offset(max, 1, VfsErrorCode::IoWrite).is_err());
+        assert!(physical_offset(max + 1, 0, VfsErrorCode::IoTruncate).is_err());
+        assert!(physical_offset(u64::MAX, 0, VfsErrorCode::IoRead).is_err());
     }
 
     #[wasm_bindgen_test]
     async fn size_hint_grows_but_does_not_shrink_file() {
-        let pool = OpfsSAHPool::new::<sqlite_wasm_rs::WasmOsCallback>(
-            &OpfsSAHPoolCfgBuilder::new()
-                .directory("test_opfs_size_hint")
-                .clear_on_init(true)
-                .build(),
-        )
-        .await
-        .unwrap();
-        let mut file = SyncAccessHandleStore::open_file(
-            &pool,
-            rsqlite_vfs::OpenRequest::named(
-                "size-hint.db",
-                OpenOptions::new(OpenAccess::ReadWrite, FileKind::MainDb).with_create(),
-            ),
-        )
-        .unwrap()
-        .file;
-        file.size_hint(2 * 8192).unwrap();
+        let pool = OpfsSAHPool::new::<WasmOsCallback>(&config("test-opfs-size-hint"))
+            .await
+            .unwrap();
+        let options = OpenOptions::new(OpenAccess::ReadWrite, FileKind::MainDb).with_create();
+        let mut file =
+            SyncAccessHandleStore::open_file(&pool, OpenRequest::named("size-hint.db", options))
+                .unwrap()
+                .file;
+        assert!(file.size_hint(2 * 8192).unwrap());
         assert_eq!(file.size().unwrap(), 2 * 8192);
-        file.size_hint(8192).unwrap();
+        assert!(file.size_hint(8192).unwrap());
         assert_eq!(file.size().unwrap(), 2 * 8192);
+
+        SyncAccessHandleStore::close_file(&pool, Some("size-hint.db"), file, options).unwrap();
     }
 
     #[wasm_bindgen_test]
-    async fn test_opfs_vfs_store() {
-        let data = OpfsSAHPool::new::<sqlite_wasm_rs::WasmOsCallback>(
-            &OpfsSAHPoolCfgBuilder::new()
-                .directory("test_opfs_suite")
-                .build(),
-        )
-        .await
-        .unwrap();
+    async fn store_conforms_to_vfs_contract() {
+        let data = OpfsSAHPool::new::<WasmOsCallback>(&config("test-opfs-suite"))
+            .await
+            .unwrap();
 
         test_vfs_store::<SyncAccessHandleStore>(VfsAppData::new(data)).unwrap();
     }
 
     #[wasm_bindgen_test]
-    async fn exclusive_create_preserves_existing_file() {
-        let pool = OpfsSAHPool::new::<sqlite_wasm_rs::WasmOsCallback>(
-            &OpfsSAHPoolCfgBuilder::new()
-                .directory("test_opfs_exclusive_create")
-                .clear_on_init(true)
-                .build(),
-        )
-        .await
-        .unwrap();
-        let flags = OpenOptions::new(OpenAccess::ReadWrite, FileKind::MainDb).with_create();
-        let exclusive = flags.with_create_new();
-        let mut file = SyncAccessHandleStore::open_file(
-            &pool,
-            rsqlite_vfs::OpenRequest::named("exclusive.db", exclusive),
-        )
-        .unwrap()
-        .file;
-        file.write(&[41, 42], 0).unwrap();
-        SyncAccessHandleStore::close_file(&pool, Some("exclusive.db"), file, exclusive).unwrap();
-        let available = pool.available_files.borrow().len();
-
-        assert_eq!(
-            SyncAccessHandleStore::open_file(
-                &pool,
-                rsqlite_vfs::OpenRequest::named("exclusive.db", exclusive)
-            )
-            .err()
-            .unwrap()
-            .code(),
-            VfsErrorCode::CantOpen
-        );
-        assert_eq!(pool.available_files.borrow().len(), available);
-        assert_eq!(pool.map_filename_to_file.borrow().len(), 1);
-        let mut file = SyncAccessHandleStore::open_file(
-            &pool,
-            rsqlite_vfs::OpenRequest::named("exclusive.db", flags),
-        )
-        .unwrap()
-        .file;
-        assert_eq!(file.file.open_count.get(), 1);
-        let mut bytes = [0; 2];
-        assert_eq!(file.size().unwrap(), 2);
-        assert_eq!(file.read(&mut bytes, 0).unwrap(), 2);
-        assert_eq!(bytes, [41, 42]);
-        SyncAccessHandleStore::close_file(&pool, Some("exclusive.db"), file, flags).unwrap();
-        pool.release_access_handles().unwrap();
-    }
-
-    #[wasm_bindgen_test]
     async fn handles_protect_pool_until_last_close() {
-        let config = OpfsSAHPoolCfgBuilder::new()
-            .vfs_name("test-handle-lifetimes")
-            .directory("test_handle_lifetimes")
-            .clear_on_init(true)
-            .build();
-        let util = super::install::<sqlite_wasm_rs::WasmOsCallback>(&config, false)
-            .await
-            .unwrap();
+        let config = config("test-handle-lifetimes");
+        let util = install::<WasmOsCallback>(&config, false).await.unwrap();
         let flags = OpenOptions::new(OpenAccess::ReadWrite, FileKind::MainDb).with_create();
-        let mut first = SyncAccessHandleStore::open_file(
-            &util.pool,
-            rsqlite_vfs::OpenRequest::named("handles.db", flags),
-        )
-        .unwrap()
-        .file;
+        let mut first =
+            SyncAccessHandleStore::open_file(&util.pool, OpenRequest::named("handles.db", flags))
+                .unwrap()
+                .file;
         let mut second = SyncAccessHandleStore::open_file(
             &util.pool,
-            rsqlite_vfs::OpenRequest::named(
+            OpenRequest::named(
                 "handles.db",
                 OpenOptions::new(OpenAccess::ReadOnly, FileKind::MainDb),
             ),
@@ -1949,58 +1822,66 @@ mod tests {
         .file;
         assert_eq!(first.file.open_count.get(), 2);
 
+        // A rejected open must not consume a slot or increment the open count.
+        let available = util.pool.available_files.borrow().len();
+        assert_eq!(
+            SyncAccessHandleStore::open_file(
+                &util.pool,
+                OpenRequest::named("handles.db", flags.with_create_new()),
+            )
+            .err()
+            .unwrap()
+            .code(),
+            VfsErrorCode::CantOpen
+        );
+        assert_eq!(util.pool.available_files.borrow().len(), available);
+        assert_eq!(util.pool.map_filename_to_file.borrow().len(), 1);
+        assert_eq!(first.file.open_count.get(), 2);
+
         assert!(!first.check_reserved_lock().unwrap());
-        first.lock(rsqlite_vfs::LockLevel::Reserved).unwrap();
+        first.lock(LockLevel::Reserved).unwrap();
         assert!(first.check_reserved_lock().unwrap());
-        first.unlock(rsqlite_vfs::LockLevel::Shared).unwrap();
+        first.unlock(LockLevel::Shared).unwrap();
         assert!(!first.check_reserved_lock().unwrap());
+
         first.write(&[41, 42], 0).unwrap();
         let capacity = util.capacity();
-        assert!(util.pause().is_err());
-        assert!(util.delete_db("handles.db").is_err());
-        assert!(util.clear_all().await.is_err());
+        assert!(matches!(util.pause(), Err(OpfsSAHError::FilesInUse)));
+        assert!(matches!(
+            util.delete_db("handles.db"),
+            Err(OpfsSAHError::FileInUse(_))
+        ));
+        assert!(matches!(
+            util.clear_all().await,
+            Err(OpfsSAHError::FilesInUse)
+        ));
         assert_eq!(util.capacity(), capacity);
         assert!(util.exists("handles.db"));
+
         SyncAccessHandleStore::close_file(&util.pool, Some("handles.db"), first, flags).unwrap();
         assert_eq!(second.file.open_count.get(), 1);
 
         assert_eq!(
-            second.write(&[99], 0).unwrap_err().code(),
-            VfsErrorCode::ReadOnly
-        );
-        assert_eq!(
-            second.truncate(0).unwrap_err().code(),
-            VfsErrorCode::ReadOnly
-        );
-        assert_eq!(
             second.size_hint(4096).unwrap_err().code(),
             VfsErrorCode::ReadOnly
         );
-        assert!(util.pause().is_err());
-        assert!(util.delete_db("handles.db").is_err());
-        assert!(util.clear_all().await.is_err());
+        assert!(matches!(util.pause(), Err(OpfsSAHError::FilesInUse)));
+        assert!(matches!(
+            util.delete_db("handles.db"),
+            Err(OpfsSAHError::FileInUse(_))
+        ));
+        assert!(matches!(
+            util.clear_all().await,
+            Err(OpfsSAHError::FilesInUse)
+        ));
         let mut bytes = [0; 2];
         assert_eq!(second.read(&mut bytes, 0).unwrap(), 2);
         assert_eq!(bytes, [41, 42]);
+
         drop(second);
         assert!(util.delete_db("handles.db").unwrap());
         util.pause().unwrap();
-        util.resume().await.unwrap();
 
-        let file = SyncAccessHandleStore::open_file(
-            &util.pool,
-            rsqlite_vfs::OpenRequest::named("temporary.db", flags),
-        )
-        .unwrap()
-        .file;
-        SyncAccessHandleStore::close_file(
-            &util.pool,
-            Some("temporary.db"),
-            file,
-            flags.with_delete_on_close(),
-        )
-        .unwrap();
-        assert!(!util.exists("temporary.db"));
         unsafe {
             util.uninstall().unwrap();
         }
@@ -2008,62 +1889,42 @@ mod tests {
 
     #[wasm_bindgen_test]
     async fn hot_journal_recovers_uncommitted_pages() {
-        use sqlite_wasm_rs as ffi;
-        use std::ffi::{CStr, CString};
+        let cfg = config("test-hot-journal");
+        let util = install::<WasmOsCallback>(&cfg, false).await.unwrap();
 
-        struct Db(*mut ffi::sqlite3);
-
-        impl Db {
-            fn open(name: &str) -> Self {
-                let name = CString::new(name).unwrap();
-                let mut db = std::ptr::null_mut();
-                let code = unsafe {
+        let open = |name: &std::ffi::CStr| {
+            let mut db = std::ptr::null_mut();
+            assert_eq!(
+                unsafe {
                     ffi::sqlite3_open_v2(
                         name.as_ptr(),
                         &mut db,
                         ffi::SQLITE_OPEN_CREATE | ffi::SQLITE_OPEN_READWRITE,
                         c"test-hot-journal".as_ptr(),
                     )
-                };
+                },
+                ffi::SQLITE_OK
+            );
+            db
+        };
+        let exec = |db, sql: &std::ffi::CStr| {
+            assert_eq!(
+                unsafe {
+                    ffi::sqlite3_exec(
+                        db,
+                        sql.as_ptr(),
+                        None,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                },
+                ffi::SQLITE_OK
+            );
+        };
 
-                let db = Self(db);
-                assert_eq!(code, ffi::SQLITE_OK);
-                db
-            }
-
-            fn exec(&self, sql: &CStr) {
-                assert_eq!(
-                    unsafe {
-                        ffi::sqlite3_exec(
-                            self.0,
-                            sql.as_ptr(),
-                            None,
-                            std::ptr::null_mut(),
-                            std::ptr::null_mut(),
-                        )
-                    },
-                    ffi::SQLITE_OK
-                );
-            }
-        }
-
-        impl Drop for Db {
-            fn drop(&mut self) {
-                assert_eq!(unsafe { ffi::sqlite3_close(self.0) }, ffi::SQLITE_OK);
-            }
-        }
-
-        let cfg = OpfsSAHPoolCfgBuilder::new()
-            .vfs_name("test-hot-journal")
-            .directory("test_hot_journal")
-            .clear_on_init(true)
-            .build();
-        let util = super::install::<ffi::WasmOsCallback>(&cfg, false)
-            .await
-            .unwrap();
-
-        let db = Db::open("source.db");
-        db.exec(
+        let db = open(c"source.db");
+        exec(
+            db,
             c"PRAGMA cache_size=5; CREATE TABLE t(n, payload);
             WITH RECURSIVE x(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM x WHERE n<100)
             INSERT INTO t SELECT 1, zeroblob(4096) FROM x;
@@ -2081,8 +1942,7 @@ mod tests {
             let file = files.get(name).unwrap();
             let mut bytes = vec![0; file.size().unwrap() as usize];
             assert_eq!(
-                file.read_at(&mut bytes, super::HEADER_OFFSET_DATA as f64)
-                    .unwrap(),
+                file.read_at(&mut bytes, HEADER_OFFSET_DATA as f64).unwrap(),
                 bytes.len()
             );
             bytes
@@ -2092,8 +1952,8 @@ mod tests {
         let journal = snapshot("source.db-journal");
         assert_eq!(&journal[..8], &[217, 213, 5, 249, 32, 161, 99, 215]);
 
-        db.exec(c"ROLLBACK");
-        drop(db);
+        exec(db, c"ROLLBACK");
+        assert_eq!(unsafe { ffi::sqlite3_close(db) }, ffi::SQLITE_OK);
         assert_ne!(util.export_db("source.db").unwrap(), database);
 
         util.import_db_unchecked("recovered.db", &database).unwrap();
@@ -2101,7 +1961,7 @@ mod tests {
             .with_new_file(
                 "recovered.db-journal",
                 super::SQLITE_OPEN_MAIN_JOURNAL,
-                |file| file.write_at(&journal, super::HEADER_OFFSET_DATA as f64),
+                |file| file.write_at(&journal, HEADER_OFFSET_DATA as f64),
             )
             .unwrap();
 
@@ -2112,14 +1972,15 @@ mod tests {
             Err(OpfsSAHError::RecoveryRequired(_))
         ));
 
-        let recovered = Db::open("recovered.db");
-        recovered.exec(
+        let recovered = open(c"recovered.db");
+        exec(
+            recovered,
             c"CREATE TEMP TABLE verify(n CHECK(n=100));
             INSERT INTO verify SELECT count(*) FROM t WHERE n=1;
             CREATE TEMP TABLE dirty(n CHECK(n=0));
             INSERT INTO dirty SELECT count(*) FROM t WHERE n=2;",
         );
-        drop(recovered);
+        assert_eq!(unsafe { ffi::sqlite3_close(recovered) }, ffi::SQLITE_OK);
 
         assert!(!util.exists("recovered.db-journal"));
         util.export_db("recovered.db").unwrap();

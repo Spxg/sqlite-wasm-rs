@@ -1,4 +1,4 @@
-//! This module is codegen from build.rs. Avoid manual edits.
+//! Generated SQLite bindings and handwritten Rust compatibility helpers.
 
 #[cfg(all(not(feature = "bindgen"), feature = "sqlite3mc"))]
 mod sqlite3mc_bindgen;

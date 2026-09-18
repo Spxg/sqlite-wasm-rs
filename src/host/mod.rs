@@ -1,53 +1,31 @@
-//! Link-time host services, independent of the JavaScript binding toolchain.
+//! Link-time host services: sleep, randomness, clock, secure entropy and local time.
 //!
-//! The default `wasm-bindgen` feature supplies all five hooks. To use another
-//! host, disable default features and define these symbols exactly once in the
-//! final application or a linked C/Rust adapter, using the C ABI:
-//!
-//! ```text
-//! void rust_sqlite_wasm_host_sleep(uint64_t seconds, uint32_t nanoseconds);
-//! size_t rust_sqlite_wasm_host_random(uint8_t *buf, size_t len);
-//! int32_t rust_sqlite_wasm_host_epoch_timestamp_in_ms(int64_t *out);
-//! int32_t rust_sqlite_wasm_host_fill_entropy(uint8_t *buf, size_t len);
-//! int32_t rust_sqlite_wasm_host_localtime(int64_t unix_seconds, rust_sqlite_wasm_local_time *out);
-//! ```
-//!
-//! The C declarations and layout are provided in
+//! The default `wasm-bindgen` feature supplies all five hooks. For a custom host,
+//! disable it throughout the dependency graph and implement the C ABI in
 //! [`sqlite-wasm-rs.h`](https://github.com/Spxg/sqlite-wasm-rs/blob/master/sqlite-wasm-rs.h).
-//! Rust adapters use
-//! `#[no_mangle] pub unsafe extern "C" fn` with the corresponding raw
-//! pointer and integer types. A runtime can also supply these as Wasm imports
-//! from module `env` by explicitly allowing these undefined symbols at link time
-//! (see `examples/host-js`). For a statically linked C adapter, see
-//! `examples/host-c`. Pointers refer to
-//! the module's linear memory; Wasm `i64` arguments reach JavaScript as `BigInt`.
-//! Do not enable the default adapter anywhere in the dependency graph when
-//! providing these symbols yourself (Cargo features are additive). Ensure a
-//! Rust adapter crate is linked, e.g. with `use my_adapter as _;`.
+//! Define each symbol once: link a C/Rust adapter or provide `env` imports.
+//! See [host-c](https://github.com/Spxg/sqlite-wasm-rs/tree/master/examples/host-c)
+//! and [host-js](https://github.com/Spxg/sqlite-wasm-rs/tree/master/examples/host-js).
+//! Rust exports use `#[no_mangle] pub unsafe extern "C" fn`; ensure the adapter
+//! crate is linked, e.g. with `use my_adapter as _;`.
 //!
-//! Hooks must not reenter SQLite. Calls follow SQLite's existing single-threaded
-//! contract and may occur during initialization. Return errors instead of
-//! panicking. No registration or mutable global host object is required.
+//! # Hook contract
 //!
-//! `sleep` and `random` follow [`rsqlite_vfs::OsCallback`]; the clock returns UTC
-//! milliseconds since the Unix epoch. `fill_entropy` must fill the entire buffer
-//! with cryptographically secure randomness or return an error, never using the
-//! ordinary random hook as a weak fallback. SQLite3MC may abort if entropy fails.
-//! `localtime` converts Unix seconds using the host's local time zone; returning
-//! an error makes SQLite report local-time conversion failure, not UTC instead.
+//! Calls are single-threaded and may occur during initialization. Do not
+//! reenter SQLite, panic, or retain pointers. Pointers address Wasm linear
+//! memory; JavaScript receives `i64` arguments as `BigInt`.
 //!
-//! Fallible hooks return [`OK`] or an [`Error`] discriminant as `i32`, not SQLite
-//! result codes or errno. Unknown nonzero codes are treated as unavailable.
-//! On success, output parameters must be fully written. Output pointers are
-//! non-null, aligned and writable; buffers contain `len` writable bytes and may
-//! be null only when `len` is zero. Buffers need not be initialized on entry.
-//! Each buffer must lie within one allocation, with exclusive access during
-//! the call and `len <= isize::MAX`. The default adapter rejects larger lengths
-//! or null buffers with nonzero lengths before accessing memory: `random`
-//! returns zero and `fill_entropy` returns [`Error::Unavailable`] as `i32`.
-//! Hooks must not retain pointers after returning.
-//! `random` initializes the first N bytes and returns N, at most `len`.
-//! The sleep nanoseconds argument is the subsecond part, less than 1,000,000,000.
+//! Fallible hooks return [`OK`] or an [`Error`] discriminant, not SQLite codes
+//! or errno; unknown nonzero codes mean unavailable. On success, fully write
+//! outputs. Output pointers must be non-null, aligned and writable. Buffers may be
+//! uninitialized, must occupy one exclusively accessible allocation with
+//! `len <= isize::MAX`, and may be null only for zero length.
+//!
+//! `sleep` and `random` follow [`rsqlite_vfs::OsCallback`]; sleep's nanoseconds
+//! are less than 1,000,000,000. The clock returns UTC Unix milliseconds.
+//! `fill_entropy` must fill the buffer securely or fail, never fall back to
+//! weak randomness; SQLite3MC may abort on failure. `localtime` converts Unix
+//! seconds to local time or fails, without a UTC fallback.
 
 use core::fmt;
 use core::time::Duration;

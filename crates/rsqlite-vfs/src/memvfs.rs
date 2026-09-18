@@ -1,12 +1,9 @@
 //! A platform-independent, single-threaded in-memory VFS.
 //!
-//! Call [`install`] with platform services before use. Select `memvfs` by name
-//! when opening a database, or pass `true` to `install` to make it the default VFS.
-//!
-//! Files are not persistent and are limited by the platform's address space and
-//! available memory. All use must stay on the installing thread. File locks are
-//! no-ops. Multiple simultaneous connections to the same database are unsupported;
-//! repeated opens share file data without enforcing this restriction.
+//! Call [`install`] before use; select `memvfs` by name or install as default.
+//! Files are volatile and limited by address space and memory. Stay on the
+//! installing thread and use one connection per database: locks are no-ops,
+//! and repeated opens share data without enforcing this restriction.
 
 use crate::ffi as bindings;
 
@@ -336,31 +333,20 @@ impl MemVfsUtil {
         Ok(())
     }
 
-    /// Imports a standalone database image under a new filename.
-    ///
-    /// Validates the signature, page size and alignment, not database integrity.
-    /// Sets the header's read/write format versions to rollback-journal mode;
-    /// this does not checkpoint or import a WAL. Supply an image that does not
-    /// depend on a separate WAL or rollback journal for recovery.
-    ///
-    /// The filename must be nonempty, NUL-free and at most 500 UTF-8 bytes,
-    /// leaving room for SQLite's journal and super-journal suffixes within the
-    /// VFS path limit.
-    /// Returns an error for an invalid or existing name, invalid image layout,
-    /// or failure to allocate file data. For encrypted images, use
-    /// [`Self::import_db_unchecked`] instead.
+    /// Imports a standalone image under a new, nonempty, NUL-free name
+    /// (at most 500 UTF-8 bytes, reserving journal space).
+    /// Checks signature/page layout, not integrity; resets header flags to
+    /// rollback mode without recovering journals or merging a WAL.
+    /// Fails on invalid/occupied names, invalid layout or allocation failure.
+    /// For encrypted images use [`Self::import_db_unchecked`].
     pub fn import_db(&self, filename: &str, bytes: &[u8]) -> Result<()> {
         let page_size = check_import_db(bytes)?;
         self.import_db_unchecked_impl(filename, bytes, page_size, true)
     }
 
-    /// Imports an image without inspecting or modifying its header, for example
-    /// an encrypted database. `page_size` is in bytes; it and file alignment are
-    /// still validated. An empty image is allowed.
-    ///
-    /// The filename restrictions and standalone-image requirement of
-    /// [`Self::import_db`] also apply. Returns an error for an invalid or existing
-    /// name, invalid page size/alignment, or failure to allocate file data.
+    /// Like [`Self::import_db`], but preserves the header for encrypted images.
+    /// Still validates the supplied `page_size` (bytes) and alignment.
+    /// Empty images are allowed; name and standalone-image rules still apply.
     pub fn import_db_unchecked(
         &self,
         filename: &str,
@@ -370,13 +356,10 @@ impl MemVfsUtil {
         self.import_db_unchecked_impl(filename, bytes, page_size, false)
     }
 
-    /// Copies the current bytes of a named file into memory.
-    /// This is not a SQLite backup or a transactional snapshot, and does not
-    /// include auxiliary files. To export a standalone database, finish its
-    /// transactions, checkpoint any WAL and close its connections first.
-    /// Requires one contiguous allocation, limited to `isize::MAX` bytes and
-    /// available memory (less than 2 GiB on wasm32).
-    /// Returns an error if the file is absent or cannot fit in an allocated buffer.
+    /// Copies file bytes, excluding sidecars; not a transactional backup.
+    /// Finish transactions, checkpoint WAL and close connections first.
+    /// Fails if absent or unable to allocate a contiguous buffer
+    /// (at most `isize::MAX` bytes, less than 2 GiB on wasm32).
     pub fn export_db(&self, filename: &str) -> Result<Vec<u8>> {
         let name2file = self.0.borrow();
 
@@ -425,17 +408,15 @@ impl MemVfsUtil {
     }
 }
 
-/// Installs memvfs with the supplied platform service and default-VFS policy.
-/// Reuses an existing owned registration without replacing its service or data.
-/// If raw SQLite unregistration detached it, registers that same allocation again.
+/// Installs memvfs, reusing its owned registration, services and data if present.
+/// Re-registers the same allocation if raw SQLite unregistration detached it.
 ///
 /// # Safety
 ///
-/// Requires a valid SQLite global context and serialized registration. All
-/// installation, management, SQLite file access and uninstallation must occur
-/// on the same thread. This backend deliberately uses `Rc` and `RefCell`.
-/// Raw unregistration is allowed, but callers must not free or replace the
-/// owned VFS or its app data; use [`uninstall`] to reclaim them.
+/// Use a valid SQLite context with serialized registration. Installation,
+/// management, file access and uninstallation must stay on one thread.
+/// Raw unregistration is allowed; never free or replace owned VFS/app data
+/// through raw pointers. Use [`uninstall`] for cleanup.
 pub unsafe fn install(
     os: impl OsCallback + 'static,
     default_vfs: bool,
@@ -491,19 +472,15 @@ fn check_owned(
     Ok(())
 }
 
-/// Unregisters the memory VFS and frees its registration resources.
-/// File data remains alive while any [`MemVfsUtil`] still owns it.
-/// Also reclaims an owned VFS already detached by raw SQLite unregistration,
-/// without unregistering an unrelated replacement using the same name.
+/// Frees the owned registration, even if already raw-unregistered; leaves any
+/// same-name replacement alone. [`MemVfsUtil`] handles retain their file data.
 ///
 /// # Safety
 ///
-/// Requires a valid SQLite global context and serialized access to VFS
-/// installation/uninstallation. All files must be closed and no references to
-/// the VFS or its app data may remain in use. `MemVfsUtil` owns its data separately
-/// and may outlive uninstall. Call on the installing thread.
-/// The owned VFS and app-data allocations must not have been freed or replaced
-/// through raw pointers.
+/// Use a valid SQLite context on the installing thread; serialize with VFS
+/// installation/uninstallation. Close all files and retire VFS/app-data
+/// references (`MemVfsUtil` may outlive uninstall). Owned allocations must
+/// not have been freed or replaced through raw pointers.
 pub unsafe fn uninstall() -> core::result::Result<(), crate::RegisterVfsError> {
     unsafe {
         let registered = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());

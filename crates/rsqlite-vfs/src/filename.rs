@@ -2,12 +2,9 @@ use core::ffi::{c_char, CStr};
 
 use crate::{ffi, OpenOptions};
 
-/// A filename borrowed for a backend call. Only names supplied by SQLite
-/// carry URI metadata; constructing this from a Rust string never fabricates
-/// the special allocation expected by SQLite's URI functions.
-/// The default `xOpen` exposes metadata for main databases, their rollback
-/// journals and WAL files. Journal/WAL parameter lookup requires SQLite 3.31.0+.
-/// Copy any name or parameter that the backend needs to retain after the call.
+/// Borrowed filename with URI metadata only when supplied by SQLite.
+/// Default `xOpen` exposes metadata for main databases, journals and WAL files
+/// (journal/WAL lookup needs SQLite 3.31.0+). Copy values retained after the call.
 #[derive(Clone, Copy, Debug)]
 pub struct VfsFilename<'a> {
     path: &'a str,
