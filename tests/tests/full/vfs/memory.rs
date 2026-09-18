@@ -60,21 +60,38 @@ fn test_memory_vfs_util() {
     assert_eq!(before, util.list().len());
 
     let db = util.export_db("test_memory_vfs_util.db").unwrap();
-    // Imports must leave room for SQLite's journal suffix, measured in bytes.
+    // Imports and opens must leave room for SQLite's longest journal suffix.
     for checked in [true, false] {
-        for length in [1016, 1017] {
-            let name = "é".repeat(508) + if length == 1017 { "x" } else { "" };
+        for length in [500, 501] {
+            let name = "é".repeat(250) + if length == 501 { "x" } else { "" };
             let result = if checked {
                 util.import_db(&name, &db)
             } else {
                 let page_size = vfs::check_import_db(&db).unwrap();
                 util.import_db_unchecked(&name, &db, page_size)
             };
-            if length == 1017 {
+            if length == 501 {
                 assert!(matches!(
                     result,
                     Err(vfs::memvfs::MemVfsError::InvalidFilename)
                 ));
+                assert!(!util.exists(&name));
+
+                let filename = std::ffi::CString::new(name.as_str()).unwrap();
+                let mut connection = std::ptr::null_mut();
+                unsafe {
+                    assert_eq!(
+                        sqlite3_open_v2(
+                            filename.as_ptr(),
+                            &mut connection,
+                            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+                            c"memvfs".as_ptr(),
+                        ),
+                        SQLITE_CANTOPEN
+                    );
+                    assert_eq!(sqlite3_close(connection), SQLITE_OK);
+                }
+
                 assert!(!util.exists(&name));
             } else {
                 result.unwrap();
@@ -85,14 +102,35 @@ fn test_memory_vfs_util() {
                         sqlite3_open_v2(
                             filename.as_ptr(),
                             &mut connection,
-                            SQLITE_OPEN_READWRITE,
+                            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
                             c"memvfs".as_ptr(),
                         ),
                         SQLITE_OK
                     );
                     check_result(connection);
+                    assert_eq!(
+                        sqlite3_exec(
+                            connection,
+                            c"ATTACH 'memory-boundary-aux.db' AS aux;
+                            PRAGMA main.page_size=512; VACUUM main;
+                            PRAGMA aux.page_size=512;
+                            CREATE TABLE main.boundary(n);
+                            CREATE TABLE aux.boundary(n);
+                            BEGIN;
+                            INSERT INTO main.boundary VALUES(1);
+                            INSERT INTO aux.boundary VALUES(1);
+                            COMMIT; DETACH aux;"
+                                .as_ptr(),
+                            None,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                        ),
+                        SQLITE_OK
+                    );
                     assert_eq!(sqlite3_close(connection), SQLITE_OK);
                 }
+
+                assert!(util.delete_db("memory-boundary-aux.db"));
                 assert!(util.delete_db(&name));
             }
             assert_eq!(util.count(), before);

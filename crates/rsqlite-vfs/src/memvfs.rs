@@ -5,7 +5,8 @@
 //!
 //! Files are not persistent and are limited by the platform's address space and
 //! available memory. All use must stay on the installing thread. File locks are
-//! no-ops, so callers must prevent conflicting access from multiple connections.
+//! no-ops. Multiple simultaneous connections to the same database are unsupported;
+//! repeated opens share file data without enforcing this restriction.
 
 use crate::ffi as bindings;
 
@@ -26,13 +27,25 @@ use core::ffi::CStr;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
 const VFS_NAME: &CStr = c"memvfs";
-const MAX_PATH_SIZE: i32 = 1024;
+// SQLite's pager uses page-sized scratch space for super-journal names.
+// Keep paths within even the minimum supported 512-byte database page.
+const MAX_PATH_SIZE: i32 = 512;
+// SQLite may append '-' followed by up to 11 characters (e.g. super-journals).
+const MAX_DB_FILENAME_SIZE: usize = MAX_PATH_SIZE as usize - 12;
 
 // Records our allocation, so an unrelated VFS with the same name is never cast
 // to MemAppData or freed by uninstall. This does not make the VFS thread-safe.
 static MEM_VFS: AtomicPtr<bindings::sqlite3_vfs> = AtomicPtr::new(core::ptr::null_mut());
 
 type Result<T> = core::result::Result<T, MemVfsError>;
+
+fn validate_db_filename(name: &str) -> Result<()> {
+    if name.is_empty() || name.as_bytes().contains(&0) || name.len() > MAX_DB_FILENAME_SIZE {
+        return Err(MemVfsError::InvalidFilename);
+    }
+
+    Ok(())
+}
 
 #[derive(Clone)]
 struct MemAppData {
@@ -96,7 +109,7 @@ impl VfsFile for MemFileHandle {
         self.file.borrow_mut().sync(options)
     }
 
-    // Existing memvfs policy: callers must prevent conflicting connections.
+    // Multiple connections to the same database are unsupported, not rejected.
     fn lock(&mut self, level: LockLevel) -> VfsResult<()> {
         self.file.borrow_mut().lock(level)
     }
@@ -144,6 +157,12 @@ impl VfsStore for MemStore {
             });
         };
         let name = filename.path();
+
+        if options.kind() == Some(FileKind::MainDb) {
+            validate_db_filename(name)
+                .map_err(|err| VfsError::new(VfsErrorCode::CantOpen, format!("{err}").into()))?;
+        }
+
         let mut files = app_data.borrow_mut();
         let file = match files.get(name) {
             Some(_) if options.exclusive() => {
@@ -207,6 +226,9 @@ impl VfsStore for MemStore {
     }
 
     fn full_pathname(_data: &MemAppData, name: &str) -> VfsResult<String> {
+        validate_db_filename(name)
+            .map_err(|err| VfsError::new(VfsErrorCode::CantOpen, format!("{err}").into()))?;
+
         Ok(name.into())
     }
 
@@ -251,7 +273,7 @@ pub enum MemVfsError {
     NotInstalled,
     #[error(transparent)]
     Registration(#[from] crate::RegisterVfsError),
-    #[error("filename must be nonempty, NUL-free and at most 1016 UTF-8 bytes")]
+    #[error("filename must be nonempty, NUL-free and at most 500 UTF-8 bytes")]
     InvalidFilename,
     #[error(transparent)]
     ImportDb(#[from] ImportDbError),
@@ -259,7 +281,7 @@ pub enum MemVfsError {
     AlreadyExists(String),
     #[error("file not found: {0:?}")]
     NotFound(String),
-    #[error("file is too large to export into memory")]
+    #[error("file is too large to export into a contiguous memory buffer")]
     FileTooLarge,
     #[error(transparent)]
     Io(#[from] VfsError),
@@ -294,13 +316,7 @@ impl MemVfsUtil {
         page_size: usize,
         clear_wal: bool,
     ) -> Result<()> {
-        // SQLite's pager reserves room for "-journal" within mxPathname.
-        if filename.is_empty()
-            || filename.as_bytes().contains(&0)
-            || filename.len() > MAX_PATH_SIZE as usize - "-journal".len()
-        {
-            return Err(MemVfsError::InvalidFilename);
-        }
+        validate_db_filename(filename)?;
         check_db_and_page_size(bytes.len(), page_size)?;
         if self.exists(filename) {
             return Err(MemVfsError::AlreadyExists(filename.into()));
@@ -327,8 +343,9 @@ impl MemVfsUtil {
     /// this does not checkpoint or import a WAL. Supply an image that does not
     /// depend on a separate WAL or rollback journal for recovery.
     ///
-    /// The filename must be nonempty, NUL-free and at most 1016 UTF-8 bytes,
-    /// leaving room for SQLite's `-journal` suffix within the VFS path limit.
+    /// The filename must be nonempty, NUL-free and at most 500 UTF-8 bytes,
+    /// leaving room for SQLite's journal and super-journal suffixes within the
+    /// VFS path limit.
     /// Returns an error for an invalid or existing name, invalid image layout,
     /// or failure to allocate file data. For encrypted images, use
     /// [`Self::import_db_unchecked`] instead.
@@ -357,6 +374,8 @@ impl MemVfsUtil {
     /// This is not a SQLite backup or a transactional snapshot, and does not
     /// include auxiliary files. To export a standalone database, finish its
     /// transactions, checkpoint any WAL and close its connections first.
+    /// Requires one contiguous allocation, limited to `isize::MAX` bytes and
+    /// available memory (less than 2 GiB on wasm32).
     /// Returns an error if the file is absent or cannot fit in an allocated buffer.
     pub fn export_db(&self, filename: &str) -> Result<Vec<u8>> {
         let name2file = self.0.borrow();
@@ -379,7 +398,8 @@ impl MemVfsUtil {
     }
 
     /// Deletes the named file, returning whether it existed.
-    /// The database must be closed before deleting its files.
+    /// The database must be closed before deleting any of its files, including
+    /// sidecars. Does not automatically delete companion journal/WAL files.
     pub fn delete_db(&self, filename: &str) -> bool {
         self.0.borrow_mut().remove(filename).is_some()
     }
