@@ -307,11 +307,10 @@ impl SQLiteVfsFile {
     /// The name is created from a UTF-8 Rust `String` and leaked for SQLite.
     ///
     /// Do not use again after free.
-    pub unsafe fn name(&self) -> &'static mut str {
+    pub unsafe fn name(&self) -> &str {
         unsafe {
-            // emm, `from_raw_parts_mut` is unstable
-            core::str::from_utf8_unchecked_mut(core::slice::from_raw_parts_mut(
-                self.name_ptr.cast_mut(),
+            core::str::from_utf8_unchecked(core::slice::from_raw_parts(
+                self.name_ptr,
                 self.name_length,
             ))
         }
@@ -563,12 +562,12 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
                 }
             }
 
-            let leak = name.leak();
+            let name = name.into_bytes().into_boxed_slice();
             let vfs_file = pFile.cast::<SQLiteVfsFile>();
             (*vfs_file).vfs = pVfs;
             (*vfs_file).flags = flags;
-            (*vfs_file).name_ptr = leak.as_ptr();
-            (*vfs_file).name_length = leak.len();
+            (*vfs_file).name_length = name.len();
+            (*vfs_file).name_ptr = Box::into_raw(name).cast::<u8>();
 
             (*pFile).pMethods = &IO::METHODS;
 
@@ -762,7 +761,11 @@ pub trait SQLiteIoMethods {
                 }
             }
 
-            drop(Box::from_raw(vfs_file.name()));
+            let name = core::ptr::slice_from_raw_parts_mut(
+                vfs_file.name_ptr.cast_mut(),
+                vfs_file.name_length,
+            );
+            drop(Box::from_raw(name));
 
             SQLITE_OK
         }
