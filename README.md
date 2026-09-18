@@ -96,6 +96,25 @@ The example configures the linker to allow exactly these imports.
 The `bindgen` feature only generates
 SQLite C bindings and does not enable wasm-bindgen.
 
+## Use custom SQLite sources
+
+Set `SQLITE_WASM_RS_SOURCE_DIR` to an amalgamation directory:
+
+```sh
+SQLITE_WASM_RS_SOURCE_DIR=/path/to/sqlite cargo build --target wasm32-unknown-unknown --features bindgen
+```
+
+Without `sqlite3mc`, the directory must contain `sqlite3.c` and `sqlite3.h`.
+With `sqlite3mc`, it must contain `sqlite3mc_amalgamation.c` and
+`sqlite3mc_amalgamation.h` instead. Use matching source/header files; this is
+not a full upstream source checkout. The crate's Wasm shims and compile options
+still apply, so custom versions must be compatible with them.
+
+Unset the variable to use bundled sources. Relative paths are resolved from
+the `sqlite-wasm-rs` crate directory; prefer absolute paths. The `bindgen` feature
+generates bindings from the selected header. Without it, the checked-in bindings
+remain in use and must be compatible with the selected library.
+
 ## Use prebuild libsqlite3.a
 
 We provide the ability to use prebuild `libsqlite3.a`, cargo provides a [`links`](https://doc.rust-lang.org/cargo/reference/manifest.html#the-links-field) field that can be used to specify which library to link to. With the help of [overriding build scripts](https://doc.rust-lang.org/cargo/reference/build-scripts.html#overriding-build-scripts), you can overriding its configuration in your crate and link sqlite to your prebuild `libsqlite3.a`.
