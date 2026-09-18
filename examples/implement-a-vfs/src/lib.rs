@@ -5,45 +5,52 @@
 use sqlite_wasm_rs::{
     sqlite3_close, sqlite3_exec, sqlite3_open_v2,
     utils::{
-        ffi::{
-            sqlite3_file, sqlite3_vfs, SQLITE_FULL, SQLITE_OK, SQLITE_OPEN_CREATE,
-            SQLITE_OPEN_READWRITE,
-        },
-        register_vfs, OsCallback, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile, VfsError, VfsFile,
-        VfsResult, VfsStore,
+        ffi::{SQLITE_OK, SQLITE_OPEN_CREATE, SQLITE_OPEN_READWRITE},
+        register_vfs, AccessMode, LockLevel, OpenAccess, OpenOptions, OpenedFile, SQLiteIoMethods,
+        SQLiteVfs, SyncOptions, VfsError, VfsErrorCode, VfsFile, VfsResult, VfsStore,
     },
 };
-use std::time::Duration;
-use std::{cell::RefCell, collections::HashMap};
-use wasm_bindgen_test::{console_log, wasm_bindgen_test};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use wasm_bindgen_test::wasm_bindgen_test;
 
-/// Our data is simply stored in memory, and we can use Vec<u8>
-#[derive(Default)]
-struct MemFile(Vec<u8>);
+/// Each open owns a handle with its own access mode, sharing the file's bytes.
+struct MemFile {
+    data: Rc<RefCell<Vec<u8>>>,
+    read_only: bool,
+}
+
+impl MemFile {
+    fn check_writable(&self) -> VfsResult<()> {
+        if self.read_only {
+            return Err(VfsError::new(
+                VfsErrorCode::ReadOnly,
+                "File is read-only".into(),
+            ));
+        }
+        Ok(())
+    }
+}
 
 /// Some basic capabilities of file
 impl VfsFile for MemFile {
     /// Called by `xRead`
     ///
     /// We copy the data starting at offset in the memory file to buffer,
-    /// and if it cannot be read completely, false is returned.
-    fn read(&self, buf: &mut [u8], offset: u64) -> VfsResult<bool> {
+    /// returning the number of bytes copied. `xRead` handles zero-filling
+    /// and reports a short read if the buffer cannot be filled.
+    fn read(&mut self, buf: &mut [u8], offset: u64) -> VfsResult<usize> {
         let size = buf.len();
-        if self.0.len() as u64 <= offset {
-            buf.fill(0);
-            return Ok(false);
+        let data = self.data.borrow();
+        if data.len() as u64 <= offset {
+            return Ok(0);
         }
 
         let offset = offset as usize;
-        let read_size = size.min(self.0.len() - offset);
+        let read_size = size.min(data.len() - offset);
         let read_end = offset + read_size;
-        buf[..read_size].copy_from_slice(&self.0[offset..read_end]);
+        buf[..read_size].copy_from_slice(&data[offset..read_end]);
 
-        if read_size < size {
-            buf[read_size..].fill(0);
-            return Ok(false);
-        }
-        Ok(true)
+        Ok(read_size)
     }
 
     /// Called by `xWrite`
@@ -51,16 +58,24 @@ impl VfsFile for MemFile {
     /// We copy the data in the buffer to the memory file,
     /// and if the size is not enough, expand it.
     fn write(&mut self, buf: &[u8], offset: u64) -> VfsResult<()> {
-        let offset = usize::try_from(offset)
-            .map_err(|_| VfsError::new(SQLITE_FULL, "File offset exceeds address space".into()))?;
+        self.check_writable()?;
+        let mut data = self.data.borrow_mut();
+        let offset = usize::try_from(offset).map_err(|_| {
+            VfsError::new(
+                VfsErrorCode::Full,
+                "File offset exceeds address space".into(),
+            )
+        })?;
         let end = offset
             .checked_add(buf.len())
             .filter(|&end| end <= isize::MAX as usize)
-            .ok_or_else(|| VfsError::new(SQLITE_FULL, "File size exceeds address space".into()))?;
-        if end > self.0.len() {
-            self.0.resize(end, 0);
+            .ok_or_else(|| {
+                VfsError::new(VfsErrorCode::Full, "File size exceeds address space".into())
+            })?;
+        if end > data.len() {
+            data.resize(end, 0);
         }
-        self.0[offset..end].copy_from_slice(buf);
+        data[offset..end].copy_from_slice(buf);
         Ok(())
     }
 
@@ -68,9 +83,11 @@ impl VfsFile for MemFile {
     ///
     /// Truncate the memory file, which happens during vacuum
     fn truncate(&mut self, size: u64) -> VfsResult<()> {
-        let size = usize::try_from(size)
-            .map_err(|_| VfsError::new(SQLITE_FULL, "File size exceeds address space".into()))?;
-        self.0.truncate(size);
+        self.check_writable()?;
+        let size = usize::try_from(size).map_err(|_| {
+            VfsError::new(VfsErrorCode::Full, "File size exceeds address space".into())
+        })?;
+        self.data.borrow_mut().truncate(size);
         Ok(())
     }
 
@@ -80,15 +97,27 @@ impl VfsFile for MemFile {
     ///
     /// Since we are in memory, the write operation takes effect immediately,
     /// so we return directly.
-    fn flush(&mut self) -> VfsResult<()> {
+    fn sync(&mut self, _options: SyncOptions) -> VfsResult<()> {
         Ok(())
+    }
+
+    // This tutorial assumes exclusive application ownership of the database.
+    // These no-ops do not coordinate transactions between SQLite connections.
+    fn lock(&mut self, _level: LockLevel) -> VfsResult<()> {
+        Ok(())
+    }
+    fn unlock(&mut self, _level: LockLevel) -> VfsResult<()> {
+        Ok(())
+    }
+    fn check_reserved_lock(&self) -> VfsResult<bool> {
+        Ok(true)
     }
 
     /// Called by `xFileSize`
     ///
     /// Get the memory file size
     fn size(&self) -> VfsResult<u64> {
-        Ok(self.0.len() as u64)
+        Ok(self.data.borrow().len() as u64)
     }
 }
 
@@ -96,72 +125,112 @@ impl VfsFile for MemFile {
 ///
 /// Since we will have multiple different databases,
 /// we use hashmap to store the data with the file name as the key.
-type MemAppData = RefCell<HashMap<String, MemFile>>;
+#[derive(Default)]
+struct MemAppData {
+    files: RefCell<HashMap<String, Rc<RefCell<Vec<u8>>>>>,
+    error: RefCell<Option<VfsError>>,
+}
 
 /// Something that manages our memory files
 struct MemFileStore;
 
 /// Make changes to files
-impl VfsStore<MemFile, MemAppData> for MemFileStore {
+impl VfsStore for MemFileStore {
+    type File = MemFile;
+    type AppData = MemAppData;
+    fn record_error(data: &Self::AppData, error: VfsError) {
+        data.error.replace(Some(error));
+    }
+    fn last_error(data: &Self::AppData) -> Option<VfsError> {
+        data.error.borrow().clone()
+    }
     /// Called by `xOpen`
     ///
-    /// Add the file to the store
-    fn add_file(vfs: *mut sqlite3_vfs, file: &str, flags: i32) -> VfsResult<()> {
-        console_log!("add_file() called, vfs: {vfs:?} file: {file} flags: {flags}");
-        let app_data = unsafe { Self::app_data(vfs) };
-        app_data
-            .borrow_mut()
-            .insert(file.to_string(), MemFile::default());
-        Ok(())
+    /// Return a fresh handle, creating the underlying data only when requested.
+    fn open_file(
+        app_data: &MemAppData,
+        request: sqlite_wasm_rs::utils::OpenRequest<'_>,
+    ) -> VfsResult<OpenedFile<MemFile>> {
+        let options = request.options;
+        let Some(filename) = request.filename else {
+            return Ok(OpenedFile {
+                file: MemFile {
+                    data: Rc::new(RefCell::new(Vec::new())),
+                    read_only: options.access() == OpenAccess::ReadOnly,
+                },
+                access: options.access(),
+            });
+        };
+        let name = filename.path();
+        let mut files = app_data.files.borrow_mut();
+        let data = match files.get(name) {
+            Some(_) if options.exclusive() => {
+                return Err(VfsError::new(
+                    VfsErrorCode::CantOpen,
+                    format!("{name} already exists").into(),
+                ));
+            }
+            Some(data) => data.clone(),
+            None if options.create() => {
+                let data = Rc::new(RefCell::new(Vec::new()));
+                files.insert(name.into(), data.clone());
+                data
+            }
+            None => {
+                return Err(VfsError::new(
+                    VfsErrorCode::CantOpen,
+                    format!("{name} not found").into(),
+                ))
+            }
+        };
+        Ok(OpenedFile {
+            file: MemFile {
+                data,
+                read_only: options.access() == OpenAccess::ReadOnly,
+            },
+            access: options.access(),
+        })
     }
 
-    /// Called by `xOpen` and `xAccess`
+    /// Called by `xAccess`
     ///
     /// Check if the file already exists, which will affect the behavior of opening the db
-    fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<bool> {
-        console_log!("contains_file() called, vfs: {vfs:?} file: {file}");
-        let app_data = unsafe { Self::app_data(vfs) };
-        Ok(app_data.borrow().contains_key(file))
+    fn access(app_data: &MemAppData, file: &str, _mode: AccessMode) -> VfsResult<bool> {
+        Ok(app_data.files.borrow().contains_key(file))
+    }
+
+    fn full_pathname(_data: &MemAppData, name: &str) -> VfsResult<String> {
+        Ok(name.into())
     }
 
     /// Called by `xDelete` and `xClose`
     ///
     /// Delete files, often used in temporary db
-    fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<()> {
-        console_log!("delete_file() called, vfs: {vfs:?} file: {file}");
-        let app_data = unsafe { Self::app_data(vfs) };
-        app_data.borrow_mut().remove(file);
+    fn delete_file(app_data: &MemAppData, file: &str, _sync_dir: bool) -> VfsResult<()> {
+        app_data.files.borrow_mut().remove(file);
         Ok(())
     }
 
-    /// Called by `xRead` and `xFileSize`
-    ///
-    /// Read the file contents
-    fn with_file<F: Fn(&MemFile) -> VfsResult<i32>>(
-        vfs_file: &SQLiteVfsFile,
-        f: F,
-    ) -> VfsResult<i32> {
-        let app_data = unsafe { Self::app_data(vfs_file.vfs) };
-        let name = unsafe { vfs_file.name() };
-        console_log!("with_file() called, vfs: {:?} file: {}", vfs_file.vfs, name);
-        f(app_data.borrow().get(name).unwrap())
-    }
-
-    /// Called by `xWrite`, `xTruncate` and `xSync`
-    ///
-    /// Write the file contents
-    fn with_file_mut<F: Fn(&mut MemFile) -> VfsResult<i32>>(
-        vfs_file: &SQLiteVfsFile,
-        f: F,
-    ) -> VfsResult<i32> {
-        let app_data = unsafe { Self::app_data(vfs_file.vfs) };
-        let name = unsafe { vfs_file.name() };
-        console_log!(
-            "with_file_mut() called, vfs: {:?} file: {}",
-            vfs_file.vfs,
-            name
-        );
-        f(app_data.borrow_mut().get_mut(name).unwrap())
+    /// Consume the handle on close; never delete a replacement with the same name.
+    fn close_file(
+        app_data: &MemAppData,
+        name: Option<&str>,
+        file: MemFile,
+        options: OpenOptions,
+    ) -> VfsResult<()> {
+        let Some(name) = name else {
+            return Ok(());
+        };
+        if options.delete_on_close() {
+            let mut files = app_data.files.borrow_mut();
+            if files
+                .get(name)
+                .is_some_and(|data| Rc::ptr_eq(data, &file.data))
+            {
+                files.remove(name);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -170,20 +239,9 @@ struct MemIoMethods;
 
 /// Implementing the io methods is very simple, just like this:
 impl SQLiteIoMethods for MemIoMethods {
-    type File = MemFile;
-    type AppData = MemAppData;
     type Store = MemFileStore;
 
     const VERSION: ::std::os::raw::c_int = 1;
-
-    /// You can still override the default implementation
-    unsafe extern "C" fn xCheckReservedLock(
-        _: *mut sqlite3_file,
-        #[allow(non_snake_case)] pResOut: *mut ::std::os::raw::c_int,
-    ) -> ::std::os::raw::c_int {
-        *pResOut = 1;
-        SQLITE_OK
-    }
 }
 
 /// Our vfs
@@ -191,19 +249,12 @@ struct MemVfs;
 
 /// Implementing vfs is just as simple, just like this
 impl SQLiteVfs<MemIoMethods> for MemVfs {
+    type Os = sqlite_wasm_rs::WasmOsCallback;
+    fn os(_: &MemAppData) -> &Self::Os {
+        &sqlite_wasm_rs::WasmOsCallback
+    }
+
     const VERSION: ::std::os::raw::c_int = 1;
-
-    fn sleep(dur: Duration) {
-        sqlite_wasm_rs::WasmOsCallback::sleep(dur);
-    }
-
-    fn random(buf: &mut [u8]) {
-        sqlite_wasm_rs::WasmOsCallback::random(buf);
-    }
-
-    fn epoch_timestamp_in_ms() -> i64 {
-        sqlite_wasm_rs::WasmOsCallback::epoch_timestamp_in_ms()
-    }
 
     // As above, you can still override the default implementation
 }
@@ -211,13 +262,17 @@ impl SQLiteVfs<MemIoMethods> for MemVfs {
 #[wasm_bindgen_test]
 pub fn main() {
     // Register VFS to sqlite and register it as the default VFS, enjoy
-    let vfs = register_vfs::<MemIoMethods, MemVfs>(
-        "i_am_simply_implementing_a_mem_vfs",
-        MemAppData::default(),
-        true,
-    )
+    // SAFETY: MemVfs uses the default constructor and file layout. MemIoMethods
+    // and MemFileStore agree on MemAppData, retained by registration. This
+    // example only uses the VFS from this thread.
+    let vfs = unsafe {
+        register_vfs::<MemIoMethods, MemVfs>(
+            "i_am_simply_implementing_a_mem_vfs",
+            MemAppData::default(),
+            true,
+        )
+    }
     .unwrap();
-    console_log!("register vfs success, ptr: {vfs:?}");
 
     let mut db = std::ptr::null_mut();
     let ret = unsafe {
@@ -230,17 +285,7 @@ pub fn main() {
     };
     assert_eq!(ret, SQLITE_OK);
 
-    let sql = c"
-CREATE TABLE IF NOT EXISTS employees (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    salary REAL NOT NULL
-);
-
-INSERT INTO employees (name, salary) VALUES ('Alice', 50000);
-INSERT INTO employees (name, salary) VALUES ('Bob', 60000);
-UPDATE employees SET salary = 55000 WHERE id = 1;
-        ";
+    let sql = c"CREATE TABLE notes (text TEXT); INSERT INTO notes VALUES ('Hello VFS');";
     let ret = unsafe {
         sqlite3_exec(
             db,
@@ -253,6 +298,11 @@ UPDATE employees SET salary = 55000 WHERE id = 1;
     assert_eq!(SQLITE_OK, ret);
 
     unsafe {
-        sqlite3_close(db);
+        assert_eq!(sqlite3_close(db), SQLITE_OK);
+    }
+    // SAFETY: The only connection was closed, and no callbacks, borrowed app
+    // data or external VFS pointers remain in use on this single thread.
+    unsafe {
+        vfs.unregister().unwrap();
     }
 }

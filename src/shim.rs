@@ -9,12 +9,13 @@ use rsqlite_vfs::OsCallback;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::wasm_bindgen;
 
+#[derive(Default)]
 pub struct WasmOsCallback;
 
 impl OsCallback for WasmOsCallback {
     /// thread::sleep is available when atomics is enabled
     #[cfg(target_feature = "atomics")]
-    fn sleep(dur: Duration) {
+    fn sleep(&self, dur: Duration) {
         let mut nanos = dur.as_nanos();
         while nanos > 0 {
             let amt = core::cmp::min(i64::MAX as u128, nanos);
@@ -27,9 +28,11 @@ impl OsCallback for WasmOsCallback {
     }
 
     #[cfg(not(target_feature = "atomics"))]
-    fn sleep(_dur: Duration) {}
+    // Browsers provide no synchronous sleep primitive here. This platform
+    // limitation also applies to VFS xSleep/sqlite3_sleep; do not busy-wait.
+    fn sleep(&self, _dur: Duration) {}
 
-    fn random(buf: &mut [u8]) {
+    fn random(&self, buf: &mut [u8]) -> usize {
         fn fallback(buf: &mut [u8]) {
             // Non-cryptographic fallback when crypto.getRandomValues is unavailable.
             for b in buf {
@@ -49,10 +52,11 @@ impl OsCallback for WasmOsCallback {
                 fallback(buf);
             }
         }
+        buf.len()
     }
 
-    fn epoch_timestamp_in_ms() -> i64 {
-        Date::new_0().get_time() as i64
+    fn epoch_timestamp_in_ms(&self) -> rsqlite_vfs::VfsResult<i64> {
+        Ok(Date::new_0().get_time() as i64)
     }
 }
 
@@ -280,8 +284,10 @@ pub unsafe extern "C" fn rust_sqlite_wasm_calloc(num: c_size_t, size: c_size_t) 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sqlite3_os_init() -> core::ffi::c_int {
     unsafe {
-        rsqlite_vfs::memvfs::install::<WasmOsCallback>();
-        crate::bindings::SQLITE_OK
+        match rsqlite_vfs::memvfs::install(WasmOsCallback, true) {
+            Ok(_) => crate::bindings::SQLITE_OK,
+            Err(_) => crate::bindings::SQLITE_ERROR,
+        }
     }
 }
 
@@ -292,8 +298,10 @@ pub unsafe extern "C" fn sqlite3_os_init() -> core::ffi::c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sqlite3_os_end() -> core::ffi::c_int {
     unsafe {
-        rsqlite_vfs::memvfs::uninstall();
-        crate::bindings::SQLITE_OK
+        match rsqlite_vfs::memvfs::uninstall() {
+            Ok(()) => crate::bindings::SQLITE_OK,
+            Err(_) => crate::bindings::SQLITE_ERROR,
+        }
     }
 }
 
@@ -314,7 +322,75 @@ mod tests {
     fn test_initialize_shutdown() {
         unsafe {
             assert_eq!(sqlite3_initialize(), SQLITE_OK, "failed to initialize");
+            let util = crate::MemVfsUtil::get().unwrap();
+            let original_default = crate::sqlite3_vfs_find(core::ptr::null());
+            for name in ["", "hidden\0suffix"] {
+                assert!(matches!(
+                    util.import_db_unchecked(name, &[42; 512], 512),
+                    Err(crate::MemVfsError::InvalidFilename)
+                ));
+            }
+            assert!(
+                util.import_db_unchecked("invalid-page-size.db", &[42; 512], 0)
+                    .is_err()
+            );
+            assert_eq!(util.count(), 0);
+            assert_eq!(crate::sqlite3_vfs_find(core::ptr::null()), original_default);
+            util.import_db_unchecked("survives-shutdown.db", &[42; 512], 512)
+                .unwrap();
+            assert!(matches!(
+                util.import_db_unchecked("survives-shutdown.db", &[99; 512], 512),
+                Err(crate::MemVfsError::AlreadyExists(_))
+            ));
             assert_eq!(sqlite3_shutdown(), SQLITE_OK, "failed to shutdown");
+            assert_eq!(util.export_db("survives-shutdown.db").unwrap(), [42; 512]);
+            let new_util = crate::MemVfsUtil::get().unwrap();
+            assert!(!new_util.exists("survives-shutdown.db"));
+            util.delete_db("survives-shutdown.db");
+            assert_eq!(sqlite3_shutdown(), SQLITE_OK, "failed to shutdown again");
+
+            // Raw unregistration removes registry membership, not ownership.
+            use alloc::rc::Rc;
+            use core::time::Duration;
+            use rsqlite_vfs::{OsCallback, VfsResult, memvfs};
+            struct TrackedOs {
+                _token: Rc<()>,
+            }
+            impl OsCallback for TrackedOs {
+                fn sleep(&self, duration: Duration) {
+                    WasmOsCallback.sleep(duration);
+                }
+                fn random(&self, bytes: &mut [u8]) -> usize {
+                    WasmOsCallback.random(bytes)
+                }
+                fn epoch_timestamp_in_ms(&self) -> VfsResult<i64> {
+                    WasmOsCallback.epoch_timestamp_in_ms()
+                }
+            }
+            assert_eq!(sqlite3_initialize(), SQLITE_OK);
+            memvfs::uninstall().unwrap();
+            let token = Rc::new(());
+            let util = memvfs::install(
+                TrackedOs {
+                    _token: token.clone(),
+                },
+                true,
+            )
+            .unwrap();
+            util.import_db_unchecked("detached.db", &[42; 512], 512)
+                .unwrap();
+            let original = crate::sqlite3_vfs_find(c"memvfs".as_ptr());
+            assert_eq!(crate::sqlite3_vfs_unregister(original), SQLITE_OK);
+            let reinstalled = memvfs::install(WasmOsCallback, true).unwrap();
+            assert_eq!(crate::sqlite3_vfs_find(c"memvfs".as_ptr()), original);
+            assert_eq!(reinstalled.export_db("detached.db").unwrap(), [42; 512]);
+            drop(util);
+            drop(reinstalled);
+            assert_eq!(Rc::strong_count(&token), 2);
+            assert_eq!(crate::sqlite3_vfs_unregister(original), SQLITE_OK);
+            memvfs::uninstall().unwrap();
+            assert_eq!(Rc::strong_count(&token), 1);
+            assert_eq!(sqlite3_shutdown(), SQLITE_OK);
         }
     }
 
