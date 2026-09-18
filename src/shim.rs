@@ -1,5 +1,6 @@
 //! This module fills in the external functions needed to link to `sqlite.o`
 
+use core::alloc::Layout;
 use core::ffi::{c_char, c_int, c_long, c_longlong, c_void};
 use core::ptr;
 use core::time::Duration;
@@ -40,18 +41,7 @@ impl OsCallback for WasmOsCallback {
             }
         }
 
-        #[cfg(not(target_feature = "atomics"))]
-        get_random_values(buf).unwrap_or_else(|_| fallback(buf));
-
-        #[cfg(target_feature = "atomics")]
-        {
-            let array = js_sys::Uint8Array::new_with_length(buf.len() as _);
-            if get_random_values(&array).is_ok() {
-                array.copy_to(buf);
-            } else {
-                fallback(buf);
-            }
-        }
+        fill_random(buf).unwrap_or_else(|_| fallback(buf));
         buf.len()
     }
 
@@ -75,6 +65,23 @@ extern "C" {
     #[cfg(target_feature = "atomics")]
     #[wasm_bindgen(js_namespace = ["globalThis", "crypto"], js_name = getRandomValues, catch)]
     fn get_random_values(buf: &js_sys::Uint8Array) -> Result<(), JsValue>;
+}
+
+fn fill_random(buf: &mut [u8]) -> Result<(), JsValue> {
+    // Web Crypto limits each getRandomValues request to 65,536 bytes.
+    for chunk in buf.chunks_mut(65_536) {
+        #[cfg(not(target_feature = "atomics"))]
+        get_random_values(chunk)?;
+
+        #[cfg(target_feature = "atomics")]
+        {
+            // Web Crypto cannot fill a view backed by shared Wasm memory.
+            let array = js_sys::Uint8Array::new_with_length(chunk.len() as u32);
+            get_random_values(&array)?;
+            array.copy_to(chunk);
+        }
+    }
+    Ok(())
 }
 
 fn yday_from_date(date: &Date) -> u32 {
@@ -141,31 +148,24 @@ pub struct tm {
     pub tm_zone: *mut c_char,
 }
 
-/// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/include/wasi/api.h#L2652
+/// Internal SQLite3MC entropy hook: returns 0 on success and -1 on failure.
+/// Uses only Web Crypto, without a weak fallback or POSIX errno reporting.
+///
+/// # Safety
+/// For a nonzero length, `buf` must be writable for `buf_len` bytes in a single
+/// allocation, with `buf_len <= isize::MAX`. Its contents may be uninitialized.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rust_sqlite_wasm_getentropy(
-    buf: *mut u8,
-    buf_len: c_size_t,
-) -> core::ffi::c_ushort {
+pub unsafe extern "C" fn rust_sqlite_wasm_getentropy(buf: *mut u8, buf_len: c_size_t) -> c_int {
+    if buf_len == 0 {
+        return 0;
+    }
     unsafe {
-        // https://github.com/WebAssembly/wasi-libc/blob/e9524a0980b9bb6bb92e87a41ed1055bdda5bb86/libc-bottom-half/headers/public/wasi/api.h#L373
-        const FUNCTION_NOT_SUPPORT: core::ffi::c_ushort = 52;
-
-        #[cfg(target_feature = "atomics")]
-        {
-            let array = js_sys::Uint8Array::new_with_length(buf_len as u32);
-            if get_random_values(&array).is_err() {
-                return FUNCTION_NOT_SUPPORT;
-            }
-            array.copy_to(core::slice::from_raw_parts_mut(buf, buf_len));
+        // C output buffers need not be initialized, but a Rust byte slice must be.
+        ptr::write_bytes(buf, 0, buf_len);
+        match fill_random(core::slice::from_raw_parts_mut(buf, buf_len)) {
+            Ok(()) => 0,
+            Err(_) => -1,
         }
-
-        #[cfg(not(target_feature = "atomics"))]
-        if get_random_values(core::slice::from_raw_parts_mut(buf, buf_len)).is_err() {
-            return FUNCTION_NOT_SUPPORT;
-        }
-
-        0
     }
 }
 
@@ -215,10 +215,16 @@ pub unsafe extern "C" fn rust_sqlite_wasm_localtime(t: *const c_time_t) -> *mut 
 // https://github.com/alexcrichton/dlmalloc-rs/blob/fb116603713825b43b113cc734bb7d663cb64be9/src/dlmalloc.rs#L141
 const ALIGN: usize = core::mem::size_of::<usize>() * 2;
 
+fn allocation_layout(size: usize) -> Option<Layout> {
+    Layout::from_size_align(size.checked_add(ALIGN)?, ALIGN).ok()
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rust_sqlite_wasm_malloc(size: c_size_t) -> *mut c_void {
+    let Some(layout) = allocation_layout(size) else {
+        return ptr::null_mut();
+    };
     unsafe {
-        let layout = core::alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
         let ptr = alloc::alloc::alloc(layout);
 
         if ptr.is_null() {
@@ -233,12 +239,16 @@ pub unsafe extern "C" fn rust_sqlite_wasm_malloc(size: c_size_t) -> *mut c_void 
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rust_sqlite_wasm_free(ptr: *mut c_void) {
+    if ptr.is_null() {
+        return;
+    }
     unsafe {
         // Only accepts pointers allocated by rust_sqlite_wasm_malloc/realloc.
         let ptr: *mut u8 = ptr.sub(ALIGN).cast();
         let size = *(ptr.cast::<usize>());
 
-        let layout = core::alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
+        // This size was validated before allocating the block.
+        let layout = Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
         alloc::alloc::dealloc(ptr, layout);
     }
 }
@@ -248,13 +258,21 @@ pub unsafe extern "C" fn rust_sqlite_wasm_realloc(
     ptr: *mut c_void,
     new_size: c_size_t,
 ) -> *mut c_void {
+    if ptr.is_null() {
+        return unsafe { rust_sqlite_wasm_malloc(new_size) };
+    }
+    let Some(new_layout) = allocation_layout(new_size) else {
+        // A failed realloc must leave the original allocation intact.
+        return ptr::null_mut();
+    };
     unsafe {
         // Only accepts pointers allocated by rust_sqlite_wasm_malloc/realloc.
         let ptr: *mut u8 = ptr.sub(ALIGN).cast();
         let size = *(ptr.cast::<usize>());
 
-        let layout = core::alloc::Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
-        let ptr = alloc::alloc::realloc(ptr, layout, new_size + ALIGN);
+        // The old size was validated before allocating the block.
+        let layout = Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
+        let ptr = alloc::alloc::realloc(ptr, layout, new_layout.size());
 
         if ptr.is_null() {
             return ptr::null_mut();
@@ -267,8 +285,10 @@ pub unsafe extern "C" fn rust_sqlite_wasm_realloc(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rust_sqlite_wasm_calloc(num: c_size_t, size: c_size_t) -> *mut c_void {
+    let Some(total) = num.checked_mul(size) else {
+        return ptr::null_mut();
+    };
     unsafe {
-        let total = num * size;
         let ptr: *mut u8 = rust_sqlite_wasm_malloc(total).cast();
         if !ptr.is_null() {
             ptr::write_bytes(ptr, 0, total);
@@ -308,15 +328,13 @@ pub unsafe extern "C" fn sqlite3_os_end() -> core::ffi::c_int {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::ffi::CStr;
-
     use crate::{
-        SQLITE_OK, SQLITE_ROW, SQLITE_TEXT, sqlite3_column_count, sqlite3_column_name,
-        sqlite3_column_text, sqlite3_column_type, sqlite3_initialize, sqlite3_open,
-        sqlite3_prepare_v3, sqlite3_shutdown, sqlite3_step,
+        SQLITE_DONE, SQLITE_OK, SQLITE_ROW, SQLITE_TEXT, sqlite3_close, sqlite3_column_count,
+        sqlite3_column_text, sqlite3_column_type, sqlite3_finalize, sqlite3_initialize,
+        sqlite3_open, sqlite3_prepare_v3, sqlite3_shutdown, sqlite3_step,
     };
 
-    use wasm_bindgen_test::{console_log, wasm_bindgen_test};
+    use wasm_bindgen_test::wasm_bindgen_test;
 
     #[wasm_bindgen_test]
     fn test_initialize_shutdown() {
@@ -396,23 +414,51 @@ mod tests {
 
     #[wasm_bindgen_test]
     fn test_random_get() {
-        let mut buf = [0u8; 10];
-        unsafe { rust_sqlite_wasm_getentropy(buf.as_mut_ptr(), buf.len()) };
-        console_log!("test_random_get: {buf:?}");
+        let mut buf = core::mem::MaybeUninit::<[u8; 32]>::uninit();
+        assert_eq!(
+            unsafe { rust_sqlite_wasm_getentropy(buf.as_mut_ptr().cast(), 32) },
+            0
+        );
+        assert_eq!(
+            unsafe { rust_sqlite_wasm_getentropy(ptr::null_mut(), 0) },
+            0
+        );
+
+        // Must succeed using crypto itself, not the VFS's Math.random fallback.
+        let mut large = alloc::vec![0; 65_537];
+        fill_random(&mut large).unwrap();
     }
 
     #[wasm_bindgen_test]
     fn test_memory() {
         unsafe {
-            let ptr1 = rust_sqlite_wasm_malloc(10);
+            rust_sqlite_wasm_free(ptr::null_mut());
+            let ptr1 = rust_sqlite_wasm_realloc(ptr::null_mut(), 10);
+            assert!(!ptr1.is_null());
+            ptr::write_bytes(ptr1.cast::<u8>(), 42, 10);
             let ptr2 = rust_sqlite_wasm_realloc(ptr1, 100);
+            assert!(!ptr2.is_null());
+            assert_eq!(
+                core::slice::from_raw_parts(ptr2.cast::<u8>(), 10),
+                &[42; 10]
+            );
+            for size in [usize::MAX, isize::MAX as usize, isize::MAX as usize - ALIGN] {
+                assert!(rust_sqlite_wasm_malloc(size).is_null());
+                assert!(rust_sqlite_wasm_realloc(ptr2, size).is_null());
+                assert_eq!(
+                    core::slice::from_raw_parts(ptr2.cast::<u8>(), 10),
+                    &[42; 10]
+                );
+            }
             rust_sqlite_wasm_free(ptr2);
-            console_log!("test_memory: {ptr1:?} {ptr2:?}");
+            assert!(rust_sqlite_wasm_calloc(usize::MAX / 2 + 1, 2).is_null());
 
             let ptr: *mut u8 = rust_sqlite_wasm_calloc(2, 8).cast();
+            assert!(!ptr.is_null());
             let buf = core::slice::from_raw_parts(ptr, 2 * 8);
 
             assert!(buf.iter().all(|&x| x == 0));
+            rust_sqlite_wasm_free(ptr.cast());
         }
     }
 
@@ -432,19 +478,13 @@ mod tests {
                 core::ptr::null_mut(),
             );
             assert_eq!(ret, SQLITE_OK);
-            while sqlite3_step(stmt) == SQLITE_ROW {
-                let count = sqlite3_column_count(stmt);
-                for col in 0..count {
-                    let name = sqlite3_column_name(stmt, col);
-                    let ty = sqlite3_column_type(stmt, col);
-                    assert_eq!(ty, SQLITE_TEXT);
-                    console_log!(
-                        "col {:?}, time: {:?}",
-                        CStr::from_ptr(name),
-                        CStr::from_ptr(sqlite3_column_text(stmt, col).cast())
-                    );
-                }
-            }
+            assert_eq!(sqlite3_step(stmt), SQLITE_ROW);
+            assert_eq!(sqlite3_column_count(stmt), 1);
+            assert_eq!(sqlite3_column_type(stmt, 0), SQLITE_TEXT);
+            assert!(!sqlite3_column_text(stmt, 0).is_null());
+            assert_eq!(sqlite3_step(stmt), SQLITE_DONE);
+            assert_eq!(sqlite3_finalize(stmt), SQLITE_OK);
+            assert_eq!(sqlite3_close(db), SQLITE_OK);
         }
     }
 

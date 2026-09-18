@@ -1,10 +1,10 @@
 use std::ffi::CStr;
 
 use sqlite_wasm_rs::{
-    sqlite3, sqlite3_column_count, sqlite3_column_double, sqlite3_column_int, sqlite3_column_text,
-    sqlite3_column_type, sqlite3_exec, sqlite3_finalize, sqlite3_open_v2, sqlite3_prepare_v3,
-    sqlite3_step, SQLITE_FLOAT, SQLITE_INTEGER, SQLITE_OK, SQLITE_OPEN_CREATE,
-    SQLITE_OPEN_READWRITE, SQLITE_ROW, SQLITE_TEXT,
+    sqlite3, sqlite3_close, sqlite3_column_count, sqlite3_column_double, sqlite3_column_int,
+    sqlite3_column_text, sqlite3_column_type, sqlite3_exec, sqlite3_finalize, sqlite3_open_v2,
+    sqlite3_prepare_v3, sqlite3_step, SQLITE_DONE, SQLITE_FLOAT, SQLITE_INTEGER, SQLITE_OK,
+    SQLITE_OPEN_CREATE, SQLITE_OPEN_READWRITE, SQLITE_ROW, SQLITE_TEXT,
 };
 use wasm_bindgen::prelude::wasm_bindgen;
 
@@ -37,6 +37,7 @@ async fn main() {
     console_log!("db: {db:?}");
     prepare_simple_db(db);
     check_result(db);
+    assert_eq!(unsafe { sqlite3_close(db) }, SQLITE_OK);
 }
 
 fn prepare_simple_db(db: *mut sqlite3) {
@@ -64,7 +65,7 @@ UPDATE employees SET salary = 55000 WHERE id = 1;
 }
 
 pub fn check_result(db: *mut sqlite3) {
-    let sql = c"SELECT * FROM employees;";
+    let sql = c"SELECT * FROM employees ORDER BY id;";
     let mut stmt = std::ptr::null_mut();
     let ret = unsafe {
         sqlite3_prepare_v3(
@@ -82,7 +83,8 @@ pub fn check_result(db: *mut sqlite3) {
     let mut idx = 0;
 
     unsafe {
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        let mut status = sqlite3_step(stmt);
+        while status == SQLITE_ROW {
             let count = sqlite3_column_count(stmt);
             for col in 0..count {
                 let ty = sqlite3_column_type(stmt, col);
@@ -99,8 +101,11 @@ pub fn check_result(db: *mut sqlite3) {
                 }
             }
             idx += 1;
+            status = sqlite3_step(stmt);
         }
+        assert_eq!(status, SQLITE_DONE);
+        assert_eq!(idx, ret.len());
         console_log!("{ret:?}");
-        sqlite3_finalize(stmt);
+        assert_eq!(sqlite3_finalize(stmt), SQLITE_OK);
     }
 }

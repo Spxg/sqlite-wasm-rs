@@ -14,4 +14,5 @@ async fn usage() {
         )
     };
     assert_eq!(ffi::SQLITE_OK, ret);
+    assert_eq!(unsafe { ffi::sqlite3_close(db) }, ffi::SQLITE_OK);
 }

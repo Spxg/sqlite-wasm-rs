@@ -31,7 +31,7 @@ UPDATE employees SET salary = 55000 WHERE id = 1;
 }
 
 pub fn check_result(db: *mut sqlite3) {
-    let sql = c"SELECT * FROM employees;";
+    let sql = c"SELECT * FROM employees ORDER BY id;";
     let mut stmt = std::ptr::null_mut();
     let ret = unsafe {
         sqlite3_prepare_v3(
@@ -49,8 +49,11 @@ pub fn check_result(db: *mut sqlite3) {
     let mut idx = 0;
 
     unsafe {
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        let mut status = sqlite3_step(stmt);
+        while status == SQLITE_ROW {
+            assert!(idx < ret.len(), "unexpected extra row");
             let count = sqlite3_column_count(stmt);
+            assert_eq!(count, 3);
             for col in 0..count {
                 let ty = sqlite3_column_type(stmt, col);
                 match ty {
@@ -66,8 +69,11 @@ pub fn check_result(db: *mut sqlite3) {
                 }
             }
             idx += 1;
+            status = sqlite3_step(stmt);
         }
-        sqlite3_finalize(stmt);
+        assert_eq!(status, SQLITE_DONE);
+        assert_eq!(idx, ret.len());
+        assert_eq!(sqlite3_finalize(stmt), SQLITE_OK);
     }
 }
 
