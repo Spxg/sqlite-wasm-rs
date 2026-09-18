@@ -1,5 +1,5 @@
-#ifndef RUST_SQLITE_WASM_HOST_H
-#define RUST_SQLITE_WASM_HOST_H
+#ifndef SQLITE_WASM_RS_H
+#define SQLITE_WASM_RS_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -37,6 +37,10 @@ typedef struct rust_sqlite_wasm_local_time {
  * aligned and writable; buffers may be null only when len == 0, and need not
  * be initialized. Fallible hooks return a status above and fully write their
  * outputs on success. Output contents are unspecified on failure.
+ * Buffers must lie within one allocation, with exclusive access during the
+ * call and len <= PTRDIFF_MAX (Rust isize::MAX on wasm32). The default adapter
+ * rejects larger lengths or null buffers with nonzero lengths before accessing
+ * memory: random returns 0, fill_entropy returns RUST_SQLITE_WASM_HOST_UNAVAILABLE.
  */
 
 /* nanoseconds is the subsecond part, strictly less than 1,000,000,000.

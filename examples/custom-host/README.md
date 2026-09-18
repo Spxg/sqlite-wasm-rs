@@ -3,7 +3,7 @@
 This example supplies the five C ABI host hooks directly as Wasm imports from
 module `env`. Node provides time, sleep and secure randomness; there is
 no Rust forwarding layer, wasm-bindgen dependency or generated JavaScript glue.
-The ABI is documented in [`shim/host.h`](../../shim/host.h); linked C or Rust
+The ABI is documented in [`sqlite-wasm-rs.h`](../../sqlite-wasm-rs.h); linked C or Rust
 adapters can implement the same hooks instead of importing them.
 `build.rs` allows only the hook symbols listed in `imports.txt` to remain
 undefined at link time; they become Wasm imports.

@@ -12,7 +12,9 @@
 //! int32_t rust_sqlite_wasm_host_localtime(int64_t unix_seconds, rust_sqlite_wasm_local_time *out);
 //! ```
 //!
-//! The C declarations and layout are provided in `shim/host.h`. Rust adapters use
+//! The C declarations and layout are provided in
+//! [`sqlite-wasm-rs.h`](https://github.com/Spxg/sqlite-wasm-rs/blob/master/sqlite-wasm-rs.h).
+//! Rust adapters use
 //! `#[unsafe(no_mangle)] pub unsafe extern "C" fn` with the corresponding raw
 //! pointer and integer types. A runtime can also supply these as Wasm imports
 //! from module `env` by explicitly allowing these undefined symbols at link time
@@ -38,6 +40,10 @@
 //! On success, output parameters must be fully written. Output pointers are
 //! non-null, aligned and writable; buffers contain `len` writable bytes and may
 //! be null only when `len` is zero. Buffers need not be initialized on entry.
+//! Each buffer must lie within one allocation, with exclusive access during
+//! the call and `len <= isize::MAX`. The default adapter rejects larger lengths
+//! or null buffers with nonzero lengths before accessing memory: `random`
+//! returns zero and `fill_entropy` returns [`Error::Unavailable`] as `i32`.
 //! Hooks must not retain pointers after returning.
 //! `random` initializes the first N bytes and returns N, at most `len`.
 //! The sleep nanoseconds argument is the subsecond part, less than 1,000,000,000.

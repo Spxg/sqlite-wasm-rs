@@ -65,6 +65,9 @@
 
 ### Fixed
 
+* Reject oversized or nonempty null buffers in the JavaScript host adapter's
+  C ABI random hooks.
+
 * Handle null pointers and allocation-size overflow in the C allocation shim;
   initialize entropy output buffers safely and split Web Crypto requests to
   avoid unnecessary fallback for buffers larger than 64 KiB.
