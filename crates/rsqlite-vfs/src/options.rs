@@ -1,7 +1,7 @@
 //! Typed values used by the safe VFS delegates. Raw conversions belong at the
 //! SQLite callback boundary or at explicit interoperability points.
 
-use crate::{VfsError, VfsErrorCode, VfsResult, ffi::*};
+use crate::{ffi::*, VfsError, VfsErrorCode, VfsResult};
 
 /// A positive device sector size representable by SQLite's C interface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

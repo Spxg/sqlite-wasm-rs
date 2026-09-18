@@ -497,7 +497,7 @@ fn default_optional_methods_decline_unsupported_features() {
             CStr::from_ptr(message.as_ptr().cast()).to_str().unwrap(),
             "dynamic extension loading is not supported"
         );
-        let mut mapped = core::ptr::dangling_mut();
+        let mut mapped = core::ptr::NonNull::dangling().as_ptr();
         assert_eq!(
             CallbackIo::METHODS.xFetch.unwrap()(file, 0, 512, &mut mapped),
             SQLITE_OK

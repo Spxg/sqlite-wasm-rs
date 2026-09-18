@@ -1,12 +1,12 @@
 //! Default JavaScript host adapter.
 
-use super::{Error, LocalTime, OK, Result};
+use super::{Error, LocalTime, Result, OK};
 use core::time::Duration;
 use js_sys::{Date, Math, Number};
-use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::wasm_bindgen;
+use wasm_bindgen::JsValue;
 
-#[unsafe(export_name = "rust_sqlite_wasm_host_sleep")]
+#[export_name = "rust_sqlite_wasm_host_sleep"]
 pub extern "C" fn sleep(seconds: u64, nanoseconds: u32) {
     let duration = Duration::new(seconds, nanoseconds);
     #[cfg(target_feature = "atomics")]
@@ -26,7 +26,7 @@ pub extern "C" fn sleep(seconds: u64, nanoseconds: u32) {
     let _ = duration;
 }
 
-#[unsafe(export_name = "rust_sqlite_wasm_host_random")]
+#[export_name = "rust_sqlite_wasm_host_random"]
 pub unsafe extern "C" fn random(buf: *mut u8, len: usize) -> usize {
     let Ok(buf) = (unsafe { output_buffer(buf, len) }) else {
         return 0;
@@ -40,7 +40,7 @@ pub unsafe extern "C" fn random(buf: *mut u8, len: usize) -> usize {
     buf.len()
 }
 
-#[unsafe(export_name = "rust_sqlite_wasm_host_epoch_timestamp_in_ms")]
+#[export_name = "rust_sqlite_wasm_host_epoch_timestamp_in_ms"]
 pub unsafe extern "C" fn epoch_timestamp_in_ms(out: *mut i64) -> i32 {
     let milliseconds = Date::new_0().get_time();
     if milliseconds.is_finite() {
@@ -61,7 +61,7 @@ extern "C" {
     fn get_random_values(buf: &js_sys::Uint8Array) -> core::result::Result<(), JsValue>;
 }
 
-#[unsafe(export_name = "rust_sqlite_wasm_host_fill_entropy")]
+#[export_name = "rust_sqlite_wasm_host_fill_entropy"]
 pub unsafe extern "C" fn fill_entropy(buf: *mut u8, len: usize) -> i32 {
     match unsafe { output_buffer(buf, len) }.and_then(fill_entropy_impl) {
         Ok(()) => OK,
@@ -104,7 +104,7 @@ fn fill_entropy_impl(buf: &mut [u8]) -> Result<()> {
 }
 
 // Mirrors the existing Emscripten localtime handling, including DST logic.
-#[unsafe(export_name = "rust_sqlite_wasm_host_localtime")]
+#[export_name = "rust_sqlite_wasm_host_localtime"]
 pub unsafe extern "C" fn localtime(unix_seconds: i64, out: *mut LocalTime) -> i32 {
     let date = Date::new(&Number::from(unix_seconds as f64 * 1000.0).into());
     if !date.get_time().is_finite() {

@@ -1,7 +1,7 @@
 use sqlite_wasm_rs as ffi;
 
 /// Executes a small database operation without wasm-bindgen or generated glue.
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub extern "C" fn run() -> i32 {
     unsafe {
         let mut db = core::ptr::null_mut();

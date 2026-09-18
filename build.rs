@@ -110,6 +110,13 @@ fn bindgen(header: &Path, output: &Path) {
     }
 
     let mut bindings = bindgen::builder()
+        // Keep generated bindings compatible with the MSRV on newer toolchains too.
+        .rust_target(
+            env!("CARGO_PKG_RUST_VERSION")
+                .parse()
+                .expect("invalid package rust-version"),
+        )
+        .rust_edition(bindgen::RustEdition::Edition2021)
         .default_macro_constant_type(bindgen::MacroTypeVariation::Signed)
         .disable_nested_struct_naming()
         .generate_cstr(true)
@@ -124,7 +131,7 @@ fn bindgen(header: &Path, output: &Path) {
     bindings = bindings
         .blocklist_function("sqlite3_auto_extension")
         .raw_line(
-            r#"unsafe extern "C" {
+            r#"extern "C" {
     pub fn sqlite3_auto_extension(
         xEntryPoint: ::core::option::Option<
             unsafe extern "C" fn(
@@ -138,7 +145,7 @@ fn bindgen(header: &Path, output: &Path) {
         )
         .blocklist_function("sqlite3_cancel_auto_extension")
         .raw_line(
-            r#"unsafe extern "C" {
+            r#"extern "C" {
     pub fn sqlite3_cancel_auto_extension(
         xEntryPoint: ::core::option::Option<
             unsafe extern "C" fn(

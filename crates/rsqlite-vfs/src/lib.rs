@@ -1106,7 +1106,11 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
             zOut.cast::<u8>().write_bytes(0, nByte as usize);
             let slice = core::slice::from_raw_parts_mut(zOut.cast(), nByte as usize);
             let count = Self::os(data).random(slice);
-            if count > slice.len() { 0 } else { count as i32 }
+            if count > slice.len() {
+                0
+            } else {
+                count as i32
+            }
         }
     }
 

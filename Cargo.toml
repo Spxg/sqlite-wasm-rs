@@ -53,9 +53,9 @@ members = [
 
 [workspace.package]
 readme = "README.md"
-edition = "2024"
+edition = "2021"
 license = "MIT"
-rust-version = "1.85.0"
+rust-version = "1.81.0"
 include = [
     'src/**/*.rs',
     'build.rs',

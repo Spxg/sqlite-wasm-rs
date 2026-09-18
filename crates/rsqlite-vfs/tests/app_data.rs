@@ -1,6 +1,6 @@
 #[test]
 fn app_data_access_does_not_borrow_registry_links() {
-    use rsqlite_vfs::{VfsAppData, ffi::sqlite3_vfs};
+    use rsqlite_vfs::{ffi::sqlite3_vfs, VfsAppData};
     use std::boxed::Box;
 
     struct Shared(*mut sqlite3_vfs);
