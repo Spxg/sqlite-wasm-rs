@@ -1,9 +1,8 @@
 [![Crates.io](https://img.shields.io/crates/v/sqlite-wasm-rs.svg)](https://crates.io/crates/sqlite-wasm-rs)
 
-`wasm32-unknown-unknown` bindings to the libsqlite3 library, with a default
-wasm-bindgen host adapter and support for custom link-time host adapters.
+`wasm32-unknown-unknown` bindings to the libsqlite3 library.
 
-## Usage 
+## Usage
 
 ```toml
 [dependencies]
@@ -45,94 +44,42 @@ fn open_db() {
 sqlite-wasm-vfs = "0.2"
 ```
 
-The OPFS SAH pool is enabled by default through the `sahpool` feature. See the
-[`sqlite-wasm-vfs` feature documentation](./crates/sqlite-wasm-vfs/README.md#features)
-for details.
-
 The following vfs have been implemented:
 
 * [`memory`](./crates/rsqlite-vfs/src/memvfs.rs): as the default vfs, no additional conditions are required, store the database in memory.
 * [`sahpool`](./crates/sqlite-wasm-vfs/src/sahpool.rs): ported from sqlite-wasm, store the database in opfs.
 
-### VFS Comparison
-
-||MemoryVFS|SyncAccessHandlePoolVFS|
-|-|-|-|
-|Storage|RAM|OPFS|
-|Contexts|All|Dedicated Worker|
-|No COOP/COEP requirements|✅|✅|
-
 ### How to implement a VFS
 
-Here is an example showing how to use `sqlite-wasm-rs` to implement a simple in-memory VFS, see [`implement-a-vfs`](./examples/implement-a-vfs) example.
+Here is an example showing how to implement a simple in-memory VFS, see [`implement-a-vfs`](./examples/implement-a-vfs) example.
 
 ## About multithreading
 
-This library is not thread-safe: SQLite is compiled with `-DSQLITE_THREADSAFE=0`.
-Using a custom host adapter does not change this or the memory VFS's
-single-threaded access requirements.
+This library is not thread-safe:
 
-With the default adapter and without Wasm atomics, `sqlite3_sleep` does not block.
-With atomics, synchronous sleep requires a host context that permits waiting,
-such as a browser worker;
-enabling atomics does not make SQLite thread-safe.
+* The default memory VFS must be used on the installing thread.
+* sqlite is compiled with `-DSQLITE_THREADSAFE=0`.
 
-## Custom hosts without wasm-bindgen
+## Use without wasm-bindgen
 
 ```toml
+[dependencies]
 sqlite-wasm-rs = { version = "0.5", default-features = false }
 ```
 
-Provide the five C ABI hooks declared in [`sqlite-wasm-rs.h`](https://github.com/Spxg/sqlite-wasm-rs/blob/master/sqlite-wasm-rs.h)
-for time, sleep, VFS randomness, secure entropy and local-time conversion.
-The core handles the C shim and default memory VFS; the adapter chooses how to
-communicate with its environment. No runtime host registration is needed.
-
-See [`host-js`](./examples/host-js) for direct JavaScript imports, or
-[`host-c`](./examples/host-c) for a statically linked C adapter using WASI.
-Neither requires wasm-bindgen or generated glue. Keep `wasm-bindgen` disabled throughout the
-dependency graph, since Cargo features are additive. Hooks can be linked from
-C or Rust, or supplied directly as Wasm imports from module `env`.
-The JavaScript example configures the linker to allow exactly these imports.
-The `bindgen` feature only generates
-SQLite C bindings and does not enable wasm-bindgen.
-
-When using rusqlite or Diesel with the JavaScript adapter, explicitly enable
-`sqlite-wasm-rs/wasm-bindgen`: these libraries disable our default features.
-An application can enable it with a direct dependency:
-
-```toml
-sqlite-wasm-rs = { version = "0.5", default-features = false, features = ["wasm-bindgen"] }
-```
+Implement the host functions in [`sqlite-wasm-rs.h`](https://github.com/Spxg/sqlite-wasm-rs/blob/master/sqlite-wasm-rs.h).
+See [`host-js`](./examples/host-js) or [`host-c`](./examples/host-c) example.
 
 ## Use custom SQLite sources
 
-Set `SQLITE_WASM_RS_SOURCE_DIR` to an amalgamation directory:
+Set `SQLITE_WASM_RS_SOURCE_DIR` to the directory containing `sqlite3.c` and `sqlite3.h`.
+With `sqlite3mc`, use `sqlite3mc_amalgamation.c` and `sqlite3mc_amalgamation.h` instead.
+
+> `bindgen` regenerates the C bindings from that header; without it, the bundled bindings must match your SQLite version.
 
 ```sh
 SQLITE_WASM_RS_SOURCE_DIR=/path/to/sqlite cargo build --target wasm32-unknown-unknown --features bindgen
 ```
-
-Without `sqlite3mc`, the directory must contain `sqlite3.c` and `sqlite3.h`.
-With `sqlite3mc`, it must contain `sqlite3mc_amalgamation.c` and
-`sqlite3mc_amalgamation.h` instead. Use matching source/header files; this is
-not a full upstream source checkout. The crate's Wasm shims and compile options
-still apply, so custom versions must be compatible with them.
-
-Unset the variable to use bundled sources. Relative paths are resolved from
-the `sqlite-wasm-rs` crate directory; prefer absolute paths. The `bindgen` feature
-generates bindings from the selected header. Without it, the checked-in bindings
-remain in use and must be compatible with the selected library.
-
-## Use prebuild libsqlite3.a
-
-We provide the ability to use prebuild `libsqlite3.a`, cargo provides a [`links`](https://doc.rust-lang.org/cargo/reference/manifest.html#the-links-field) field that can be used to specify which library to link to. With the help of [overriding build scripts](https://doc.rust-lang.org/cargo/reference/build-scripts.html#overriding-build-scripts), you can overriding its configuration in your crate and link sqlite to your prebuild `libsqlite3.a`.
-
-More see [`use-prebuild-lib`](./examples/use-prebuild-lib) example.
-
-This build-script override must not be combined with the `bindgen` feature:
-it skips binding generation as well as C compilation. Use the checked-in Rust
-bindings with a compatible static library instead.
 
 ## Minimum supported Rust version (MSRV)
 
