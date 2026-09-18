@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { randomFillSync } from 'node:crypto';
 
-const path = process.argv[2] ?? 'target/wasm32-unknown-unknown/debug/custom_host.wasm';
+const path = process.argv[2] ?? 'target/wasm32-unknown-unknown/debug/host_js.wasm';
 const module = await WebAssembly.compile(await readFile(path));
 // The C ABI hooks are supplied directly by the Wasm runtime.
 for (const entry of WebAssembly.Module.imports(module)) {

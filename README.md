@@ -88,11 +88,12 @@ for time, sleep, VFS randomness, secure entropy and local-time conversion.
 The core handles the C shim and default memory VFS; the adapter chooses how to
 communicate with its environment. No runtime host registration is needed.
 
-See [`custom-host`](./examples/custom-host) for ordinary Wasm imports and a plain
-Node loader without generated glue. Keep `wasm-bindgen` disabled throughout the
+See [`host-js`](./examples/host-js) for direct JavaScript imports, or
+[`host-c`](./examples/host-c) for a statically linked C adapter using WASI.
+Neither requires wasm-bindgen or generated glue. Keep `wasm-bindgen` disabled throughout the
 dependency graph, since Cargo features are additive. Hooks can be linked from
 C or Rust, or supplied directly as Wasm imports from module `env`.
-The example configures the linker to allow exactly these imports.
+The JavaScript example configures the linker to allow exactly these imports.
 The `bindgen` feature only generates
 SQLite C bindings and does not enable wasm-bindgen.
 

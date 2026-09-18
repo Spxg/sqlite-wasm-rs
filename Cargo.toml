@@ -39,7 +39,7 @@ targets = ["wasm32-unknown-unknown"]
 
 [workspace]
 resolver = "2"
-exclude = ["examples/custom-host"]
+exclude = ["examples/host-js", "examples/host-c"]
 members = [
   "tests",
   "crates/rsqlite-vfs",

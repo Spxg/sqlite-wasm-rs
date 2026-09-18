@@ -10,8 +10,9 @@
 
 * C ABI host hooks for custom `wasm32-unknown-unknown` environments. The
   default `wasm-bindgen` feature preserves the JavaScript adapter; disabling it
-  removes the core library's `wasm-bindgen` and `js-sys` dependencies. A custom
-  host example runs SQLite with ordinary Wasm imports and no generated glue.
+  removes the core library's `wasm-bindgen` and `js-sys` dependencies. The
+  `host-js` and `host-c` examples demonstrate direct JavaScript imports and a
+  statically linked C/WASI adapter, without generated glue.
 
 * Public, doc-hidden `test_suite` with reusable file and store conformance checks
   for custom VFS implementations.

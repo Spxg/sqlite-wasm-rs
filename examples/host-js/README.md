@@ -1,4 +1,4 @@
-# Custom host without wasm-bindgen
+# JavaScript host without wasm-bindgen
 
 This example supplies the five C ABI host hooks directly as Wasm imports from
 module `env`. Node provides time, sleep and secure randomness; there is
