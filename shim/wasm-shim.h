@@ -99,6 +99,7 @@ struct tm *rust_sqlite_wasm_localtime(const time_t *t);
 
 /* misc */
 #define getentropy rust_sqlite_wasm_getentropy
+/* Internal entropy hook: 0 on success, -1 on failure; does not set errno. */
 int rust_sqlite_wasm_getentropy(void *buffer, size_t len);
 
 /* exit */

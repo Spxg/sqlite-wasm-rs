@@ -42,9 +42,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - uses: taiki-e/install-action@60581cd7025e0e855cebd745379013e286d9c787 # v2.64.2
-      with:
-        tool: wasm-bindgen@0.2.108
     - name: Run diesel tests
       run: |
         git clone https://github.com/diesel-rs/diesel.git
@@ -52,6 +49,10 @@ jobs:
         rustup target add wasm32-unknown-unknown
         printf "[patch.crates-io]\n" >> Cargo.toml
         printf "sqlite-wasm-rs = { path = \"..\" }\n" >> Cargo.toml
+        printf "rsqlite-vfs = { path = \"../crates/rsqlite-vfs\" }\n" >> Cargo.toml
+        printf "sqlite-wasm-vfs = { path = \"../crates/sqlite-wasm-vfs\" }\n" >> Cargo.toml
+        wasm_bindgen_version=$(cargo metadata --format-version 1 --filter-platform wasm32-unknown-unknown --no-default-features --features diesel/sqlite | jq -er '[.packages[] | select(.name == "wasm-bindgen") | .version] | unique | if length == 1 then .[0] else error("expected one wasm-bindgen version") end')
+        cargo install wasm-bindgen-cli --version "$wasm_bindgen_version" --locked
         DATABASE_URL=":memory:" cargo xtask run-tests --wasm sqlite --no-example-schema-check -- --no-fail-fast
 
   test_rusqlite:
@@ -66,7 +67,20 @@ jobs:
         cd rusqlite
         printf "[patch.crates-io]\n" >> Cargo.toml
         printf "sqlite-wasm-rs = { path = \"..\" }\n" >> Cargo.toml
+        printf "rsqlite-vfs = { path = \"../crates/rsqlite-vfs\" }\n" >> Cargo.toml
+        printf "sqlite-wasm-vfs = { path = \"../crates/sqlite-wasm-vfs\" }\n" >> Cargo.toml
         WASM_BINDGEN_TEST_TIMEOUT=60 wasm-pack test --node --features modern-full
+
+  test_bindgen:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install wasm-pack
+      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+    - name: Test generated bindings
+      run: |
+        wasm-pack test --node --features bindgen
+        wasm-pack test --node --features bindgen,sqlite3mc
 
   test_clippy:
     runs-on: ubuntu-latest

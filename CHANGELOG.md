@@ -13,6 +13,8 @@
 
 ### Changed
 
+* Align `code_to_str` with `libsqlite3-sys` by using SQLite's own error messages.
+
 * **Breaking:** Redesign VFS backend traits around owned per-open handles and
   typed options/errors. `VfsStore` owns the `File` and `AppData` types;
   `open_file` receives `OpenRequest` and returns `OpenedFile` with the actual
@@ -50,6 +52,10 @@
   failures without corrupting existing data.
 
 ### Fixed
+
+* Handle null pointers and allocation-size overflow in the C allocation shim;
+  initialize entropy output buffers safely and split Web Crypto requests to
+  avoid unnecessary fallback for buffers larger than 64 KiB.
 
 * Align default callbacks with SQLite's buffer, short-read, time, diagnostic and
   unsupported-operation contracts. Preserve URI metadata for database, journal

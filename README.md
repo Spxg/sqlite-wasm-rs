@@ -31,6 +31,7 @@ fn open_db() {
         )
     };
     assert_eq!(ffi::SQLITE_OK, ret);
+    assert_eq!(unsafe { ffi::sqlite3_close(db) }, ffi::SQLITE_OK);
 }
 ```
 
@@ -71,11 +72,19 @@ This library is not thread-safe:
 * `JsValue` is not cross-threaded, see <https://github.com/rustwasm/wasm-bindgen/pull/955> for details.
 * sqlite is compiled with `-DSQLITE_THREADSAFE=0`.
 
+Without Wasm atomics, `sqlite3_sleep` does not block. With atomics, synchronous
+sleep requires a host context that permits waiting, such as a browser worker;
+enabling atomics does not make SQLite thread-safe.
+
 ## Use prebuild libsqlite3.a
 
 We provide the ability to use prebuild `libsqlite3.a`, cargo provides a [`links`](https://doc.rust-lang.org/cargo/reference/manifest.html#the-links-field) field that can be used to specify which library to link to. With the help of [overriding build scripts](https://doc.rust-lang.org/cargo/reference/build-scripts.html#overriding-build-scripts), you can overriding its configuration in your crate and link sqlite to your prebuild `libsqlite3.a`.
 
 More see [`use-prebuild-lib`](./examples/use-prebuild-lib) example.
+
+This build-script override must not be combined with the `bindgen` feature:
+it skips binding generation as well as C compilation. Use the checked-in Rust
+bindings with a compatible static library instead.
 
 ## Minimum supported Rust version (MSRV)
 

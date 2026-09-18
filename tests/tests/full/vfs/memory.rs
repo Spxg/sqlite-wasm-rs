@@ -33,6 +33,7 @@ fn test_memory_vfs() {
     assert_eq!(SQLITE_OK, ret);
 
     assert_eq!(!state, check_persistent(db2));
+    assert_eq!(unsafe { sqlite3_close(db2) }, SQLITE_OK);
 }
 
 #[wasm_bindgen_test]
