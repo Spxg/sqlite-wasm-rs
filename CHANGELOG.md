@@ -5,9 +5,9 @@
 
 ### Added
 
-* Added independent `sahpool` and `relaxed-idb` features to `sqlite-wasm-vfs`, so
-  unused VFS implementations and their implementation-specific dependencies can
-  be disabled. Both features remain enabled by default.
+* Added a `sahpool` feature to `sqlite-wasm-vfs`, so the OPFS VFS implementation
+  and its `web-sys` filesystem bindings can be disabled. It remains enabled by
+  default.
 
 ### Fixed
 
@@ -17,9 +17,16 @@
   results now use `u64` instead of `usize`, preserving file positions above
   4 GiB on wasm32. Custom VFS implementations must update these signatures and
   check conversions to memory indices or backend-specific numeric types.
-  Buffer lengths and page sizes remain `usize`. OPFS and IndexedDB use 64-bit
-  file positions and reject values outside JavaScript's safe integer range;
+  Buffer lengths and page sizes remain `usize`. OPFS uses 64-bit
+  file positions and rejects values outside JavaScript's safe integer range;
   in-memory files and whole-file exports remain limited by available memory.
+
+### Removed
+
+* **Breaking:** Removed the `relaxed_idb` VFS module, the `relaxed-idb` feature,
+  and the `indexed_db_futures` dependency from `sqlite-wasm-vfs`. Its asynchronous
+  persistence only supported `synchronous=off` and did not provide SQLite's
+  synchronous durability guarantees. Use `sahpool` for persistent storage.
 
 --------------------------------------------------------------------------------
 
