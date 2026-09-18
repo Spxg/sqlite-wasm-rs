@@ -82,8 +82,10 @@ async fn test_opfs_sah_vfs_util() {
         .vfs_name("test-vfs-2")
         .directory("custom/foo")
         .clear_on_init(true)
+        .initial_capacity(6usize)
         .build();
     let util = install_opfs_sahpool(&cfg, false).await.unwrap();
+    assert!(util.capacity() >= cfg.initial_capacity);
 
     let mut db = std::ptr::null_mut();
     let ret = unsafe {
@@ -98,24 +100,43 @@ async fn test_opfs_sah_vfs_util() {
 
     prepare_simple_db(db);
 
-    let before = util.get_capacity();
-    util.add_capacity(1).await.unwrap();
-    assert_eq!(before + 1, util.get_capacity());
+    assert_eq!(unsafe { sqlite3_close(db) }, SQLITE_OK);
 
-    util.reduce_capacity(1).await.unwrap();
-    assert_eq!(before, util.get_capacity());
+    let before: usize = util.capacity();
+    assert_eq!(util.add_capacity(0).await.unwrap(), before);
+    assert_eq!(util.reduce_capacity(0).await.unwrap(), 0);
+    assert_eq!(util.add_capacity(1).await.unwrap(), before + 1);
+    assert_eq!(before + 1, util.capacity());
 
-    util.reserve_minimum_capacity(before + 2).await.unwrap();
-    assert_eq!(before + 2, util.get_capacity());
+    assert_eq!(util.reduce_capacity(1).await.unwrap(), 1);
+    assert_eq!(before, util.capacity());
 
-    let before = util.count();
+    util.ensure_capacity(before + 2).await.unwrap();
+    assert_eq!(before + 2, util.capacity());
+    util.ensure_capacity(before + 2).await.unwrap();
+    util.ensure_capacity(0).await.unwrap();
+    assert_eq!(before + 2, util.capacity());
+
+    let before: usize = util.count();
+    assert_eq!(before, util.list().len());
     assert_eq!(util.list(), vec!["test_opfs_sah_util.db".to_string()]);
+    assert!(!util.exists("missing-opfs-util.db"));
+    assert!(!util.delete_db("missing-opfs-util.db").unwrap());
 
     // export and import to new.db
     let db = util.export_db("test_opfs_sah_util.db").unwrap();
     util.import_db("new.db", &db).unwrap();
-    assert!(util.exists("new.db").unwrap_or_default());
+    assert!(util.exists("new.db"));
+    assert!(util.import_db("new.db", &db).is_err());
+    assert_eq!(util.export_db("new.db").unwrap(), db);
     assert_eq!(before + 1, util.count());
+
+    let unused = util.capacity() - util.count();
+    assert_eq!(util.reduce_capacity(usize::MAX).await.unwrap(), unused);
+    assert_eq!(util.capacity(), util.count());
+    assert_eq!(util.reduce_capacity(1).await.unwrap(), 0);
+    // Restore a spare slot for SQLite's rollback journal.
+    util.add_capacity(1).await.unwrap();
 
     let mut db = std::ptr::null_mut();
     let ret = unsafe {
@@ -131,6 +152,18 @@ async fn test_opfs_sah_vfs_util() {
 
     let state = check_persistent(db);
     assert_eq!(!state, check_persistent(db));
+
+    assert_eq!(unsafe { sqlite3_close(db) }, SQLITE_OK);
+    let capacity = util.capacity();
+    assert!(util.delete_db("new.db").unwrap());
+    assert!(!util.delete_db("new.db").unwrap());
+    assert!(!util.exists("new.db"));
+    assert_eq!(util.count(), before);
+    assert_eq!(util.capacity(), capacity);
+    util.clear_all().await.unwrap();
+    assert_eq!(util.count(), 0);
+    assert!(util.list().is_empty());
+    assert_eq!(util.capacity(), capacity);
 }
 
 #[wasm_bindgen_test]
@@ -155,15 +188,15 @@ async fn test_opfs_sah_vfs_pause() {
 
     prepare_simple_db(db);
 
-    util.pause_vfs().unwrap_err();
+    util.pause().unwrap_err();
 
     unsafe { sqlite3_close(db) };
 
     assert!(!util.is_paused());
 
-    util.pause_vfs().unwrap();
+    util.pause().unwrap();
     assert!(util.is_paused());
-    util.pause_vfs().unwrap();
+    util.pause().unwrap();
 
     let mut db2 = std::ptr::null_mut();
     let ret = unsafe {
@@ -176,9 +209,9 @@ async fn test_opfs_sah_vfs_pause() {
     };
     assert_ne!(SQLITE_OK, ret);
 
-    util.unpause_vfs().await.unwrap();
+    util.resume().await.unwrap();
     assert!(!util.is_paused());
-    util.unpause_vfs().await.unwrap();
+    util.resume().await.unwrap();
 
     let mut db3 = std::ptr::null_mut();
     let ret = unsafe {
