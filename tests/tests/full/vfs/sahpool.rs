@@ -32,6 +32,7 @@ async fn test_opfs_sah_vfs_default() {
 
     let state = check_persistent(db);
     assert_eq!(!state, check_persistent(db));
+    assert_eq!(unsafe { sqlite3_close(db) }, SQLITE_OK);
 }
 
 #[wasm_bindgen_test]
@@ -51,6 +52,7 @@ async fn test_opfs_sah_vfs_default_error() {
     };
 
     assert_eq!(SQLITE_CANTOPEN, ret);
+    assert_eq!(unsafe { sqlite3_close(db) }, SQLITE_OK);
 }
 
 #[wasm_bindgen_test]
@@ -74,6 +76,7 @@ async fn test_opfs_sah_vfs_custom() {
 
     let state = check_persistent(db);
     assert_eq!(!state, check_persistent(db));
+    assert_eq!(unsafe { sqlite3_close(db) }, SQLITE_OK);
 }
 
 #[wasm_bindgen_test]
@@ -208,6 +211,7 @@ async fn test_opfs_sah_vfs_pause() {
         )
     };
     assert_ne!(SQLITE_OK, ret);
+    assert_eq!(unsafe { sqlite3_close(db2) }, SQLITE_OK);
 
     util.resume().await.unwrap();
     assert!(!util.is_paused());

@@ -1,4 +1,5 @@
-#![doc = include_str!("../README.md")]
+//! SQLite VFS implementations for `wasm32-unknown-unknown`.
+
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]

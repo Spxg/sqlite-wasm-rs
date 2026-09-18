@@ -28,6 +28,18 @@
 
 * Align `code_to_str` with `libsqlite3-sys` by using SQLite's own error messages.
 
+* Replace the Tokio dependency in `sqlite-wasm-vfs` with `futures-util`.
+  Disabling `sahpool` now disables all of the crate's normal dependencies.
+
+* **Breaking:** Harden SAH pool lifecycle and management. Validate names,
+  reuse paused installations, and provide explicit unsafe `uninstall`.
+  Management errors are typed; export requires closed databases without
+  nonempty journal/WAL sidecars and reports oversized/allocation failures.
+
+* **Breaking:** Reserve journal suffix space in database names: at most 499 UTF-8
+  bytes for SAH pools and 500 for memvfs. Bound memvfs paths to 512 bytes to match
+  SQLite's super-journal scratch space with minimum-sized database pages.
+
 * **Breaking:** Redesign VFS backend traits around owned per-open handles and
   typed options/errors. `VfsStore` owns the `File` and `AppData` types;
   `open_file` receives `OpenRequest` and returns `OpenedFile` with the actual
@@ -65,6 +77,14 @@
   failures without corrupting existing data.
 
 ### Fixed
+
+* Restore SAH pool hot-journal recovery, flush persistent name changes and
+  imports, and validate complete header I/O. Reclaim handles after errors or
+  cancellation, roll back failed imports, and isolate incomplete namespace
+  updates. Lock directory ownership even for empty pools while preserving the
+  existing on-disk header format.
+  Preserve files with invalid type flags, recover zero-filled incomplete slots,
+  and retain shared handles for SQLite's internal journal inspection.
 
 * Reject oversized or nonempty null buffers in the JavaScript host adapter's
   C ABI random hooks.
