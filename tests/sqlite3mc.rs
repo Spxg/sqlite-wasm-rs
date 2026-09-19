@@ -73,7 +73,13 @@ async fn test_opfs_sah_vfs_cipher(cipher: &str) {
 
     let bytes = pool.export_db("original.db").unwrap();
     assert!(pool.delete_db("original.db").unwrap());
-    pool.import_db_unchecked("restored.db", &bytes).unwrap();
+    let mut import = pool
+        .begin_import_unchecked("restored.db", bytes.len() as u64)
+        .unwrap();
+    for chunk in bytes.chunks(4093) {
+        import.write(chunk).unwrap();
+    }
+    import.finish().unwrap();
 
     check_encrypted_copy("restored.db", &vfs, cipher);
     assert!(pool.delete_db("restored.db").unwrap());

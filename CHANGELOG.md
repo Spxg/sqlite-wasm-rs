@@ -5,6 +5,9 @@
 
 ### Added
 
+* SAH pool chunked import/export handles with `u64` lengths and caller-provided
+  buffers, avoiding full-database allocations on wasm32.
+
 * `SQLITE_WASM_RS_SOURCE_DIR` selects a custom SQLite or SQLite3MC amalgamation
   directory for compilation and optional binding generation.
 
