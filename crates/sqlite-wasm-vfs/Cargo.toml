@@ -2,6 +2,7 @@
 name = "sqlite-wasm-vfs"
 version = "0.3.0"
 edition = "2021"
+rust-version.workspace = true
 authors = ["Spxg <noz@live.com>"]
 license = "MIT"
 repository = "https://github.com/Spxg/sqlite-wasm-rs"
