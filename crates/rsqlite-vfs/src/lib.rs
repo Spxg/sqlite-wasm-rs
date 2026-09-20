@@ -45,28 +45,6 @@ unsafe fn write_message(out: *mut core::ffi::c_char, capacity: i32, message: &st
     out.add(count).write(0);
 }
 
-/// Generates a temporary filename, rejecting unavailable or incomplete randomness.
-pub fn random_name(randomness: impl FnOnce(&mut [u8]) -> usize) -> VfsResult<String> {
-    const GEN_ASCII_STR_CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ\
-                abcdefghijklmnopqrstuvwxyz\
-                0123456789";
-    const GEN_LEN: u8 = GEN_ASCII_STR_CHARSET.len() as u8;
-    let mut random_buffer = [0; 32];
-    if randomness(&mut random_buffer) != random_buffer.len() {
-        return Err(VfsError::new(
-            VfsErrorCode::CantOpen,
-            "insufficient randomness for a temporary filename".into(),
-        ));
-    }
-    Ok(random_buffer
-        .into_iter()
-        .map(|e| {
-            let idx = e.saturating_sub(GEN_LEN * (e / GEN_LEN));
-            GEN_ASCII_STR_CHARSET[idx as usize] as char
-        })
-        .collect())
-}
-
 /// Chunked temporary storage, limited by address space and available memory.
 /// Truncation only shrinks. Sync and locks are no-ops: no persistence or
 /// coordination between connections.

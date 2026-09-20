@@ -4,18 +4,17 @@ use common::Db;
 use sqlite_wasm_rs as ffi;
 use sqlite_wasm_rs::vfs::transfer::DbTransfer;
 use sqlite_wasm_rs::vfs::VfsFilesManager;
-use sqlite_wasm_vfs::sahpool::{install, OpfsSAHError, OpfsSAHPoolCfg, OpfsSAHPoolCfgBuilder};
+use sqlite_wasm_vfs::sahpool::{install, OpfsSAHError, OpfsSAHPoolCfgBuilder};
 use wasm_bindgen_test::wasm_bindgen_test;
 
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_dedicated_worker);
 
-fn config(name: &str) -> OpfsSAHPoolCfg {
+fn config(name: &str) -> OpfsSAHPoolCfgBuilder {
     OpfsSAHPoolCfgBuilder::new()
         .vfs_name(name)
         .directory(name)
         .initial_capacity(3)
         .clear_on_init(true)
-        .build()
 }
 
 #[wasm_bindgen_test]
@@ -23,7 +22,7 @@ async fn install_rejects_foreign_vfs() {
     let memory = unsafe { ffi::vfs::memvfs::MemVfsUtil::get().unwrap() };
     let before = unsafe { ffi::vfs::registered_vfs("memvfs").unwrap().unwrap() };
     let count = memory.len();
-    let result = install::<ffi::WasmOsCallback>(&config("memvfs"), false).await;
+    let result = install::<ffi::WasmOsCallback>(&config("memvfs").build(), false).await;
 
     assert!(
         matches!(result, Err(OpfsSAHError::Vfs(ffi::vfs::RegisterVfsError::NameConflict(name))) if name == "memvfs")
@@ -37,7 +36,7 @@ async fn install_rejects_foreign_vfs() {
 
 #[wasm_bindgen_test]
 async fn lifecycle_reuses_paused_pool_and_reclaims_registration() {
-    let cfg = config("test-pool-lifecycle");
+    let cfg = config("test-pool-lifecycle").build();
     let pool = install::<ffi::WasmOsCallback>(&cfg, false).await.unwrap();
     pool.import_db_unchecked("keep.db", b"keep").unwrap();
 
@@ -61,8 +60,9 @@ async fn lifecycle_reuses_paused_pool_and_reclaims_registration() {
     assert!(!pool.is_paused());
     assert_eq!(pool.export_db("keep.db").unwrap(), b"keep");
 
-    let mut wrong = config("test-pool-lifecycle");
-    wrong.directory = "another-directory".into();
+    let wrong = config("test-pool-lifecycle")
+        .directory("another-directory")
+        .build();
     assert!(matches!(
         install::<ffi::WasmOsCallback>(&wrong, false).await,
         Err(OpfsSAHError::ConfigurationMismatch)
@@ -77,8 +77,7 @@ async fn lifecycle_reuses_paused_pool_and_reclaims_registration() {
         Err(OpfsSAHError::Uninstalled)
     ));
 
-    let mut reopen = cfg;
-    reopen.clear_on_init = false;
+    let reopen = config("test-pool-lifecycle").clear_on_init(false).build();
     let replacement = install::<ffi::WasmOsCallback>(&reopen, false)
         .await
         .unwrap();
@@ -92,13 +91,13 @@ async fn lifecycle_reuses_paused_pool_and_reclaims_registration() {
 
 #[wasm_bindgen_test]
 async fn database_names_reserve_room_for_all_journals() {
-    let mut cfg = config("test-database-name-boundary");
-    cfg.initial_capacity = 6;
+    let vfs_name = "test-database-name-boundary";
+    let cfg = config(vfs_name).initial_capacity(6).build();
     let pool = install::<ffi::WasmOsCallback>(&cfg, false).await.unwrap();
     let name = "é".repeat(249) + "x";
     let db = Db::open(
         &name,
-        &cfg.vfs_name,
+        vfs_name,
         ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
     )
     .unwrap();
@@ -136,7 +135,7 @@ async fn database_names_reserve_room_for_all_journals() {
             assert!(matches!(
                 Db::open(
                     &invalid,
-                    &cfg.vfs_name,
+                    vfs_name,
                     ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE
                 ),
                 Err(ffi::SQLITE_CANTOPEN)
@@ -152,11 +151,12 @@ async fn database_names_reserve_room_for_all_journals() {
 
 #[wasm_bindgen_test]
 async fn restored_database_survives_resize_and_resume() {
-    let cfg = config("test-restore-resize-resume");
+    let vfs_name = "test-restore-resize-resume";
+    let cfg = config(vfs_name).build();
     let pool = install::<ffi::WasmOsCallback>(&cfg, false).await.unwrap();
     let db = Db::open(
         "original.db",
-        &cfg.vfs_name,
+        vfs_name,
         ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
     )
     .unwrap();
@@ -179,12 +179,12 @@ async fn restored_database_survives_resize_and_resume() {
 
     pool.pause().unwrap();
     assert!(matches!(
-        Db::open("restored.db", &cfg.vfs_name, ffi::SQLITE_OPEN_READWRITE),
+        Db::open("restored.db", vfs_name, ffi::SQLITE_OPEN_READWRITE),
         Err(ffi::SQLITE_ERROR)
     ));
     pool.resume().await.unwrap();
 
-    let db = Db::open("restored.db", &cfg.vfs_name, ffi::SQLITE_OPEN_READWRITE).unwrap();
+    let db = Db::open("restored.db", vfs_name, ffi::SQLITE_OPEN_READWRITE).unwrap();
     db.check_rows();
 
     // Restored spare slots must also support new journal writes.
@@ -197,7 +197,7 @@ async fn restored_database_survives_resize_and_resume() {
 
     pool.clear().unwrap();
     assert!(matches!(
-        Db::open("restored.db", &cfg.vfs_name, ffi::SQLITE_OPEN_READWRITE),
+        Db::open("restored.db", vfs_name, ffi::SQLITE_OPEN_READWRITE),
         Err(ffi::SQLITE_CANTOPEN)
     ));
 
@@ -208,13 +208,14 @@ async fn restored_database_survives_resize_and_resume() {
 
 #[wasm_bindgen_test]
 async fn chunked_transfer_round_trips_sqlite_pages() {
-    let cfg = config("test-chunked-transfer");
+    let vfs_name = "test-chunked-transfer";
+    let cfg = config(vfs_name).build();
     let pool = install::<ffi::WasmOsCallback>(&cfg, false).await.unwrap();
 
     for page_size in [c"PRAGMA page_size=4096", c"PRAGMA page_size=65536"] {
         let db = Db::open(
             "source.db",
-            &cfg.vfs_name,
+            vfs_name,
             ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
         )
         .unwrap();
@@ -231,7 +232,7 @@ async fn chunked_transfer_round_trips_sqlite_pages() {
         assert_eq!(export.size(), expected.len() as u64);
         assert!(matches!(pool.remove("source.db"), Err(OpfsSAHError::Busy)));
         assert!(matches!(pool.pause(), Err(OpfsSAHError::Busy)));
-        assert!(Db::open("source.db", &cfg.vfs_name, ffi::SQLITE_OPEN_READWRITE).is_err());
+        assert!(Db::open("source.db", vfs_name, ffi::SQLITE_OPEN_READWRITE).is_err());
 
         let mut bytes = Vec::new();
         let mut buffer = [0; 4093];
@@ -271,7 +272,7 @@ async fn chunked_transfer_round_trips_sqlite_pages() {
 
         pool.pause().unwrap();
         pool.resume().await.unwrap();
-        let db = Db::open("restored.db", &cfg.vfs_name, ffi::SQLITE_OPEN_READWRITE).unwrap();
+        let db = Db::open("restored.db", vfs_name, ffi::SQLITE_OPEN_READWRITE).unwrap();
         db.check_rows();
         drop(db);
         pool.remove("restored.db").unwrap();
@@ -282,7 +283,7 @@ async fn chunked_transfer_round_trips_sqlite_pages() {
 
 #[wasm_bindgen_test]
 async fn incomplete_chunked_imports_never_publish_or_leak_slots() {
-    let cfg = config("test-chunked-abort");
+    let cfg = config("test-chunked-abort").build();
     let pool = install::<ffi::WasmOsCallback>(&cfg, false).await.unwrap();
     pool.reduce_capacity(2).await.unwrap();
 

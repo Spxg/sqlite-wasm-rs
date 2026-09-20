@@ -66,8 +66,8 @@ const HEADER_CORPUS_SIZE: usize = HEADER_MAX_FILENAME_SIZE + 4;
 const HEADER_OFFSET_DATA: usize = SECTOR_SIZE;
 const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
 
-// Bound filename collision retries so a faulty randomness callback cannot loop
-// forever. This is a local policy, not a SQLite or OPFS requirement.
+// Collisions are negligible with a good random source. Cap retries so a faulty
+// callback cannot loop forever; 16 is a local policy, not a SQLite/OPFS requirement.
 const MAX_FILENAME_ATTEMPTS: usize = 16;
 
 const PERSISTENT_FILE_TYPES: i32 =
@@ -78,6 +78,28 @@ const TEMPORARY_FILE_TYPES: i32 = SQLITE_OPEN_TEMP_DB
     | SQLITE_OPEN_SUBJOURNAL;
 
 type Result<T, E = OpfsSAHError> = std::result::Result<T, E>;
+
+// Generates a temporary filename, rejecting unavailable or incomplete randomness.
+fn random_name(randomness: impl FnOnce(&mut [u8]) -> usize) -> VfsResult<String> {
+    const GEN_ASCII_STR_CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ\
+                abcdefghijklmnopqrstuvwxyz\
+                0123456789";
+    const GEN_LEN: u8 = GEN_ASCII_STR_CHARSET.len() as u8;
+    let mut random_buffer = [0; 32];
+    if randomness(&mut random_buffer) != random_buffer.len() {
+        return Err(VfsError::new(
+            VfsErrorCode::CantOpen,
+            "insufficient randomness for a temporary filename".into(),
+        ));
+    }
+    Ok(random_buffer
+        .into_iter()
+        .map(|e| {
+            let idx = e.saturating_sub(GEN_LEN * (e / GEN_LEN));
+            GEN_ASCII_STR_CHARSET[idx as usize] as char
+        })
+        .collect())
+}
 
 fn read_write_options(at: f64) -> FileSystemReadWriteOptions {
     let options = FileSystemReadWriteOptions::new();
@@ -92,25 +114,14 @@ fn validate_filename(filename: &str) -> Result<()> {
         Err(OpfsSAHError::InvalidFilename(
             "filename contains a NUL byte",
         ))
-    } else if filename.len() >= HEADER_MAX_FILENAME_SIZE {
+    } else if filename.len() > MAX_DB_FILENAME_SIZE {
+        // Reserve 12 bytes for SQLite journal suffixes within the 511-byte name field.
         Err(OpfsSAHError::InvalidFilename(
-            "filename exceeds 511 UTF-8 bytes",
+            "filename exceeds 499 UTF-8 bytes",
         ))
     } else {
         Ok(())
     }
-}
-
-fn validate_db_filename(filename: &str) -> Result<()> {
-    validate_filename(filename)?;
-
-    if filename.len() > MAX_DB_FILENAME_SIZE {
-        return Err(OpfsSAHError::InvalidFilename(
-            "database filename exceeds 499 UTF-8 bytes (reserved journal suffix space)",
-        ));
-    }
-
-    Ok(())
 }
 
 fn normalize_directory(directory: &str) -> Result<String> {
@@ -147,6 +158,7 @@ fn physical_offset(offset: u64, length: usize, code: VfsErrorCode) -> VfsResult<
 /// One owner for the browser resource, even when the pool and SQLite share it.
 struct SyncAccessFileInner {
     handle: FileSystemSyncAccessHandle,
+    // Physical filename, independent of the logical SQLite name.
     opaque: String,
     open_count: Cell<usize>,
 }
@@ -169,8 +181,7 @@ impl Deref for SyncAccessFile {
 }
 
 impl SyncAccessFile {
-    // A browser Promise cannot be cancelled. Let a local task adopt its result:
-    // if the caller disappears, the task drops (and closes) the acquired handle.
+    // Keep awaiting after caller cancellation so the acquired handle is closed.
     async fn acquire(handle: FileSystemFileHandle, opaque: String) -> Result<Self> {
         #[derive(Default)]
         struct Pending {
@@ -368,7 +379,15 @@ impl SyncAccessFile {
     fn associate(&self, filename: Option<&str>, flags: i32) -> Result<()> {
         let mut header = [0; HEADER_CORPUS_SIZE];
         if let Some(filename) = filename {
-            validate_filename(filename)?;
+            // Internal names include SQLite's suffixes; leave room for the NUL.
+            if filename.is_empty()
+                || filename.as_bytes().contains(&0)
+                || filename.len() >= HEADER_MAX_FILENAME_SIZE
+            {
+                return Err(OpfsSAHError::InvalidFilename(
+                    "filename cannot be stored in the pool header",
+                ));
+            }
             header[..filename.len()].copy_from_slice(filename.as_bytes());
         }
         header[HEADER_MAX_FILENAME_SIZE..].copy_from_slice(&(flags as u32).to_be_bytes());
@@ -676,7 +695,7 @@ impl OpfsSAHPool {
         for _ in 0..n {
             let mut slot = None;
             for _ in 0..MAX_FILENAME_ATTEMPTS {
-                let opaque = rsqlite_vfs::random_name(|buf| self.os.random(buf))?;
+                let opaque = random_name(|buf| self.os.random(buf))?;
                 if self
                     .available_files
                     .borrow()
@@ -860,7 +879,6 @@ impl OpfsSAHPool {
 
     fn delete_file(&self, filename: &str) -> Result<bool> {
         self.check_active()?;
-        validate_filename(filename)?;
 
         let mut files = self.map_filename_to_file.borrow_mut();
         let Some(file) = files.get(filename) else {
@@ -892,7 +910,6 @@ impl OpfsSAHPool {
         write: impl FnOnce(&SyncAccessFile) -> Result<()>,
     ) -> Result<()> {
         self.check_active()?;
-        validate_filename(filename)?;
         if self.has_filename(filename) {
             return Err(OpfsSAHError::FileExists(filename.into()));
         }
@@ -1072,7 +1089,7 @@ impl DbTransfer for OpfsSAHPool {
 
     fn create_import(&self, filename: &str, size: u64) -> Result<Self::Target<'_>> {
         self.check_active()?;
-        validate_db_filename(filename)?;
+        validate_filename(filename)?;
         physical_offset(size, 0, VfsErrorCode::IoWrite)?;
 
         if self.has_filename(filename) {
@@ -1166,7 +1183,7 @@ impl VfsStore for SyncAccessHandleStore {
             let temporary_name = if request.filename.is_none() {
                 let mut name = None;
                 for _ in 0..MAX_FILENAME_ATTEMPTS {
-                    let candidate = rsqlite_vfs::random_name(|buf| pool.os.random(buf))?;
+                    let candidate = random_name(|buf| pool.os.random(buf))?;
                     if !pool.has_filename(&candidate) {
                         name = Some(candidate);
                         break;
@@ -1182,10 +1199,8 @@ impl VfsStore for SyncAccessHandleStore {
                 .map(|name| name.path())
                 .or(temporary_name.as_deref())
                 .unwrap();
-            validate_filename(filename)?;
-
             if options.kind() == Some(FileKind::MainDb) {
-                validate_db_filename(filename)?;
+                validate_filename(filename)?;
             }
 
             if pool.has_filename(filename) {
@@ -1234,7 +1249,7 @@ impl VfsStore for SyncAccessHandleStore {
     }
 
     fn full_pathname(_pool: &Self::AppData, name: &str) -> VfsResult<String> {
-        validate_db_filename(name).map_err(|err| err.vfs_err(VfsErrorCode::CantOpen))?;
+        validate_filename(name).map_err(|err| err.vfs_err(VfsErrorCode::CantOpen))?;
 
         Ok(name.into())
     }
@@ -1275,25 +1290,29 @@ impl OpfsSAHPoolCfgBuilder {
         Self(OpfsSAHPoolCfg::default())
     }
 
-    /// The SQLite VFS name under which this pool's VFS is registered.
+    /// Nonempty, NUL-free SQLite VFS name. Defaults to `opfs-sahpool`.
     pub fn vfs_name(mut self, name: &str) -> Self {
         self.0.vfs_name = name.into();
         self
     }
 
-    /// Sets [`OpfsSAHPoolCfg::directory`]; see its path rules.
+    /// OPFS-root-relative directory; defaults to `.opfs-sahpool`.
+    /// Empty slash-separated components are ignored; NUL, `.`, `..` and
+    /// entirely empty paths are rejected.
     pub fn directory(mut self, directory: &str) -> Self {
         self.0.directory = directory.into();
         self
     }
 
-    /// Enables destructive first-install clearing; see [`OpfsSAHPoolCfg::clear_on_init`].
+    /// Clears existing files after acquiring every slot on first install.
+    /// Destructive and not atomic; ignored when reusing a pool. Defaults to `false`.
     pub fn clear_on_init(mut self, set: bool) -> Self {
         self.0.clear_on_init = set;
         self
     }
 
-    /// Sets [`OpfsSAHPoolCfg::initial_capacity`], without shrinking larger pools.
+    /// Minimum initial slot count, including journals. Defaults to six.
+    /// Does not shrink an existing larger pool.
     pub fn initial_capacity(mut self, cap: usize) -> Self {
         self.0.initial_capacity = cap;
         self
@@ -1311,21 +1330,13 @@ impl Default for OpfsSAHPoolCfgBuilder {
     }
 }
 
-/// Pool configuration, validated by [`install`].
+/// Pool configuration, created with [`OpfsSAHPoolCfgBuilder`] or [`Self::default`].
+/// Validated by [`install`].
 pub struct OpfsSAHPoolCfg {
-    /// Nonempty, NUL-free SQLite VFS name. Defaults to `opfs-sahpool`.
-    pub vfs_name: String,
-    /// OPFS-root-relative directory; defaults to `.opfs-sahpool`, independently
-    /// of `vfs_name`. Empty slash-separated components are ignored; NUL, `.`,
-    /// `..` and entirely empty paths are rejected.
-    pub directory: String,
-    /// Clears existing file contents after acquiring every slot on first install.
-    /// Destructive and not atomic across files; ignored when reusing an installed pool.
-    /// Defaults to `false`.
-    pub clear_on_init: bool,
-    /// Minimum total number of file slots at initialization.
-    /// An existing larger pool is not shrunk. Defaults to six; journals also use slots.
-    pub initial_capacity: usize,
+    vfs_name: String,
+    directory: String,
+    clear_on_init: bool,
+    initial_capacity: usize,
 }
 
 impl Default for OpfsSAHPoolCfg {
@@ -1843,8 +1854,8 @@ pub async fn install<C: OsCallback + Default + 'static>(
 #[cfg(test)]
 mod tests {
     use super::{
-        install, physical_offset, OpfsSAHError, OpfsSAHPool, OpfsSAHPoolCfg, OpfsSAHPoolCfgBuilder,
-        SyncAccessHandleStore, HEADER_OFFSET_DATA, MAX_SAFE_INTEGER,
+        install, physical_offset, random_name, OpfsSAHError, OpfsSAHPool, OpfsSAHPoolCfg,
+        OpfsSAHPoolCfgBuilder, SyncAccessHandleStore, HEADER_OFFSET_DATA, MAX_SAFE_INTEGER,
     };
     use rsqlite_vfs::transfer::DbTransfer;
     use rsqlite_vfs::{
@@ -1853,6 +1864,22 @@ mod tests {
     };
     use sqlite_wasm_rs::{self as ffi, WasmOsCallback};
     use wasm_bindgen_test::wasm_bindgen_test;
+
+    #[wasm_bindgen_test]
+    fn test_random_name_is_valid() {
+        let name = random_name(|buf| {
+            for (index, byte) in buf.iter_mut().enumerate() {
+                *byte = u8::MAX - index as u8;
+            }
+            buf.len()
+        })
+        .unwrap();
+        assert_eq!(name.len(), 32);
+        assert!(name.bytes().all(|byte| byte.is_ascii_alphanumeric()));
+        assert!(random_name(|_| 0).is_err());
+        assert!(random_name(|buf| buf.len() - 1).is_err());
+        assert!(random_name(|buf| buf.len() + 1).is_err());
+    }
 
     fn config(name: &str) -> OpfsSAHPoolCfg {
         OpfsSAHPoolCfgBuilder::new()
