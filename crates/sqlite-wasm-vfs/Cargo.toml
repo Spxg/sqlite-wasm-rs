@@ -11,7 +11,6 @@ categories = ["development-tools::ffi", "wasm", "database"]
 keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "javascript"]
 
 [features]
-default = ["sahpool"]
 sahpool = [
   "dep:rsqlite-vfs",
   "dep:wasm-bindgen",
@@ -52,4 +51,5 @@ name = "sahpool"
 required-features = ["sahpool"]
 
 [package.metadata.docs.rs]
+all-features = true
 targets = ["wasm32-unknown-unknown"]

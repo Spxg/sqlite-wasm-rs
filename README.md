@@ -40,7 +40,7 @@ fn open_db() {
 ```toml
 [dependencies]
 # Use with sqlite-wasm-rs 0.6.
-sqlite-wasm-vfs = "0.3"
+sqlite-wasm-vfs = { version = "0.3", features = ["sahpool"] }
 ```
 
 The following vfs have been implemented:
