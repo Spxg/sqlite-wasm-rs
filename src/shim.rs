@@ -273,7 +273,7 @@ mod tests {
                     Err(crate::vfs::memvfs::MemVfsError::InvalidFilename)
                 ));
             }
-            assert!(util.is_empty());
+            assert!(util.is_empty().unwrap());
             assert_eq!(crate::sqlite3_vfs_find(core::ptr::null()), original_default);
             util.import_db_unchecked("survives-shutdown.db", &[42; 512])
                 .unwrap();
@@ -282,9 +282,12 @@ mod tests {
                 Err(crate::vfs::memvfs::MemVfsError::AlreadyExists(_))
             ));
             assert_eq!(sqlite3_shutdown(), SQLITE_OK, "failed to shutdown");
+            assert!(util.contains("survives-shutdown.db").unwrap());
+            assert_eq!(util.len().unwrap(), 1);
+            assert_eq!(util.names().unwrap(), ["survives-shutdown.db"]);
             assert_eq!(util.export_db("survives-shutdown.db").unwrap(), [42; 512]);
             let new_util = crate::vfs::memvfs::MemVfsUtil::get().unwrap();
-            assert!(!new_util.contains("survives-shutdown.db"));
+            assert!(!new_util.contains("survives-shutdown.db").unwrap());
             util.remove("survives-shutdown.db").unwrap();
             assert_eq!(sqlite3_shutdown(), SQLITE_OK, "failed to shutdown again");
 

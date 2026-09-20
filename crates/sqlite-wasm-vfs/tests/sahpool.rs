@@ -131,6 +131,13 @@ async fn test_registration() {
     unsafe { util.uninstall().unwrap() };
     assert!(reused.is_uninstalled());
     assert!(matches!(
+        reused.contains("kept"),
+        Err(OpfsSAHError::Uninstalled)
+    ));
+    assert!(matches!(reused.names(), Err(OpfsSAHError::Uninstalled)));
+    assert!(matches!(reused.len(), Err(OpfsSAHError::Uninstalled)));
+    assert!(matches!(reused.is_empty(), Err(OpfsSAHError::Uninstalled)));
+    assert!(matches!(
         reused.resume().await,
         Err(OpfsSAHError::Uninstalled)
     ));
@@ -167,7 +174,13 @@ async fn test_persistence() {
     util.pause().unwrap();
     assert!(util.is_paused());
     assert_eq!(util.capacity(), 0);
-    assert!(util.is_empty());
+    assert!(matches!(
+        util.contains("main.db"),
+        Err(OpfsSAHError::Paused)
+    ));
+    assert!(matches!(util.names(), Err(OpfsSAHError::Paused)));
+    assert!(matches!(util.len(), Err(OpfsSAHError::Paused)));
+    assert!(matches!(util.is_empty(), Err(OpfsSAHError::Paused)));
     assert!(unsafe { sqlite3_vfs_find(c"persistence".as_ptr()) }.is_null());
     assert!(matches!(
         util.export_db("main.db"),
@@ -177,7 +190,7 @@ async fn test_persistence() {
     util.resume().await.unwrap();
     util.resume().await.unwrap();
     assert!(!util.is_paused());
-    assert!(util.contains("main.db"));
+    assert!(util.contains("main.db").unwrap());
     assert_eq!(util.capacity(), 3);
 
     let db = Db::open("persistence", "main.db");
@@ -202,12 +215,12 @@ async fn test_file_management() {
     util.import_db_unchecked("a", b"first").unwrap();
     util.import_db_unchecked("b", b"second").unwrap();
 
-    let mut names = util.names();
+    let mut names = util.names().unwrap();
     names.sort();
     assert_eq!(names, ["a", "b"]);
-    assert_eq!(util.len(), 2);
-    assert!(util.contains("a"));
-    assert!(!util.contains("missing"));
+    assert_eq!(util.len().unwrap(), 2);
+    assert!(util.contains("a").unwrap());
+    assert!(!util.contains("missing").unwrap());
 
     assert_eq!(util.reduce_capacity(usize::MAX).await.unwrap(), 1);
     assert_eq!(util.capacity(), 2);
@@ -227,11 +240,11 @@ async fn test_file_management() {
     assert!(!util.remove("b").unwrap());
     util.import_db_unchecked("d", b"reused").unwrap();
     assert_eq!(util.export_db("d").unwrap(), b"reused");
-    assert_eq!(util.len(), 3);
+    assert_eq!(util.len().unwrap(), 3);
 
     util.clear().unwrap();
-    assert!(util.is_empty());
-    assert!(util.names().is_empty());
+    assert!(util.is_empty().unwrap());
+    assert!(util.names().unwrap().is_empty());
     assert_eq!(util.capacity(), 4);
     assert_eq!(util.reduce_capacity(usize::MAX).await.unwrap(), 4);
     assert_eq!(util.capacity(), 0);
@@ -274,7 +287,7 @@ async fn test_transfer_roundtrip() {
         import.write(chunk).unwrap();
     }
 
-    assert!(!util.contains("copy.db"));
+    assert!(matches!(util.contains("copy.db"), Err(OpfsSAHError::Busy)));
     import.finish().unwrap();
     assert_eq!(util.export_db("copy.db").unwrap(), bytes);
 
@@ -343,17 +356,17 @@ async fn test_import_cleanup() {
             }
         }
 
-        assert!(!util.contains("pending"));
+        assert!(!util.contains("pending").unwrap());
         assert_eq!(util.capacity(), 1);
         util.import_db_unchecked("reused", b"replacement").unwrap();
         assert_eq!(util.export_db("reused").unwrap(), b"replacement");
         assert!(util.remove("reused").unwrap());
-        assert!(util.is_empty());
+        assert!(util.is_empty().unwrap());
     }
 
     util.pause().unwrap();
     util.resume().await.unwrap();
-    assert!(util.is_empty());
+    assert!(util.is_empty().unwrap());
     assert_eq!(util.capacity(), 1);
 
     unsafe { util.uninstall().unwrap() };
@@ -380,6 +393,10 @@ async fn test_busy_guards() {
     drop(db);
 
     let import = util.begin_import_unchecked("pending", 3).unwrap();
+    assert!(matches!(util.contains("main.db"), Err(OpfsSAHError::Busy)));
+    assert!(matches!(util.names(), Err(OpfsSAHError::Busy)));
+    assert!(matches!(util.len(), Err(OpfsSAHError::Busy)));
+    assert!(matches!(util.is_empty(), Err(OpfsSAHError::Busy)));
     assert!(matches!(util.pause(), Err(OpfsSAHError::Busy)));
     assert!(matches!(util.clear(), Err(OpfsSAHError::Busy)));
     assert!(matches!(
@@ -423,7 +440,7 @@ async fn test_sidecar_guard() {
     db.exec(c"PRAGMA journal_mode=PERSIST; CREATE TABLE t(n); INSERT INTO t VALUES(42);");
     drop(db);
 
-    assert!(util.contains("main.db-journal"));
+    assert!(util.contains("main.db-journal").unwrap());
     assert!(matches!(
         util.begin_export("main.db"),
         Err(OpfsSAHError::RecoveryRequired(_))
@@ -456,7 +473,7 @@ async fn test_filename_limits() {
         let db = Db::open("filenames", &name);
         assert_eq!(db.scalar(c"SELECT n FROM t"), 42);
         drop(db);
-        assert!(util.contains(&name));
+        assert!(util.contains(&name).unwrap());
 
         let too_long = format!("{name}x");
         assert!(matches!(
@@ -476,7 +493,7 @@ async fn test_filename_limits() {
             Err(OpfsSAHError::InvalidFilename(_))
         ));
     }
-    assert!(util.is_empty());
+    assert!(util.is_empty().unwrap());
 
     unsafe { util.uninstall().unwrap() };
 }

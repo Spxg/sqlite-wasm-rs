@@ -706,6 +706,7 @@ pub trait VfsFile {
 /// Synchronous management of the backend's current named files.
 ///
 /// Includes journal/WAL files, but excludes anonymous files and unused slots.
+/// Queries report backend failures rather than treating them as missing files.
 pub trait VfsFilesManager {
     /// Backend file-management error.
     type Error;
@@ -719,17 +720,17 @@ pub trait VfsFilesManager {
     fn clear(&self) -> Result<(), Self::Error>;
 
     /// Returns whether the name is present in the current view.
-    fn contains(&self, filename: &str) -> bool;
+    fn contains(&self, filename: &str) -> Result<bool, Self::Error>;
 
     /// Returns all filenames in unspecified order.
-    fn names(&self) -> Vec<String>;
+    fn names(&self) -> Result<Vec<String>, Self::Error>;
 
     /// Returns the number of named files without allocating a list.
-    fn len(&self) -> usize;
+    fn len(&self) -> Result<usize, Self::Error>;
 
     /// Returns whether the current view contains no named files.
-    fn is_empty(&self) -> bool {
-        self.len() == 0
+    fn is_empty(&self) -> Result<bool, Self::Error> {
+        self.len().map(|len| len == 0)
     }
 }
 

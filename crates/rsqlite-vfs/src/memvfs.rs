@@ -21,6 +21,7 @@ use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::RefCell;
+use core::convert::Infallible;
 use core::ffi::CStr;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
@@ -319,27 +320,27 @@ impl MemVfsUtil {
 }
 
 impl VfsFilesManager for MemVfsUtil {
-    type Error = MemVfsError;
+    type Error = Infallible;
 
-    fn remove(&self, filename: &str) -> Result<bool> {
+    fn remove(&self, filename: &str) -> Result<bool, Self::Error> {
         Ok(self.0.borrow_mut().remove(filename).is_some())
     }
 
-    fn clear(&self) -> Result<()> {
+    fn clear(&self) -> Result<(), Self::Error> {
         core::mem::take(&mut *self.0.borrow_mut());
         Ok(())
     }
 
-    fn contains(&self, filename: &str) -> bool {
-        self.0.borrow().contains_key(filename)
+    fn contains(&self, filename: &str) -> Result<bool, Self::Error> {
+        Ok(self.0.borrow().contains_key(filename))
     }
 
-    fn names(&self) -> Vec<String> {
-        self.0.borrow().keys().cloned().collect()
+    fn names(&self) -> Result<Vec<String>, Self::Error> {
+        Ok(self.0.borrow().keys().cloned().collect())
     }
 
-    fn len(&self) -> usize {
-        self.0.borrow().len()
+    fn len(&self) -> Result<usize, Self::Error> {
+        Ok(self.0.borrow().len())
     }
 }
 
@@ -352,7 +353,7 @@ impl DbTransfer for MemVfsUtil {
 
     fn create_import(&self, name: &str, size: u64) -> Result<Self::Target<'_>> {
         validate_db_filename(name)?;
-        if self.contains(name) {
+        if self.0.borrow().contains_key(name) {
             return Err(MemVfsError::AlreadyExists(name.into()));
         }
         usize::try_from(size).map_err(|_| {

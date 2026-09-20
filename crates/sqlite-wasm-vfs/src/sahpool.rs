@@ -1623,7 +1623,8 @@ pub struct OpfsSAHPoolUtil {
     pool: Rc<OpfsSAHPool>,
 }
 
-/// Queries return an empty view while paused or uninstalled.
+/// Queries require an active pool without a management operation or transfer.
+/// Paused, uninstalled or unreconciled pools return errors, not an empty view.
 ///
 /// Removal flushes the namespace and keeps slots for reuse. Clearing requires
 /// an active pool with no open files or management operations; it also permits
@@ -1639,16 +1640,19 @@ impl VfsFilesManager for OpfsSAHPoolUtil {
         self.pool.clear()
     }
 
-    fn contains(&self, filename: &str) -> bool {
-        self.pool.has_filename(filename)
+    fn contains(&self, filename: &str) -> Result<bool> {
+        self.pool.check_active()?;
+        Ok(self.pool.has_filename(filename))
     }
 
-    fn names(&self) -> Vec<String> {
-        self.pool.get_filenames()
+    fn names(&self) -> Result<Vec<String>> {
+        self.pool.check_active()?;
+        Ok(self.pool.get_filenames())
     }
 
-    fn len(&self) -> usize {
-        self.pool.get_file_count()
+    fn len(&self) -> Result<usize> {
+        self.pool.check_active()?;
+        Ok(self.pool.get_file_count())
     }
 }
 

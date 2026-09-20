@@ -40,9 +40,11 @@ and `sqlite-wasm-vfs` 0.3.0.
   Installation, lookup and uninstallation require unsafe, same-thread access.
 
 * Move management methods to `VfsFilesManager`: `remove`, `clear`, `contains`,
-  `names`, `len` and `is_empty`. Move import/export methods to `transfer::DbTransfer`;
-  import these traits to call their methods. Unchecked imports preserve all bytes
-  and no longer take `clear_wal`.
+  `names`, `len` and `is_empty`, all returning `Result`. Memory VFS management
+  uses `Infallible`; SAH queries reject paused, uninstalled, busy or
+  recovery-required states.
+  Move import/export methods to `transfer::DbTransfer`; import these traits to
+  call their methods. Unchecked imports preserve all bytes and no longer take `clear_wal`.
 
 * Make registration, memory VFS and transfer errors non-exhaustive.
 
