@@ -1,6 +1,14 @@
 # `sqlite-wasm-rs` Change Log
 --------------------------------------------------------------------------------
 
+## Unreleased
+
+### Changed
+
+* Relax build dependency requirements to `cc = "1"` and `bindgen = "0.73"`.
+
+--------------------------------------------------------------------------------
+
 ## [0.6.0](https://github.com/Spxg/sqlite-wasm-rs/compare/0.5.5...0.6.0)
 
 Changes since 0.5.5, covering `sqlite-wasm-rs` 0.6.0, `rsqlite-vfs` 0.2.0
