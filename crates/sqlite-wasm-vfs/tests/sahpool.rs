@@ -1,3 +1,4 @@
+use js_sys::futures::JsFuture;
 use rsqlite_vfs::{
     transfer::{DbTransfer, TransferError},
     VfsFilesManager,
@@ -10,7 +11,6 @@ use std::{
     ptr,
 };
 use wasm_bindgen::{prelude::wasm_bindgen, JsValue};
-use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::wasm_bindgen_test;
 
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_dedicated_worker);

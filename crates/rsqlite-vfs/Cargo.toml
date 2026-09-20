@@ -11,7 +11,7 @@ description = "Helping to implement SQLite VFS."
 categories = ["development-tools::ffi", "wasm", "database"]
 
 [dependencies]
-thiserror = { version = "2.0.12", default-features = false }
+thiserror = { version = "2.0.20", default-features = false }
 
 [dev-dependencies]
-libsqlite3-sys = { version = "0.30", features = ["bundled"] }
+libsqlite3-sys = { version = "0.38.2", features = ["bundled"] }

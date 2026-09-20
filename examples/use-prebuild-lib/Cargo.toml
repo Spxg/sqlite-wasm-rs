@@ -5,4 +5,4 @@ edition = "2021"
 
 [dependencies]
 sqlite-wasm-rs = { path = "../..", features = ["wasm-bindgen"] }
-wasm-bindgen-test = "0.3.50"
+wasm-bindgen-test = "0.3.78"

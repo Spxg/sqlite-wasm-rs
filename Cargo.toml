@@ -15,8 +15,8 @@ include.workspace = true
 
 [dependencies]
 rsqlite-vfs = "0.2"
-wasm-bindgen = { version = "0.2.104", default-features = false, optional = true }
-js-sys = { version = "0.3.81", default-features = false, optional = true }
+wasm-bindgen = { version = "0.2.128", default-features = false, optional = true }
+js-sys = { version = "0.3.105", default-features = false, optional = true }
 
 [features]
 # Optional JavaScript host adapter. Otherwise supply link-time host hooks.
@@ -27,11 +27,11 @@ wasm-bindgen = ["dep:wasm-bindgen", "dep:js-sys"]
 sqlite3mc = []
 
 [build-dependencies]
-cc = "1"
-bindgen = { version = "0.72.1", optional = true }
+cc = "1.4.7"
+bindgen = { version = "0.73.2", default-features = false, features = ["runtime", "prettyplease"], optional = true }
 
 [dev-dependencies]
-wasm-bindgen-test = "0.3.54"
+wasm-bindgen-test = "0.3.78"
 
 [[test]]
 name = "sqlite3"

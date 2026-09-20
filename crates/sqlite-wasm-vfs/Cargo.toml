@@ -16,7 +16,6 @@ sahpool = [
   "dep:rsqlite-vfs",
   "dep:wasm-bindgen",
   "dep:js-sys",
-  "dep:wasm-bindgen-futures",
   "dep:futures-util",
   "dep:thiserror",
   "dep:web-sys",
@@ -25,18 +24,16 @@ sahpool = [
 [dependencies]
 rsqlite-vfs = { version = "0.2", optional = true }
 
-wasm-bindgen = { version = "0.2.104", optional = true }
-js-sys = { version = "0.3.81", optional = true }
-wasm-bindgen-futures = { version = "0.4.54", optional = true }
-futures-util = { version = "0.3.32", default-features = false, features = ["std"], optional = true }
-thiserror = { version = "2.0.12", optional = true }
-web-sys = { version = "0.3.81", optional = true, features = [
+wasm-bindgen = { version = "0.2.128", default-features = false, optional = true }
+js-sys = { version = "0.3.105", default-features = false, features = ["std"], optional = true }
+futures-util = { version = "0.3.34", default-features = false, features = ["std"], optional = true }
+thiserror = { version = "2.0.20", default-features = false, optional = true }
+web-sys = { version = "0.3.105", default-features = false, optional = true, features = [
   "StorageManager",
   "FileSystemSyncAccessHandle",
   "FileSystemDirectoryHandle",
   "FileSystemGetDirectoryOptions",
   "FileSystemReadWriteOptions",
-  "WorkerGlobalScope",
   "DedicatedWorkerGlobalScope",
   "WorkerNavigator",
   "FileSystemGetFileOptions",
@@ -44,7 +41,7 @@ web-sys = { version = "0.3.81", optional = true, features = [
 ]}
 
 [dev-dependencies]
-wasm-bindgen-test = "0.3.54"
+wasm-bindgen-test = "0.3.78"
 sqlite-wasm-rs = { version = "0.6", default-features = false, features = ["wasm-bindgen"] }
 
 [[test]]

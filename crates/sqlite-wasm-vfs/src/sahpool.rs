@@ -49,9 +49,11 @@ use std::{
     task::{Poll, Waker},
 };
 
-use js_sys::{Array, IteratorNext, Reflect};
+use js_sys::{
+    futures::{spawn_local, JsFuture},
+    Array, IteratorNext, Reflect,
+};
 use wasm_bindgen::{JsCast, JsValue};
-use wasm_bindgen_futures::{spawn_local, JsFuture};
 use web_sys::{
     DedicatedWorkerGlobalScope, FileSystemDirectoryHandle, FileSystemFileHandle,
     FileSystemGetDirectoryOptions, FileSystemGetFileOptions, FileSystemReadWriteOptions,

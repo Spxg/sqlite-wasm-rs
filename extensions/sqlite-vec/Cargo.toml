@@ -14,10 +14,10 @@ keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "sqlite-vec"]
 [dependencies]
 
 [build-dependencies]
-cc = "1"
+cc = "1.4.7"
 
 [dev-dependencies]
-wasm-bindgen-test = "0.3.55"
+wasm-bindgen-test = "0.3.78"
 sqlite-wasm-rs = { version = "0.6", default-features = false, features = ["wasm-bindgen"] }
 
 [package.metadata.docs.rs]

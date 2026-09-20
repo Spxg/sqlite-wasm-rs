@@ -120,6 +120,8 @@ fn bindgen(header: &Path, output: &Path) {
         .default_macro_constant_type(bindgen::MacroTypeVariation::Signed)
         .disable_nested_struct_naming()
         .generate_cstr(true)
+        // SQLite's C/HTML comments are not Rust documentation tests.
+        .generate_comments(false)
         .trust_clang_mangling(false)
         .header(
             header
