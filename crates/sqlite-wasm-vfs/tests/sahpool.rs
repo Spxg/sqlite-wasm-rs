@@ -1,4 +1,7 @@
-use rsqlite_vfs::{transfer::DbTransfer, VfsFilesManager};
+use rsqlite_vfs::{
+    transfer::{DbTransfer, TransferError},
+    VfsFilesManager,
+};
 use sqlite_wasm_rs::*;
 use sqlite_wasm_vfs::sahpool::{install, OpfsSAHError, OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil};
 use std::{
@@ -339,19 +342,22 @@ async fn test_import_cleanup() {
                 let mut import = util.begin_import("pending", 512).unwrap();
                 assert!(matches!(
                     import.write(&[0; 18]),
-                    Err(OpfsSAHError::ImportDb(_))
+                    Err(OpfsSAHError::Transfer(TransferError::ImportDb(_)))
                 ));
-                assert!(matches!(import.finish(), Err(OpfsSAHError::ImportFailed)));
+                assert!(matches!(
+                    import.finish(),
+                    Err(OpfsSAHError::Transfer(TransferError::ImportFailed))
+                ));
             }
             Finish::Incomplete => {
                 let mut import = util.begin_import_unchecked("pending", 8).unwrap();
                 import.write(b"short").unwrap();
                 assert!(matches!(
                     import.finish(),
-                    Err(OpfsSAHError::ImportSizeMismatch {
+                    Err(OpfsSAHError::Transfer(TransferError::SizeMismatch {
                         expected: 8,
                         actual: 5
-                    })
+                    }))
                 ));
             }
         }

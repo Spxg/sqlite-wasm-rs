@@ -6,7 +6,7 @@
 //! and repeated opens share data without enforcing this restriction.
 
 use crate::ffi as bindings;
-use crate::transfer::{DbTransfer, ExportSource, ImportDbError, ImportTarget, TransferError};
+use crate::transfer::{DbTransfer, ExportSource, ImportTarget, TransferError};
 
 use crate::{
     AccessMode, FileKind, LockLevel, MemChunksFile, OpenAccess, OpenOptions, OpenedFile,
@@ -270,29 +270,14 @@ pub enum MemVfsError {
     Registration(#[from] RegisterVfsError),
     #[error("filename must be nonempty, NUL-free and at most 1012 UTF-8 bytes")]
     InvalidFilename,
-    #[error(transparent)]
-    ImportDb(#[from] ImportDbError),
     #[error("file already exists: {0:?}")]
     AlreadyExists(String),
     #[error("file not found: {0:?}")]
     NotFound(String),
-    #[error("file is too large to export into a contiguous memory buffer")]
-    FileTooLarge,
     #[error(transparent)]
     Io(#[from] VfsError),
     #[error(transparent)]
-    Transfer(TransferError),
-}
-
-impl From<TransferError> for MemVfsError {
-    fn from(error: TransferError) -> Self {
-        match error {
-            TransferError::ImportDb(error) => Self::ImportDb(error),
-            TransferError::FileTooLarge => Self::FileTooLarge,
-            TransferError::OutOfMemory => Self::Io(crate::no_memory()),
-            error => Self::Transfer(error),
-        }
-    }
+    Transfer(#[from] TransferError),
 }
 
 /// A management handle that keeps memory files alive after VFS uninstallation.

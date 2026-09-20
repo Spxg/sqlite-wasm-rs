@@ -26,7 +26,7 @@
 //! }
 //! ```
 
-use rsqlite_vfs::transfer::{DbTransfer, ExportSource, ImportDbError, ImportTarget, TransferError};
+use rsqlite_vfs::transfer::{DbTransfer, ExportSource, ImportTarget, TransferError};
 use rsqlite_vfs::{
     ffi::{
         sqlite3_vfs_register, sqlite3_vfs_unregister, SQLITE_OK, SQLITE_OPEN_DELETEONCLOSE,
@@ -1366,8 +1366,6 @@ pub enum OpfsSAHError {
     Backend(#[from] VfsError),
     #[error(transparent)]
     Vfs(#[from] RegisterVfsError),
-    #[error(transparent)]
-    ImportDb(#[from] ImportDbError),
     #[error("OPFS sync access handles require a supported dedicated worker in a secure context")]
     NotSupported,
     #[error("{operation}: {message}")]
@@ -1429,14 +1427,8 @@ pub enum OpfsSAHError {
     /// prove a hot journal; retained `PERSIST` journals can also trigger this.
     #[error("database has journal or WAL sidecars: {0:?}")]
     RecoveryRequired(String),
-    #[error("file is too large to export into a contiguous memory buffer")]
-    FileTooLarge,
-    #[error("database import expected {expected} bytes, got {actual}")]
-    ImportSizeMismatch { expected: u64, actual: u64 },
-    #[error("database import cannot finish after a failed write")]
-    ImportFailed,
     #[error(transparent)]
-    Transfer(TransferError),
+    Transfer(#[from] TransferError),
     #[error("unable to allocate memory for file data or pool capacity")]
     OutOfMemory,
     #[error("{error}; slot cleanup also failed: {cleanup}")]
@@ -1446,26 +1438,6 @@ pub enum OpfsSAHError {
         /// Subsequent failure while trying to reclaim the slot.
         cleanup: Box<OpfsSAHError>,
     },
-}
-
-impl From<TransferError> for OpfsSAHError {
-    fn from(error: TransferError) -> Self {
-        match error {
-            TransferError::ImportDb(error) => Self::ImportDb(error),
-            TransferError::SizeMismatch { expected, actual } => {
-                Self::ImportSizeMismatch { expected, actual }
-            }
-            TransferError::ImportFailed => Self::ImportFailed,
-            TransferError::FileTooLarge => Self::FileTooLarge,
-            TransferError::OutOfMemory => Self::OutOfMemory,
-            TransferError::ShortRead { expected, actual } => Self::ShortIo {
-                operation: "export database",
-                expected,
-                actual: actual as f64,
-            },
-            error => Self::Transfer(error),
-        }
-    }
 }
 
 impl OpfsSAHError {

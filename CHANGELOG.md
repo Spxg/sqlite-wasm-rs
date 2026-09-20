@@ -46,7 +46,9 @@ and `sqlite-wasm-vfs` 0.3.0.
   Move import/export methods to `transfer::DbTransfer`; import these traits to
   call their methods. Unchecked imports preserve all bytes and no longer take `clear_wal`.
 
-* Make registration, memory VFS and transfer errors non-exhaustive.
+* Make registration, memory VFS and transfer errors non-exhaustive. Common
+  transfer failures use `MemVfsError::Transfer` or `OpfsSAHError::Transfer`,
+  replacing duplicate backend-specific import/export variants.
 
 * Rename SAH pool methods to `capacity`, `ensure_capacity`, `pause` and `resume`;
   capacity values use `usize`. Add unsafe `uninstall`; `install` now requires
