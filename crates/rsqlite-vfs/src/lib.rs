@@ -684,6 +684,33 @@ pub trait VfsFile {
     fn check_reserved_lock(&self) -> VfsResult<bool>;
 }
 
+/// Synchronous management of the backend's current named files.
+/// Includes journal/WAL files, but excludes anonymous files and unused slots.
+pub trait VfsFilesManager {
+    type Error;
+
+    /// Removes only this file, returning whether it existed. Close its database
+    /// first; companion journal/WAL files are not removed automatically.
+    fn remove(&self, filename: &str) -> Result<bool, Self::Error>;
+
+    /// Removes all files. Close all databases first. Backend capacity may remain;
+    /// failure may leave some files removed, so this is not an atomic operation.
+    fn clear(&self) -> Result<(), Self::Error>;
+
+    /// Returns whether the name is present in the current view.
+    fn contains(&self, filename: &str) -> bool;
+
+    /// Returns all filenames in unspecified order.
+    fn names(&self) -> Vec<String>;
+
+    /// Returns the number of named files without allocating a list.
+    fn len(&self) -> usize;
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 /// Opens backend handles and manages the file namespace. I/O uses the returned
 /// handle directly, without looking up its filename again.
 pub trait VfsStore {

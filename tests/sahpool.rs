@@ -3,6 +3,7 @@ mod common;
 use common::Db;
 use sqlite_wasm_rs as ffi;
 use sqlite_wasm_rs::vfs::transfer::DbTransfer;
+use sqlite_wasm_rs::vfs::VfsFilesManager;
 use sqlite_wasm_vfs::sahpool::{install, OpfsSAHError, OpfsSAHPoolCfg, OpfsSAHPoolCfgBuilder};
 use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -21,7 +22,7 @@ fn config(name: &str) -> OpfsSAHPoolCfg {
 async fn install_rejects_foreign_vfs() {
     let memory = unsafe { ffi::vfs::memvfs::MemVfsUtil::get().unwrap() };
     let before = unsafe { ffi::vfs::registered_vfs("memvfs").unwrap().unwrap() };
-    let count = memory.count();
+    let count = memory.len();
     let result = install::<ffi::WasmOsCallback>(&config("memvfs"), false).await;
 
     assert!(
@@ -31,7 +32,7 @@ async fn install_rejects_foreign_vfs() {
         unsafe { ffi::vfs::registered_vfs("memvfs").unwrap() },
         Some(before)
     );
-    assert_eq!(memory.count(), count);
+    assert_eq!(memory.len(), count);
 }
 
 #[wasm_bindgen_test]
@@ -51,7 +52,7 @@ async fn lifecycle_reuses_paused_pool_and_reclaims_registration() {
         pool.add_capacity(1).await,
         Err(OpfsSAHError::Paused)
     ));
-    assert!(matches!(pool.clear_all().await, Err(OpfsSAHError::Paused)));
+    assert!(matches!(pool.clear(), Err(OpfsSAHError::Paused)));
 
     let reused = install::<ffi::WasmOsCallback>(&cfg, false).await.unwrap();
     assert!(reused.is_paused());
@@ -113,7 +114,7 @@ async fn database_names_reserve_room_for_all_journals() {
     drop(db);
 
     let bytes = pool.export_db(&name).unwrap();
-    pool.delete_db(&name).unwrap();
+    pool.remove(&name).unwrap();
     for checked in [true, false] {
         let import = |name: &str| {
             if checked {
@@ -124,7 +125,7 @@ async fn database_names_reserve_room_for_all_journals() {
         };
         import(&name).unwrap();
         assert_eq!(pool.export_db(&name).unwrap(), bytes);
-        pool.delete_db(&name).unwrap();
+        pool.remove(&name).unwrap();
 
         for length in [500, 504, 511, 512] {
             let invalid = "x".repeat(length);
@@ -140,7 +141,7 @@ async fn database_names_reserve_room_for_all_journals() {
                 ),
                 Err(ffi::SQLITE_CANTOPEN)
             ));
-            assert!(!pool.exists(&invalid));
+            assert!(!pool.contains(&invalid));
         }
     }
 
@@ -166,7 +167,7 @@ async fn restored_database_survives_resize_and_resume() {
     drop(db);
 
     let bytes = pool.export_db("original.db").unwrap();
-    assert!(pool.delete_db("original.db").unwrap());
+    assert!(pool.remove("original.db").unwrap());
     pool.import_db("restored.db", &bytes).unwrap();
     assert!(pool.import_db("restored.db", &bytes).is_err());
 
@@ -194,7 +195,7 @@ async fn restored_database_survives_resize_and_resume() {
     db.check_rows();
     drop(db);
 
-    pool.clear_all().await.unwrap();
+    pool.clear().unwrap();
     assert!(matches!(
         Db::open("restored.db", &cfg.vfs_name, ffi::SQLITE_OPEN_READWRITE),
         Err(ffi::SQLITE_CANTOPEN)
@@ -228,10 +229,7 @@ async fn chunked_transfer_round_trips_sqlite_pages() {
         let expected = pool.export_db("source.db").unwrap();
         let mut export = pool.begin_export("source.db").unwrap();
         assert_eq!(export.size(), expected.len() as u64);
-        assert!(matches!(
-            pool.delete_db("source.db"),
-            Err(OpfsSAHError::Busy)
-        ));
+        assert!(matches!(pool.remove("source.db"), Err(OpfsSAHError::Busy)));
         assert!(matches!(pool.pause(), Err(OpfsSAHError::Busy)));
         assert!(Db::open("source.db", &cfg.vfs_name, ffi::SQLITE_OPEN_READWRITE).is_err());
 
@@ -248,20 +246,20 @@ async fn chunked_transfer_round_trips_sqlite_pages() {
         assert_eq!(export.read(&mut buffer).unwrap(), 0);
         drop(export);
         assert_eq!(bytes, expected);
-        pool.delete_db("source.db").unwrap();
+        pool.remove("source.db").unwrap();
 
         // Checked import resets WAL flags even when chunks split the header.
         bytes[18..20].copy_from_slice(&[2, 2]);
         let mut import = pool
             .begin_import("restored.db", bytes.len() as u64)
             .unwrap();
-        assert!(!pool.exists("restored.db"));
+        assert!(!pool.contains("restored.db"));
         assert_eq!(pool.capacity(), 3);
         assert!(matches!(
             pool.reduce_capacity(1).await,
             Err(OpfsSAHError::Busy)
         ));
-        assert!(matches!(pool.clear_all().await, Err(OpfsSAHError::Busy)));
+        assert!(matches!(pool.clear(), Err(OpfsSAHError::Busy)));
 
         import.write(&bytes[..17]).unwrap();
         import.write(&[]).unwrap();
@@ -276,7 +274,7 @@ async fn chunked_transfer_round_trips_sqlite_pages() {
         let db = Db::open("restored.db", &cfg.vfs_name, ffi::SQLITE_OPEN_READWRITE).unwrap();
         db.check_rows();
         drop(db);
-        pool.delete_db("restored.db").unwrap();
+        pool.remove("restored.db").unwrap();
     }
 
     unsafe { pool.uninstall().unwrap() };
@@ -291,7 +289,7 @@ async fn incomplete_chunked_imports_never_publish_or_leak_slots() {
     let mut import = pool.begin_import_unchecked("partial.db", 10).unwrap();
     import.write(b"partial").unwrap();
     drop(import);
-    assert!(!pool.exists("partial.db"));
+    assert!(!pool.contains("partial.db"));
 
     let mut import = pool.begin_import_unchecked("partial.db", 10).unwrap();
     import.write(b"partial").unwrap();
@@ -331,11 +329,11 @@ async fn incomplete_chunked_imports_never_publish_or_leak_slots() {
         assert!(matches!(import.finish(), Err(OpfsSAHError::ImportFailed)));
     }
 
-    assert!(pool.list().is_empty());
+    assert!(pool.names().is_empty());
     assert_eq!(pool.capacity(), 1);
     pool.pause().unwrap();
     pool.resume().await.unwrap();
-    assert!(pool.list().is_empty());
+    assert!(pool.is_empty());
 
     // Reusing the only slot must not expose bytes left by an aborted import.
     let mut import = pool.begin_import_unchecked("raw.db", 3).unwrap();
@@ -347,7 +345,7 @@ async fn incomplete_chunked_imports_never_publish_or_leak_slots() {
         pool.begin_import_unchecked("raw.db", 3),
         Err(OpfsSAHError::FileExists(_))
     ));
-    pool.delete_db("raw.db").unwrap();
+    pool.remove("raw.db").unwrap();
 
     pool.begin_import_unchecked("empty.db", 0)
         .unwrap()
