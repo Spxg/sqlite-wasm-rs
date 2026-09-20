@@ -33,9 +33,9 @@ const MAX_DB_FILENAME_SIZE: usize = MAX_PATH_SIZE as usize - 12;
 // to MemAppData or freed by uninstall. This does not make the VFS thread-safe.
 static MEM_VFS: AtomicPtr<bindings::sqlite3_vfs> = AtomicPtr::new(core::ptr::null_mut());
 
-type MemVfsResult<T, E = MemVfsError> = Result<T, E>;
+type Result<T, E = MemVfsError> = core::result::Result<T, E>;
 
-fn validate_db_filename(name: &str) -> MemVfsResult<()> {
+fn validate_db_filename(name: &str) -> Result<()> {
     if name.is_empty() || name.as_bytes().contains(&0) || name.len() > MAX_DB_FILENAME_SIZE {
         return Err(MemVfsError::InvalidFilename);
     }
@@ -305,7 +305,7 @@ impl MemVfsUtil {
     /// # Safety
     /// Call on the installing thread, with serialized access to SQLite VFS
     /// registration. All SQLite use of memvfs must stay on that same thread.
-    pub unsafe fn get() -> MemVfsResult<Self> {
+    pub unsafe fn get() -> Result<Self> {
         let vfs = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
         if vfs.is_null() {
             return Err(MemVfsError::NotInstalled);
@@ -318,11 +318,11 @@ impl MemVfsUtil {
 impl VfsFilesManager for MemVfsUtil {
     type Error = MemVfsError;
 
-    fn remove(&self, filename: &str) -> MemVfsResult<bool> {
+    fn remove(&self, filename: &str) -> Result<bool> {
         Ok(self.0.borrow_mut().remove(filename).is_some())
     }
 
-    fn clear(&self) -> MemVfsResult<()> {
+    fn clear(&self) -> Result<()> {
         core::mem::take(&mut *self.0.borrow_mut());
         Ok(())
     }
@@ -347,7 +347,7 @@ impl DbTransfer for MemVfsUtil {
     type Target<'a> = MemImportTarget<'a>;
     type Source<'a> = MemExportSource;
 
-    fn create_import(&self, name: &str, size: u64) -> MemVfsResult<Self::Target<'_>> {
+    fn create_import(&self, name: &str, size: u64) -> Result<Self::Target<'_>> {
         validate_db_filename(name)?;
         if self.contains(name) {
             return Err(MemVfsError::AlreadyExists(name.into()));
@@ -363,7 +363,7 @@ impl DbTransfer for MemVfsUtil {
         })
     }
 
-    fn open_export(&self, name: &str) -> MemVfsResult<Self::Source<'_>> {
+    fn open_export(&self, name: &str) -> Result<Self::Source<'_>> {
         let file = self
             .0
             .borrow()
@@ -385,12 +385,12 @@ pub struct MemImportTarget<'a> {
 impl ImportTarget for MemImportTarget<'_> {
     type Error = MemVfsError;
 
-    fn write_at(&mut self, offset: u64, bytes: &[u8]) -> MemVfsResult<()> {
+    fn write_at(&mut self, offset: u64, bytes: &[u8]) -> Result<()> {
         self.file.write(bytes, offset)?;
         Ok(())
     }
 
-    fn commit(self) -> MemVfsResult<()> {
+    fn commit(self) -> Result<()> {
         let mut files = self.util.0.borrow_mut();
         if files.contains_key(&self.filename) {
             return Err(MemVfsError::AlreadyExists(self.filename));
@@ -399,7 +399,7 @@ impl ImportTarget for MemImportTarget<'_> {
         Ok(())
     }
 
-    fn abort(self) -> MemVfsResult<()> {
+    fn abort(self) -> Result<()> {
         Ok(())
     }
 
@@ -421,7 +421,7 @@ impl ExportSource for MemExportSource {
         self.size
     }
 
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> MemVfsResult<usize> {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<usize> {
         Ok(self.file.borrow_mut().read(buf, offset)?)
     }
 }
@@ -438,7 +438,7 @@ impl ExportSource for MemExportSource {
 pub unsafe fn install(
     os: impl OsCallback + 'static,
     default_vfs: bool,
-) -> MemVfsResult<MemVfsUtil, RegisterVfsError> {
+) -> Result<MemVfsUtil, RegisterVfsError> {
     let registered = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
     if !registered.is_null() {
         check_owned(registered)?;
@@ -478,7 +478,7 @@ pub unsafe fn install(
     Ok(MemVfsUtil(VfsAppData::<MemAppData>::get(vfs).data.clone()))
 }
 
-fn check_owned(vfs: *mut bindings::sqlite3_vfs) -> MemVfsResult<(), RegisterVfsError> {
+fn check_owned(vfs: *mut bindings::sqlite3_vfs) -> Result<(), RegisterVfsError> {
     if vfs != MEM_VFS.load(Ordering::Relaxed) {
         return Err(RegisterVfsError::NameConflict("memvfs".into()));
     }
@@ -494,7 +494,7 @@ fn check_owned(vfs: *mut bindings::sqlite3_vfs) -> MemVfsResult<(), RegisterVfsE
 /// installation/uninstallation. Close all files and retire VFS/app-data
 /// references (`MemVfsUtil` may outlive uninstall). Owned allocations must
 /// not have been freed or replaced through raw pointers.
-pub unsafe fn uninstall() -> MemVfsResult<(), RegisterVfsError> {
+pub unsafe fn uninstall() -> Result<(), RegisterVfsError> {
     let registered = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
     let vfs = MEM_VFS.load(Ordering::Relaxed);
 
