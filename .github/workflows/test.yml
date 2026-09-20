@@ -229,7 +229,7 @@ jobs:
     - name: Install wasm-pack
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - name: Test SQLite integration
-      run: wasm-pack test --node --tests --features ${{ matrix.features }}
+      run: wasm-pack test --node --features ${{ matrix.features }}
 
   test_vfs_native:
     strategy:
