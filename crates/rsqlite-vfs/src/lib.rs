@@ -351,6 +351,7 @@ impl SQLiteVfsFile {
 ///
 /// Match variants rather than the human-readable display text.
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum RegisterVfsError {
     #[error("VFS name must not be empty")]
     EmptyName,

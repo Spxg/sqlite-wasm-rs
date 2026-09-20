@@ -44,6 +44,8 @@ and `sqlite-wasm-vfs` 0.3.0.
   import these traits to call their methods. Unchecked imports preserve all bytes
   and no longer take `clear_wal`.
 
+* Make registration, memory VFS and transfer errors non-exhaustive.
+
 * Rename SAH pool methods to `capacity`, `ensure_capacity`, `pause` and `resume`;
   capacity values use `usize`. Add unsafe `uninstall`; `install` now requires
   `OsCallback + Default + 'static`. Limit database names to 499 UTF-8 bytes for

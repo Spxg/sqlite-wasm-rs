@@ -261,6 +261,7 @@ impl SQLiteVfs<MemIoMethods> for MemVfs {
 
 /// Memory VFS management errors. Match variants rather than display text.
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum MemVfsError {
     #[error("memory VFS is not installed")]
     NotInstalled,

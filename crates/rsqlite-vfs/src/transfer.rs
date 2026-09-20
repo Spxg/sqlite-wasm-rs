@@ -8,6 +8,7 @@ const SQLITE3_HEADER: &[u8; 16] = b"SQLite format 3\0";
 
 /// Database signature, size or page-layout errors, not a full integrity check.
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum ImportDbError {
     #[error("invalid database size or page alignment")]
     InvalidDbSize,
@@ -19,6 +20,7 @@ pub enum ImportDbError {
 
 /// Common transfer failures, converted into the backend's error type.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum TransferError {
     #[error(transparent)]
     ImportDb(#[from] ImportDbError),
