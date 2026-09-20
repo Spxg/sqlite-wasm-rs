@@ -1,7 +1,7 @@
 # `sqlite-wasm-rs` Change Log
 --------------------------------------------------------------------------------
 
-## Unreleased
+## [0.6.0](https://github.com/Spxg/sqlite-wasm-rs/compare/0.5.5...0.6.0)
 
 Changes since 0.5.5, covering `sqlite-wasm-rs` 0.6.0, `rsqlite-vfs` 0.2.0
 and `sqlite-wasm-vfs` 0.3.0.
