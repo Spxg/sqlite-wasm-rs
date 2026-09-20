@@ -11,7 +11,7 @@ use crate::transfer::{DbTransfer, ExportSource, ImportDbError, ImportTarget, Tra
 use crate::{
     AccessMode, FileKind, LockLevel, MemChunksFile, OpenAccess, OpenOptions, OpenedFile,
     OsCallback, RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SyncOptions, VfsAppData, VfsError,
-    VfsErrorCode, VfsFile, VfsResult, VfsStore,
+    VfsErrorCode, VfsFile, VfsFilesManager, VfsResult, VfsStore,
 };
 
 use alloc::boxed::Box;
@@ -295,7 +295,7 @@ impl From<TransferError> for MemVfsError {
 
 /// MemVfs management tool. Keeps its data alive even if the VFS is uninstalled.
 /// After reinstallation, create a new tool to access the new VFS instance.
-/// Import [`DbTransfer`] for whole-image and chunked transfers.
+/// Import [`VfsFilesManager`] for file management and [`DbTransfer`] for transfers.
 pub struct MemVfsUtil(MemAppData);
 
 impl MemVfsUtil {
@@ -313,31 +313,29 @@ impl MemVfsUtil {
         check_owned(vfs)?;
         Ok(Self(VfsAppData::<MemAppData>::get(vfs).data.clone()))
     }
+}
 
-    /// Deletes the named file, returning whether it existed.
-    /// The database must be closed before deleting any of its files, including
-    /// sidecars. Does not automatically delete companion journal/WAL files.
-    pub fn delete_db(&self, filename: &str) -> bool {
-        self.0.borrow_mut().remove(filename).is_some()
+impl VfsFilesManager for MemVfsUtil {
+    type Error = MemVfsError;
+
+    fn remove(&self, filename: &str) -> MemVfsResult<bool> {
+        Ok(self.0.borrow_mut().remove(filename).is_some())
     }
 
-    /// Deletes all files. All databases must be closed first.
-    pub fn clear_all(&self) {
+    fn clear(&self) -> MemVfsResult<()> {
         core::mem::take(&mut *self.0.borrow_mut());
+        Ok(())
     }
 
-    /// Returns whether the named file exists in the VFS.
-    pub fn exists(&self, filename: &str) -> bool {
+    fn contains(&self, filename: &str) -> bool {
         self.0.borrow().contains_key(filename)
     }
 
-    /// Returns all filenames in unspecified order, including auxiliary files.
-    pub fn list(&self) -> Vec<String> {
+    fn names(&self) -> Vec<String> {
         self.0.borrow().keys().cloned().collect()
     }
 
-    /// Returns the number of files, including auxiliary files.
-    pub fn count(&self) -> usize {
+    fn len(&self) -> usize {
         self.0.borrow().len()
     }
 }
@@ -351,7 +349,7 @@ impl DbTransfer for MemVfsUtil {
 
     fn create_import(&self, name: &str, size: u64) -> MemVfsResult<Self::Target<'_>> {
         validate_db_filename(name)?;
-        if self.exists(name) {
+        if self.contains(name) {
             return Err(MemVfsError::AlreadyExists(name.into()));
         }
         usize::try_from(size).map_err(|_| {

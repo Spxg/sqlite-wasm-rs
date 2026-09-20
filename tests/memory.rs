@@ -5,6 +5,7 @@ mod common;
 use common::Db;
 use sqlite_wasm_rs::vfs::memvfs::{MemVfsError, MemVfsUtil};
 use sqlite_wasm_rs::vfs::transfer::DbTransfer;
+use sqlite_wasm_rs::vfs::VfsFilesManager;
 use sqlite_wasm_rs::*;
 use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -26,12 +27,12 @@ fn export_import_preserves_rows_after_reopen() {
     drop(db);
 
     let bytes = util.export_db("memory-original.db").unwrap();
-    assert!(util.delete_db("memory-original.db"));
+    assert!(util.remove("memory-original.db").unwrap());
     let mut import =
         DbTransfer::begin_import(&util, "memory-restored.db", bytes.len() as u64).unwrap();
     import.write(&bytes[..17]).unwrap();
     import.write(&bytes[17..]).unwrap();
-    assert!(!util.exists("memory-restored.db"));
+    assert!(!util.contains("memory-restored.db"));
     import.finish().unwrap();
 
     let mut export = DbTransfer::begin_export(&util, "memory-restored.db").unwrap();
@@ -47,7 +48,7 @@ fn export_import_preserves_rows_after_reopen() {
     db.check_rows();
     drop(db);
 
-    assert!(util.delete_db("memory-restored.db"));
+    assert!(util.remove("memory-restored.db").unwrap());
 }
 
 #[wasm_bindgen_test]
@@ -63,8 +64,8 @@ fn database_names_reserve_room_for_all_journals() {
     drop(db);
 
     let bytes = util.export_db("memory-boundary-source.db").unwrap();
-    assert!(util.delete_db("memory-boundary-source.db"));
-    let before = util.count();
+    assert!(util.remove("memory-boundary-source.db").unwrap());
+    let before = util.len();
 
     for checked in [true, false] {
         for length in [1012, 1013] {
@@ -81,7 +82,7 @@ fn database_names_reserve_room_for_all_journals() {
                     Db::open(&name, "memvfs", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE),
                     Err(SQLITE_CANTOPEN)
                 ));
-                assert!(!util.exists(&name));
+                assert!(!util.contains(&name));
             } else {
                 result.unwrap();
 
@@ -106,11 +107,11 @@ fn database_names_reserve_room_for_all_journals() {
                 );
                 drop(db);
 
-                assert!(util.delete_db("memory-boundary-aux.db"));
-                assert!(util.delete_db(&name));
+                assert!(util.remove("memory-boundary-aux.db").unwrap());
+                assert!(util.remove(&name).unwrap());
             }
 
-            assert_eq!(util.count(), before);
+            assert_eq!(util.len(), before);
         }
     }
 }

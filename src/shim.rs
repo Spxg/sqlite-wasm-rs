@@ -223,6 +223,7 @@ mod tests {
         sqlite3_step, SQLITE_DONE, SQLITE_OK, SQLITE_ROW, SQLITE_TEXT,
     };
     use rsqlite_vfs::transfer::DbTransfer;
+    use rsqlite_vfs::VfsFilesManager;
 
     use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -238,7 +239,7 @@ mod tests {
                     Err(crate::vfs::memvfs::MemVfsError::InvalidFilename)
                 ));
             }
-            assert_eq!(util.count(), 0);
+            assert!(util.is_empty());
             assert_eq!(crate::sqlite3_vfs_find(core::ptr::null()), original_default);
             util.import_db_unchecked("survives-shutdown.db", &[42; 512])
                 .unwrap();
@@ -249,8 +250,8 @@ mod tests {
             assert_eq!(sqlite3_shutdown(), SQLITE_OK, "failed to shutdown");
             assert_eq!(util.export_db("survives-shutdown.db").unwrap(), [42; 512]);
             let new_util = crate::vfs::memvfs::MemVfsUtil::get().unwrap();
-            assert!(!new_util.exists("survives-shutdown.db"));
-            util.delete_db("survives-shutdown.db");
+            assert!(!new_util.contains("survives-shutdown.db"));
+            util.remove("survives-shutdown.db").unwrap();
             assert_eq!(sqlite3_shutdown(), SQLITE_OK, "failed to shutdown again");
 
             // Raw unregistration removes registry membership, not ownership.

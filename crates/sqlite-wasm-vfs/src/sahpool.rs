@@ -36,7 +36,8 @@ use rsqlite_vfs::{
     },
     register_vfs, registered_vfs, AccessMode, DeviceCharacteristics, FileKind, LockLevel,
     OpenAccess, OpenOptions, OpenedFile, OsCallback, RegisterVfsError, SQLiteIoMethods, SQLiteVfs,
-    SectorSize, SyncOptions, VfsError, VfsErrorCode, VfsFile, VfsRegistration, VfsResult, VfsStore,
+    SectorSize, SyncOptions, VfsError, VfsErrorCode, VfsFile, VfsFilesManager, VfsRegistration,
+    VfsResult, VfsStore,
 };
 use std::{
     any::TypeId,
@@ -521,7 +522,7 @@ struct OpfsSAHPool {
     available_files: RefCell<Vec<SyncAccessFile>>,
     map_filename_to_file: RefCell<HashMap<String, SyncAccessFile>>,
     // Failed cleanup leaves the on-disk name uncertain. Retain ownership until
-    // clear_all or pause/resume reconciles it; never reuse these slots directly.
+    // clear or pause/resume reconciles it; never reuse these slots directly.
     quarantined_files: RefCell<Vec<SyncAccessFile>>,
     state: Cell<PoolState>,
     busy: Cell<bool>,
@@ -874,7 +875,7 @@ impl OpfsSAHPool {
 
         if let Err(err) = file.associate(None, 0) {
             // The durable name may now differ from our map. Fail closed until
-            // an explicit pause/resume or clear_all reconciles the namespace.
+            // an explicit pause/resume or clear reconciles the namespace.
             self.needs_recovery.set(true);
             return Err(err);
         }
@@ -999,7 +1000,7 @@ impl OpfsSAHPool {
         Ok(())
     }
 
-    fn clear_all(&self) -> Result<()> {
+    fn clear(&self) -> Result<()> {
         self.check_state()?;
         let _operation = self.begin_operation()?;
         self.check_closed()?;
@@ -1382,8 +1383,8 @@ pub enum OpfsSAHError {
     #[error("pool has been uninstalled")]
     Uninstalled,
     /// An interrupted namespace update requires reconciliation, not necessarily
-    /// SQLite transaction recovery. `clear_all` discards all database contents.
-    #[error("pool namespace needs recovery; close databases, then pause/resume or call clear_all to discard all data")]
+    /// SQLite transaction recovery. `clear` discards all database contents.
+    #[error("pool namespace needs recovery; close databases, then pause/resume or call clear to discard all data")]
     NeedsRecovery,
     #[error("existing pool uses a different directory or OS callback type")]
     ConfigurationMismatch,
@@ -1611,10 +1612,37 @@ impl ExportSource for OpfsSAHExportSource<'_> {
 ///
 /// Drop leaves the VFS installed. [`Self::pause`] releases OPFS locks;
 /// [`Self::uninstall`] also frees registration and disables old handles.
-/// Import [`DbTransfer`] for whole-image and chunked transfers.
+/// Import [`VfsFilesManager`] for file management and [`DbTransfer`] for transfers.
 #[derive(Clone)]
 pub struct OpfsSAHPoolUtil {
     pool: Rc<OpfsSAHPool>,
+}
+
+/// Queries describe held files, returning an empty view while paused/uninstalled.
+/// Removal flushes the namespace and keeps slots for reuse. Clear requires an
+/// active, idle pool, but also permits namespace recovery.
+impl VfsFilesManager for OpfsSAHPoolUtil {
+    type Error = OpfsSAHError;
+
+    fn remove(&self, filename: &str) -> Result<bool> {
+        self.pool.delete_file(filename)
+    }
+
+    fn clear(&self) -> Result<()> {
+        self.pool.clear()
+    }
+
+    fn contains(&self, filename: &str) -> bool {
+        self.pool.has_filename(filename)
+    }
+
+    fn names(&self) -> Vec<String> {
+        self.pool.get_filenames()
+    }
+
+    fn len(&self) -> usize {
+        self.pool.get_file_count()
+    }
 }
 
 /// Transfers block pool management/new opens; keep existing connections idle.
@@ -1661,37 +1689,6 @@ impl OpfsSAHPoolUtil {
     /// Ensures at least `min` held slots, without shrinking an existing pool.
     pub async fn ensure_capacity(&self, min: usize) -> Result<()> {
         self.pool.ensure_capacity(min).await
-    }
-
-    /// Deletes only the named file and flushes removal; returns `false` if absent.
-    /// Close the database first, even when deleting a sidecar.
-    pub fn delete_db(&self, filename: &str) -> Result<bool> {
-        self.pool.delete_file(filename)
-    }
-
-    /// Clears held slots without releasing OPFS ownership. Close all databases
-    /// first; requires an active, idle pool, but permits namespace recovery.
-    /// Not atomic: failures may clear some files. Retry to finish.
-    pub async fn clear_all(&self) -> Result<()> {
-        self.pool.clear_all()
-    }
-
-    /// Whether a name appears in the currently held namespace.
-    /// Returns `false` while paused or after uninstall; does not scan storage.
-    pub fn exists(&self, filename: &str) -> bool {
-        self.pool.has_filename(filename)
-    }
-
-    /// Currently assigned names, including auxiliary files, in unspecified order.
-    /// Returns an empty list while paused or after uninstall.
-    pub fn list(&self) -> Vec<String> {
-        self.pool.get_filenames()
-    }
-
-    /// Number of currently assigned names; does not include unused slots.
-    /// Returns zero while paused or after uninstall.
-    pub fn count(&self) -> usize {
-        self.pool.get_file_count()
     }
 
     /// Unregisters and releases OPFS handles, retaining data and registration
@@ -1864,7 +1861,7 @@ mod tests {
     use rsqlite_vfs::transfer::DbTransfer;
     use rsqlite_vfs::{
         test_suite::test_vfs_store, FileKind, LockLevel, OpenAccess, OpenOptions, OpenRequest,
-        VfsAppData, VfsErrorCode, VfsFile, VfsStore,
+        VfsAppData, VfsErrorCode, VfsFile, VfsFilesManager, VfsStore,
     };
     use sqlite_wasm_rs::{self as ffi, WasmOsCallback};
     use wasm_bindgen_test::wasm_bindgen_test;
@@ -1981,15 +1978,12 @@ mod tests {
         let capacity = util.capacity();
         assert!(matches!(util.pause(), Err(OpfsSAHError::FilesInUse)));
         assert!(matches!(
-            util.delete_db("handles.db"),
+            util.remove("handles.db"),
             Err(OpfsSAHError::FileInUse(_))
         ));
-        assert!(matches!(
-            util.clear_all().await,
-            Err(OpfsSAHError::FilesInUse)
-        ));
+        assert!(matches!(util.clear(), Err(OpfsSAHError::FilesInUse)));
         assert_eq!(util.capacity(), capacity);
-        assert!(util.exists("handles.db"));
+        assert!(util.contains("handles.db"));
 
         SyncAccessHandleStore::close_file(&util.pool, Some("handles.db"), first, flags).unwrap();
         assert_eq!(second.file.open_count.get(), 1);
@@ -2000,19 +1994,16 @@ mod tests {
         );
         assert!(matches!(util.pause(), Err(OpfsSAHError::FilesInUse)));
         assert!(matches!(
-            util.delete_db("handles.db"),
+            util.remove("handles.db"),
             Err(OpfsSAHError::FileInUse(_))
         ));
-        assert!(matches!(
-            util.clear_all().await,
-            Err(OpfsSAHError::FilesInUse)
-        ));
+        assert!(matches!(util.clear(), Err(OpfsSAHError::FilesInUse)));
         let mut bytes = [0; 2];
         assert_eq!(second.read(&mut bytes, 0).unwrap(), 2);
         assert_eq!(bytes, [41, 42]);
 
         drop(second);
-        assert!(util.delete_db("handles.db").unwrap());
+        assert!(util.remove("handles.db").unwrap());
         util.pause().unwrap();
 
         unsafe {
@@ -2115,7 +2106,7 @@ mod tests {
         );
         assert_eq!(unsafe { ffi::sqlite3_close(recovered) }, ffi::SQLITE_OK);
 
-        assert!(!util.exists("recovered.db-journal"));
+        assert!(!util.contains("recovered.db-journal"));
         util.export_db("recovered.db").unwrap();
 
         unsafe {

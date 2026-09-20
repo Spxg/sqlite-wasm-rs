@@ -4,6 +4,7 @@ mod common;
 
 use common::Db;
 use sqlite_wasm_rs::vfs::transfer::DbTransfer;
+use sqlite_wasm_rs::vfs::VfsFilesManager;
 use sqlite_wasm_rs::*;
 use sqlite_wasm_vfs::sahpool::{install, OpfsSAHPoolCfgBuilder};
 use std::ffi::CString;
@@ -45,11 +46,11 @@ fn test_memvfs_cipher(cipher: &str) {
 
     let util = unsafe { vfs::memvfs::MemVfsUtil::get().unwrap() };
     let bytes = util.export_db(&original).unwrap();
-    assert!(util.delete_db(&original));
+    assert!(util.remove(&original).unwrap());
     util.import_db_unchecked(&restored, &bytes).unwrap();
 
     check_encrypted_copy(&restored, vfs, cipher);
-    assert!(util.delete_db(&restored));
+    assert!(util.remove(&restored).unwrap());
 }
 
 async fn test_opfs_sah_vfs_cipher(cipher: &str) {
@@ -73,7 +74,7 @@ async fn test_opfs_sah_vfs_cipher(cipher: &str) {
     drop(db);
 
     let bytes = pool.export_db("original.db").unwrap();
-    assert!(pool.delete_db("original.db").unwrap());
+    assert!(pool.remove("original.db").unwrap());
     let mut import = pool
         .begin_import_unchecked("restored.db", bytes.len() as u64)
         .unwrap();
@@ -83,7 +84,7 @@ async fn test_opfs_sah_vfs_cipher(cipher: &str) {
     import.finish().unwrap();
 
     check_encrypted_copy("restored.db", &vfs, cipher);
-    assert!(pool.delete_db("restored.db").unwrap());
+    assert!(pool.remove("restored.db").unwrap());
     // Release OPFS handles but keep registration alive for the cipher wrapper.
     pool.pause().unwrap();
 }
