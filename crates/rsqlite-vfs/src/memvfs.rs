@@ -243,8 +243,6 @@ struct MemIoMethods;
 
 impl SQLiteIoMethods for MemIoMethods {
     type Store = MemStore;
-
-    const VERSION: ::core::ffi::c_int = 1;
 }
 
 #[derive(Clone, Copy, Default)]
@@ -257,7 +255,6 @@ impl SQLiteVfs<MemIoMethods> for MemVfs {
         &*data.os
     }
 
-    const VERSION: ::core::ffi::c_int = 1;
     const MAX_PATH_SIZE: ::core::ffi::c_int = MAX_PATH_SIZE;
 }
 
@@ -770,7 +767,6 @@ mod tests {
         struct Io;
         impl SQLiteIoMethods for Io {
             type Store = Store;
-            const VERSION: i32 = 1;
         }
         struct Vfs;
         impl SQLiteVfs<Io> for Vfs {
@@ -779,8 +775,6 @@ mod tests {
             fn os(_: &MemAppData) -> &Self::Os {
                 &TestOs
             }
-
-            const VERSION: i32 = 1;
         }
 
         let data = MemAppData::new(crate::test_support::CallbackOs::<0>);

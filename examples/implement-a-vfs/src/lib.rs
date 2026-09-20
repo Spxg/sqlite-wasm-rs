@@ -240,8 +240,6 @@ struct MemIoMethods;
 /// Implementing the io methods is very simple, just like this:
 impl SQLiteIoMethods for MemIoMethods {
     type Store = MemFileStore;
-
-    const VERSION: ::std::os::raw::c_int = 1;
 }
 
 /// Our vfs
@@ -253,8 +251,6 @@ impl SQLiteVfs<MemIoMethods> for MemVfs {
     fn os(_: &MemAppData) -> &Self::Os {
         &sqlite_wasm_rs::WasmOsCallback
     }
-
-    const VERSION: ::std::os::raw::c_int = 1;
 
     // As above, you can still override the default implementation
 }

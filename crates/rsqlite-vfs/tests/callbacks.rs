@@ -240,7 +240,6 @@ fn callbacks_delegate_typed_requests_and_preserve_backend_errors() {
     struct Io;
     impl SQLiteIoMethods for Io {
         type Store = Store;
-        const VERSION: i32 = 1;
     }
     struct Vfs;
     impl SQLiteVfs<Io> for Vfs {
@@ -249,14 +248,14 @@ fn callbacks_delegate_typed_requests_and_preserve_backend_errors() {
         fn os(_: &Data) -> &Self::Os {
             &CallbackOs
         }
-
-        const VERSION: i32 = 1;
     }
 
     let state = Rc::new(RefCell::new(State::default()));
     let mut data = VfsAppData::new(state.clone());
     unsafe {
         let mut vfs = Vfs::vfs(c"delegates".as_ptr(), &mut data);
+        assert_eq!(vfs.iVersion, 2);
+        assert_eq!(Io::METHODS.iVersion, 1);
         // Open files retain this pointer. Reuse it without creating new
         // exclusive references that invalidate the stored pointer.
         let vfs_ptr = core::ptr::from_mut(&mut vfs);
@@ -487,6 +486,8 @@ fn default_optional_methods_decline_unsupported_features() {
     }
     let mut data = VfsAppData::new(RefCell::new(None));
     let mut vfs = unsafe { CallbackVfs::<0>::vfs(c"callbacks".as_ptr(), &mut data) };
+    assert_eq!(vfs.iVersion, 3);
+    assert_eq!(CallbackIo::METHODS.iVersion, 3);
     let vfs_ptr = core::ptr::from_mut(&mut vfs);
     let file = core::ptr::null_mut();
     unsafe {
@@ -816,7 +817,6 @@ fn xread_handles_counts_and_errors() {
     struct ReadIo;
     impl SQLiteIoMethods for ReadIo {
         type Store = ReadStore;
-        const VERSION: i32 = 1;
     }
 
     let read = |result, buf: &mut [u8], expected| {

@@ -778,8 +778,8 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
     fn os(data: &<IO::Store as VfsStore>::AppData) -> &Self::Os;
 
     /// SQLite `sqlite3_vfs.iVersion`, not a crate or backend version.
-    /// Version 2 adds the integer time callback; version 3 adds system-call hooks.
-    const VERSION: ::core::ffi::c_int;
+    /// Defaults to 2 for the integer time callback; version 3 adds system-call hooks.
+    const VERSION: ::core::ffi::c_int = 2;
     /// Maximum pathname length in bytes advertised as `sqlite3_vfs.mxPathname`.
     const MAX_PATH_SIZE: ::core::ffi::c_int = 1024;
 
@@ -1149,8 +1149,8 @@ pub trait SQLiteIoMethods {
 
     /// SQLite `sqlite3_io_methods.iVersion`. Version 2 permits shared-memory
     /// callbacks; version 3 permits fetch/unfetch. Raising this value alone
-    /// does not implement those capabilities.
-    const VERSION: ::core::ffi::c_int;
+    /// does not implement those capabilities. Defaults to 1 (basic file I/O).
+    const VERSION: ::core::ffi::c_int = 1;
 
     /// Method table installed by the default `xOpen`. Shared-memory methods are
     /// absent; fetch/unfetch decline memory mapping. Overrides must keep the
