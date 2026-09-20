@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# Keep the default wasm-bindgen adapter out of this example's dependency graph.
+# Keep other examples from enabling wasm-bindgen through feature unification.
 [workspace]
 
 [lib]

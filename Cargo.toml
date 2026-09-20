@@ -19,8 +19,7 @@ wasm-bindgen = { version = "0.2.104", default-features = false, optional = true 
 js-sys = { version = "0.3.81", default-features = false, optional = true }
 
 [features]
-default = ["wasm-bindgen"]
-# Default JavaScript host adapter. Disable to supply link-time host hooks.
+# Optional JavaScript host adapter. Otherwise supply link-time host hooks.
 wasm-bindgen = ["dep:wasm-bindgen", "dep:js-sys"]
 # SQLite3MultipleCiphers
 # <https://github.com/utelle/SQLite3MultipleCiphers>

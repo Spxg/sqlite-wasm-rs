@@ -6,14 +6,14 @@
 
 ```toml
 [dependencies]
-sqlite-wasm-rs = "0.6"
+sqlite-wasm-rs = { version = "0.6", features = ["wasm-bindgen"] }
 ```
 
 ```toml
 [dependencies]
 # Encryption is supported by SQLite3MultipleCiphers
 # See <https://utelle.github.io/SQLite3MultipleCiphers>
-sqlite-wasm-rs = { version = "0.6", features = ["sqlite3mc"] }
+sqlite-wasm-rs = { version = "0.6", features = ["wasm-bindgen", "sqlite3mc"] }
 ```
 
 ```rust
@@ -63,10 +63,10 @@ This library is not thread-safe:
 
 ```toml
 [dependencies]
-sqlite-wasm-rs = { version = "0.6", default-features = false }
+sqlite-wasm-rs = "0.6"
 ```
 
-Implement the host functions in [`sqlite-wasm-rs.h`](https://github.com/Spxg/sqlite-wasm-rs/blob/master/sqlite-wasm-rs.h).
+No features are enabled by default. Implement the host functions in [`sqlite-wasm-rs.h`](https://github.com/Spxg/sqlite-wasm-rs/blob/master/sqlite-wasm-rs.h).
 See [`host-js`](./examples/host-js) or [`host-c`](./examples/host-c) example.
 
 ## Use custom SQLite sources

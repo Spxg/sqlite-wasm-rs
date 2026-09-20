@@ -19,5 +19,5 @@ It creates an in-memory database, inserts a row, prints `42` and closes SQLite.
 Use `--features sqlite3mc` to run it with encryption, or `--features bindgen` to
 generate the SQLite C bindings (unrelated to wasm-bindgen).
 
-The standalone workspace prevents the other examples from enabling the default
+The standalone workspace prevents the other examples from enabling the
 `wasm-bindgen` feature through Cargo feature unification.
