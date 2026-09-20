@@ -28,7 +28,7 @@ pub extern "C" fn sleep(seconds: u64, nanoseconds: u32) {
 
 #[export_name = "rust_sqlite_wasm_host_random"]
 pub unsafe extern "C" fn random(buf: *mut u8, len: usize) -> usize {
-    let Ok(buf) = (unsafe { output_buffer(buf, len) }) else {
+    let Ok(buf) = output_buffer(buf, len) else {
         return 0;
     };
     if fill_entropy_impl(buf).is_err() {
@@ -44,7 +44,7 @@ pub unsafe extern "C" fn random(buf: *mut u8, len: usize) -> usize {
 pub unsafe extern "C" fn epoch_timestamp_in_ms(out: *mut i64) -> i32 {
     let milliseconds = Date::new_0().get_time();
     if milliseconds.is_finite() {
-        unsafe { out.write(milliseconds as i64) };
+        out.write(milliseconds as i64);
         OK
     } else {
         Error::InvalidTime as i32
@@ -63,7 +63,7 @@ extern "C" {
 
 #[export_name = "rust_sqlite_wasm_host_fill_entropy"]
 pub unsafe extern "C" fn fill_entropy(buf: *mut u8, len: usize) -> i32 {
-    match unsafe { output_buffer(buf, len) }.and_then(fill_entropy_impl) {
+    match output_buffer(buf, len).and_then(fill_entropy_impl) {
         Ok(()) => OK,
         Err(error) => error as i32,
     }
@@ -78,10 +78,9 @@ unsafe fn output_buffer<'a>(buf: *mut u8, len: usize) -> Result<&'a mut [u8]> {
     if len > isize::MAX as usize || buf.is_null() {
         return Err(Error::Unavailable);
     }
-    unsafe {
-        buf.write_bytes(0, len);
-        Ok(core::slice::from_raw_parts_mut(buf, len))
-    }
+
+    buf.write_bytes(0, len);
+    Ok(core::slice::from_raw_parts_mut(buf, len))
 }
 
 fn fill_entropy_impl(buf: &mut [u8]) -> Result<()> {
@@ -126,7 +125,7 @@ pub unsafe extern "C" fn localtime(unix_seconds: i64, out: *mut LocalTime) -> i3
         ),
         utc_offset_seconds: -(offset * 60.0) as i32,
     };
-    unsafe { out.write(local) };
+    out.write(local);
     OK
 }
 

@@ -39,10 +39,9 @@ unsafe fn write_message(out: *mut core::ffi::c_char, capacity: i32, message: &st
     while !message.is_char_boundary(count) {
         count -= 1;
     }
-    unsafe {
-        message.as_ptr().copy_to(out.cast(), count);
-        out.add(count).write(0);
-    }
+
+    message.as_ptr().copy_to(out.cast(), count);
+    out.add(count).write(0);
 }
 
 /// SQLite database signature, including its terminating NUL byte.
@@ -308,12 +307,11 @@ impl SQLiteVfsFile {
         if self.name_ptr.is_null() {
             return None;
         }
-        unsafe {
-            Some(core::str::from_utf8_unchecked(core::slice::from_raw_parts(
-                self.name_ptr,
-                self.name_length,
-            )))
-        }
+
+        Some(core::str::from_utf8_unchecked(core::slice::from_raw_parts(
+            self.name_ptr,
+            self.name_length,
+        )))
     }
 
     /// Borrows the backend handle for a custom I/O callback.
@@ -329,7 +327,7 @@ impl SQLiteVfsFile {
     /// }
     /// ```
     pub unsafe fn handle<F>(&self) -> &F {
-        unsafe { &*self.handle_ptr.cast::<F>() }
+        &*self.handle_ptr.cast::<F>()
     }
 
     /// Mutably borrows the backend handle for a custom I/O callback.
@@ -345,7 +343,7 @@ impl SQLiteVfsFile {
     /// }
     /// ```
     pub unsafe fn handle_mut<F>(&mut self) -> &mut F {
-        unsafe { &mut *self.handle_ptr.cast::<F>() }
+        &mut *self.handle_ptr.cast::<F>()
     }
 
     /// Returns a pointer to the SQLite file header from an exclusive borrow.
@@ -381,7 +379,7 @@ pub enum RegisterVfsError {
 /// or while using the returned pointer.
 pub unsafe fn registered_vfs(vfs_name: &str) -> Result<Option<*mut sqlite3_vfs>, RegisterVfsError> {
     let name = CString::new(vfs_name).map_err(|_| RegisterVfsError::ToCStr)?;
-    let vfs = unsafe { sqlite3_vfs_find(name.as_ptr()) };
+    let vfs = sqlite3_vfs_find(name.as_ptr());
     Ok((!vfs.is_null()).then_some(vfs))
 }
 
@@ -447,18 +445,16 @@ impl<T> VfsRegistration<T> {
     /// obey SQLite initialization and backend threading rules. Owned allocations
     /// must not have been freed or replaced; prior raw unregistration is allowed.
     pub unsafe fn unregister(self) -> Result<(), (Self, RegisterVfsError)> {
-        unsafe {
-            let code = sqlite3_vfs_unregister(self.allocations.vfs);
-            if code != SQLITE_OK {
-                return Err((
-                    self,
-                    RegisterVfsError::UnregisterVfs(
-                        VfsErrorCode::from_raw(code)
-                            .expect("SQLite must return a valid error code"),
-                    ),
-                ));
-            }
+        let code = sqlite3_vfs_unregister(self.allocations.vfs);
+        if code != SQLITE_OK {
+            return Err((
+                self,
+                RegisterVfsError::UnregisterVfs(
+                    VfsErrorCode::from_raw(code).expect("SQLite must return a valid error code"),
+                ),
+            ));
         }
+
         drop(core::mem::ManuallyDrop::into_inner(self.allocations));
         Ok(())
     }
@@ -487,7 +483,7 @@ pub unsafe fn register_vfs<IO: SQLiteIoMethods, V: SQLiteVfs<IO>>(
         return Err(RegisterVfsError::EmptyName);
     }
     let name = CString::new(vfs_name).map_err(|_| RegisterVfsError::ToCStr)?;
-    if !unsafe { sqlite3_vfs_find(name.as_ptr()) }.is_null() {
+    if !sqlite3_vfs_find(name.as_ptr()).is_null() {
         return Err(RegisterVfsError::NameConflict(vfs_name.into()));
     }
     let mut allocations = VfsAllocations {
@@ -497,10 +493,8 @@ pub unsafe fn register_vfs<IO: SQLiteIoMethods, V: SQLiteVfs<IO>>(
     };
     // SAFETY: The allocations are live and retained for SQLite. The caller
     // guarantees that the custom constructor and callbacks satisfy the contract.
-    allocations.vfs = Box::into_raw(Box::new(unsafe {
-        V::vfs(allocations.name, allocations.app_data)
-    }));
-    let ret = unsafe { sqlite3_vfs_register(allocations.vfs, i32::from(default_vfs)) };
+    allocations.vfs = Box::into_raw(Box::new(V::vfs(allocations.name, allocations.app_data)));
+    let ret = sqlite3_vfs_register(allocations.vfs, i32::from(default_vfs));
 
     if ret != SQLITE_OK {
         return Err(RegisterVfsError::RegisterVfs(
@@ -593,7 +587,7 @@ impl<T> VfsAppData<T> {
     /// live for the caller-chosen `'a`. Obey Rust shared-reference rules and
     /// backend threading requirements.
     pub unsafe fn get<'a>(vfs: *const sqlite3_vfs) -> &'a Self {
-        unsafe { &*core::ptr::addr_of!((*vfs).pAppData).read().cast() }
+        &*core::ptr::addr_of!((*vfs).pAppData).read().cast()
     }
 
     pub fn new(t: T) -> Self {
@@ -613,7 +607,7 @@ impl<T> VfsAppData<T> {
     /// Takes ownership of a pointer returned by `leak`, exactly once. No references
     /// to the allocation may remain in use, including through SQLite callbacks.
     pub unsafe fn from_raw(t: *mut Self) -> VfsAppData<T> {
-        unsafe { *Box::from_raw(t) }
+        *Box::from_raw(t)
     }
 
     fn store_err<S: VfsStore<AppData = T>>(&self, err: VfsError) -> i32 {
@@ -828,63 +822,61 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
         flags: ::core::ffi::c_int,
         pOutFlags: *mut ::core::ffi::c_int,
     ) -> ::core::ffi::c_int {
-        unsafe {
-            // SQLite must not call xClose when opening fails before a handle exists.
-            (*pFile).pMethods = core::ptr::null();
-            let app_data = VfsAppData::<<IO::Store as VfsStore>::AppData>::get(pVfs);
+        // SQLite must not call xClose when opening fails before a handle exists.
+        (*pFile).pMethods = core::ptr::null();
+        let app_data = VfsAppData::<<IO::Store as VfsStore>::AppData>::get(pVfs);
 
-            let options = match OpenOptions::from_raw_flags(flags) {
-                Ok(options) => options,
-                Err(err) => return app_data.store_err::<IO::Store>(err),
+        let options = match OpenOptions::from_raw_flags(flags) {
+            Ok(options) => options,
+            Err(err) => return app_data.store_err::<IO::Store>(err),
+        };
+
+        let filename = if zName.is_null() {
+            None
+        } else {
+            let raw = CStr::from_ptr(zName);
+            let path = match raw.to_str() {
+                Ok(path) => path,
+                Err(_) => {
+                    return app_data.store_err::<IO::Store>(VfsError::new(
+                        VfsErrorCode::CantOpen,
+                        "filename is not valid UTF-8".into(),
+                    ));
+                }
             };
+            Some(VfsFilename::from_sqlite(
+                path,
+                matches!(
+                    options.kind(),
+                    Some(FileKind::MainDb | FileKind::MainJournal | FileKind::Wal)
+                )
+                .then_some(zName),
+            ))
+        };
 
-            let filename = if zName.is_null() {
-                None
-            } else {
-                let raw = CStr::from_ptr(zName);
-                let path = match raw.to_str() {
-                    Ok(path) => path,
-                    Err(_) => {
-                        return app_data.store_err::<IO::Store>(VfsError::new(
-                            VfsErrorCode::CantOpen,
-                            "filename is not valid UTF-8".into(),
-                        ));
-                    }
+        let opened = match IO::Store::open_file(app_data, OpenRequest { filename, options }) {
+            Ok(handle) => handle,
+            Err(err) => return app_data.store_err::<IO::Store>(err),
+        };
+
+        let vfs_file = pFile.cast::<SQLiteVfsFile>();
+        (*vfs_file).vfs = pVfs;
+        (*vfs_file).flags = flags;
+        (*vfs_file).name_ptr = zName.cast();
+        (*vfs_file).name_length = filename.map_or(0, |name| name.path().len());
+        (*vfs_file).handle_ptr = Box::into_raw(Box::new(opened.file)).cast();
+
+        (*pFile).pMethods = &IO::METHODS;
+
+        if !pOutFlags.is_null() {
+            *pOutFlags = (flags & !(SQLITE_OPEN_READONLY | SQLITE_OPEN_READWRITE))
+                | match opened.access {
+                    OpenAccess::ReadOnly => SQLITE_OPEN_READONLY,
+                    OpenAccess::ReadWrite => SQLITE_OPEN_READWRITE,
                 };
-                Some(VfsFilename::from_sqlite(
-                    path,
-                    matches!(
-                        options.kind(),
-                        Some(FileKind::MainDb | FileKind::MainJournal | FileKind::Wal)
-                    )
-                    .then_some(zName),
-                ))
-            };
-
-            let opened = match IO::Store::open_file(app_data, OpenRequest { filename, options }) {
-                Ok(handle) => handle,
-                Err(err) => return app_data.store_err::<IO::Store>(err),
-            };
-
-            let vfs_file = pFile.cast::<SQLiteVfsFile>();
-            (*vfs_file).vfs = pVfs;
-            (*vfs_file).flags = flags;
-            (*vfs_file).name_ptr = zName.cast();
-            (*vfs_file).name_length = filename.map_or(0, |name| name.path().len());
-            (*vfs_file).handle_ptr = Box::into_raw(Box::new(opened.file)).cast();
-
-            (*pFile).pMethods = &IO::METHODS;
-
-            if !pOutFlags.is_null() {
-                *pOutFlags = (flags & !(SQLITE_OPEN_READONLY | SQLITE_OPEN_READWRITE))
-                    | match opened.access {
-                        OpenAccess::ReadOnly => SQLITE_OPEN_READONLY,
-                        OpenAccess::ReadWrite => SQLITE_OPEN_READWRITE,
-                    };
-            }
-
-            SQLITE_OK
         }
+
+        SQLITE_OK
     }
 
     unsafe extern "C" fn xDelete(
@@ -892,28 +884,26 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
         zName: *const ::core::ffi::c_char,
         syncDir: ::core::ffi::c_int,
     ) -> ::core::ffi::c_int {
-        unsafe {
-            let app_data = VfsAppData::<<IO::Store as VfsStore>::AppData>::get(pVfs);
-            if zName.is_null() {
+        let app_data = VfsAppData::<<IO::Store as VfsStore>::AppData>::get(pVfs);
+        if zName.is_null() {
+            return app_data.store_err::<IO::Store>(VfsError::new(
+                VfsErrorCode::IoDelete,
+                "filename is null".into(),
+            ));
+        }
+        let s = match CStr::from_ptr(zName).to_str() {
+            Ok(name) => name,
+            Err(_) => {
                 return app_data.store_err::<IO::Store>(VfsError::new(
                     VfsErrorCode::IoDelete,
-                    "filename is null".into(),
+                    "filename is not valid UTF-8".into(),
                 ));
             }
-            let s = match CStr::from_ptr(zName).to_str() {
-                Ok(name) => name,
-                Err(_) => {
-                    return app_data.store_err::<IO::Store>(VfsError::new(
-                        VfsErrorCode::IoDelete,
-                        "filename is not valid UTF-8".into(),
-                    ));
-                }
-            };
-            if let Err(err) = IO::Store::delete_file(app_data, s, syncDir != 0) {
-                app_data.store_err::<IO::Store>(err)
-            } else {
-                SQLITE_OK
-            }
+        };
+        if let Err(err) = IO::Store::delete_file(app_data, s, syncDir != 0) {
+            app_data.store_err::<IO::Store>(err)
+        } else {
+            SQLITE_OK
         }
     }
 
@@ -924,38 +914,36 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
         flags: ::core::ffi::c_int,
         pResOut: *mut ::core::ffi::c_int,
     ) -> ::core::ffi::c_int {
-        unsafe {
-            *pResOut = 0;
-            let app_data = VfsAppData::<<IO::Store as VfsStore>::AppData>::get(pVfs);
-            if zName.is_null() {
+        *pResOut = 0;
+        let app_data = VfsAppData::<<IO::Store as VfsStore>::AppData>::get(pVfs);
+        if zName.is_null() {
+            return app_data.store_err::<IO::Store>(VfsError::new(
+                VfsErrorCode::IoAccess,
+                "filename is null".into(),
+            ));
+        }
+        let Some(mode) = AccessMode::from_raw(flags) else {
+            return app_data.store_err::<IO::Store>(VfsError::new(
+                VfsErrorCode::IoAccess,
+                "invalid access mode".into(),
+            ));
+        };
+        let file = match CStr::from_ptr(zName).to_str() {
+            Ok(name) => name,
+            Err(_) => {
                 return app_data.store_err::<IO::Store>(VfsError::new(
                     VfsErrorCode::IoAccess,
-                    "filename is null".into(),
+                    "filename is not valid UTF-8".into(),
                 ));
             }
-            let Some(mode) = AccessMode::from_raw(flags) else {
-                return app_data.store_err::<IO::Store>(VfsError::new(
-                    VfsErrorCode::IoAccess,
-                    "invalid access mode".into(),
-                ));
-            };
-            let file = match CStr::from_ptr(zName).to_str() {
-                Ok(name) => name,
-                Err(_) => {
-                    return app_data.store_err::<IO::Store>(VfsError::new(
-                        VfsErrorCode::IoAccess,
-                        "filename is not valid UTF-8".into(),
-                    ));
-                }
-            };
-            let exist = match IO::Store::access(app_data, file, mode) {
-                Ok(exist) => exist,
-                Err(err) => return app_data.store_err::<IO::Store>(err),
-            };
-            *pResOut = i32::from(exist);
+        };
+        let exist = match IO::Store::access(app_data, file, mode) {
+            Ok(exist) => exist,
+            Err(err) => return app_data.store_err::<IO::Store>(err),
+        };
+        *pResOut = i32::from(exist);
 
-            SQLITE_OK
-        }
+        SQLITE_OK
     }
 
     /// Copies the backend's canonical name into SQLite's buffer, including NUL.
@@ -965,49 +953,47 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
         nOut: ::core::ffi::c_int,
         zOut: *mut ::core::ffi::c_char,
     ) -> ::core::ffi::c_int {
-        unsafe {
-            let app_data = VfsAppData::<<IO::Store as VfsStore>::AppData>::get(pVfs);
-            if zName.is_null() {
-                return app_data.store_err::<IO::Store>(VfsError::new(
-                    VfsErrorCode::CantOpen,
-                    "filename is null".into(),
-                ));
-            }
-            if zOut.is_null() || nOut <= 0 {
-                return app_data.store_err::<IO::Store>(VfsError::new(
-                    VfsErrorCode::CantOpen,
-                    "pathname output buffer is missing or empty".into(),
-                ));
-            }
-            let name = match CStr::from_ptr(zName).to_str() {
-                Ok(name) => name,
-                Err(_) => {
-                    return app_data.store_err::<IO::Store>(VfsError::new(
-                        VfsErrorCode::CantOpen,
-                        "filename is not valid UTF-8".into(),
-                    ));
-                }
-            };
-            let full = match IO::Store::full_pathname(app_data, name) {
-                Ok(full) => full,
-                Err(err) => return app_data.store_err::<IO::Store>(err),
-            };
-            if full.as_bytes().contains(&0) {
-                return app_data.store_err::<IO::Store>(VfsError::new(
-                    VfsErrorCode::CantOpen,
-                    "canonical filename contains a NUL byte".into(),
-                ));
-            }
-            if full.len() >= nOut as usize {
-                return app_data.store_err::<IO::Store>(VfsError::new(
-                    VfsErrorCode::CantOpen,
-                    "pathname output buffer is too small".into(),
-                ));
-            }
-            full.as_ptr().copy_to(zOut.cast(), full.len());
-            zOut.add(full.len()).write(0);
-            SQLITE_OK
+        let app_data = VfsAppData::<<IO::Store as VfsStore>::AppData>::get(pVfs);
+        if zName.is_null() {
+            return app_data.store_err::<IO::Store>(VfsError::new(
+                VfsErrorCode::CantOpen,
+                "filename is null".into(),
+            ));
         }
+        if zOut.is_null() || nOut <= 0 {
+            return app_data.store_err::<IO::Store>(VfsError::new(
+                VfsErrorCode::CantOpen,
+                "pathname output buffer is missing or empty".into(),
+            ));
+        }
+        let name = match CStr::from_ptr(zName).to_str() {
+            Ok(name) => name,
+            Err(_) => {
+                return app_data.store_err::<IO::Store>(VfsError::new(
+                    VfsErrorCode::CantOpen,
+                    "filename is not valid UTF-8".into(),
+                ));
+            }
+        };
+        let full = match IO::Store::full_pathname(app_data, name) {
+            Ok(full) => full,
+            Err(err) => return app_data.store_err::<IO::Store>(err),
+        };
+        if full.as_bytes().contains(&0) {
+            return app_data.store_err::<IO::Store>(VfsError::new(
+                VfsErrorCode::CantOpen,
+                "canonical filename contains a NUL byte".into(),
+            ));
+        }
+        if full.len() >= nOut as usize {
+            return app_data.store_err::<IO::Store>(VfsError::new(
+                VfsErrorCode::CantOpen,
+                "pathname output buffer is too small".into(),
+            ));
+        }
+        full.as_ptr().copy_to(zOut.cast(), full.len());
+        zOut.add(full.len()).write(0);
+        SQLITE_OK
     }
 
     /// Reports the last backend diagnostic without consuming it. The return value
@@ -1018,15 +1004,13 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
         nOut: ::core::ffi::c_int,
         zOut: *mut ::core::ffi::c_char,
     ) -> ::core::ffi::c_int {
-        unsafe {
-            let app_data = VfsAppData::<<IO::Store as VfsStore>::AppData>::get(pVfs);
-            let Some(error) = IO::Store::last_error(app_data) else {
-                write_message(zOut, nOut, "");
-                return SQLITE_OK;
-            };
-            write_message(zOut, nOut, error.message());
-            error.system_error().map_or(0, SystemErrorCode::as_raw)
-        }
+        let app_data = VfsAppData::<<IO::Store as VfsStore>::AppData>::get(pVfs);
+        let Some(error) = IO::Store::last_error(app_data) else {
+            write_message(zOut, nOut, "");
+            return SQLITE_OK;
+        };
+        write_message(zOut, nOut, error.message());
+        error.system_error().map_or(0, SystemErrorCode::as_raw)
     }
 
     /// Dynamic extension loading is unsupported by default. Returning null
@@ -1045,7 +1029,7 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
         nByte: i32,
         zErrMsg: *mut core::ffi::c_char,
     ) {
-        unsafe { write_message(zErrMsg, nByte, "dynamic extension loading is not supported") }
+        write_message(zErrMsg, nByte, "dynamic extension loading is not supported")
     }
 
     /// Fills the output through [`OsCallback::random`] and returns its byte count,
@@ -1055,19 +1039,17 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
         nByte: ::core::ffi::c_int,
         zOut: *mut ::core::ffi::c_char,
     ) -> ::core::ffi::c_int {
-        unsafe {
-            if nByte <= 0 || zOut.is_null() {
-                return 0;
-            }
-            let data = VfsAppData::<<IO::Store as VfsStore>::AppData>::get(pVfs);
-            zOut.cast::<u8>().write_bytes(0, nByte as usize);
-            let slice = core::slice::from_raw_parts_mut(zOut.cast(), nByte as usize);
-            let count = Self::os(data).random(slice);
-            if count > slice.len() {
-                0
-            } else {
-                count as i32
-            }
+        if nByte <= 0 || zOut.is_null() {
+            return 0;
+        }
+        let data = VfsAppData::<<IO::Store as VfsStore>::AppData>::get(pVfs);
+        zOut.cast::<u8>().write_bytes(0, nByte as usize);
+        let slice = core::slice::from_raw_parts_mut(zOut.cast(), nByte as usize);
+        let count = Self::os(data).random(slice);
+        if count > slice.len() {
+            0
+        } else {
+            count as i32
         }
     }
 
@@ -1076,16 +1058,14 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
         pVfs: *mut sqlite3_vfs,
         pTimeOut: *mut f64,
     ) -> ::core::ffi::c_int {
-        unsafe {
-            *pTimeOut = 0.0;
-            let data = VfsAppData::<<IO::Store as VfsStore>::AppData>::get(pVfs);
-            match Self::os(data).epoch_timestamp_in_ms() {
-                Ok(time) => {
-                    *pTimeOut = 2440587.5 + (time as f64 / 86400000.0);
-                    SQLITE_OK
-                }
-                Err(error) => data.store_err::<IO::Store>(error),
+        *pTimeOut = 0.0;
+        let data = VfsAppData::<<IO::Store as VfsStore>::AppData>::get(pVfs);
+        match Self::os(data).epoch_timestamp_in_ms() {
+            Ok(time) => {
+                *pTimeOut = 2440587.5 + (time as f64 / 86400000.0);
+                SQLITE_OK
             }
+            Err(error) => data.store_err::<IO::Store>(error),
         }
     }
 
@@ -1095,24 +1075,22 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
         pVfs: *mut sqlite3_vfs,
         pOut: *mut sqlite3_int64,
     ) -> ::core::ffi::c_int {
-        unsafe {
-            *pOut = 0;
-            let data = VfsAppData::<<IO::Store as VfsStore>::AppData>::get(pVfs);
-            let time = match Self::os(data).epoch_timestamp_in_ms() {
-                Ok(time) => time,
-                Err(error) => return data.store_err::<IO::Store>(error),
-            };
-            *pOut = match time.checked_add(210_866_760_000_000) {
-                Some(time) => time,
-                None => {
-                    return data.store_err::<IO::Store>(VfsError::new(
-                        VfsErrorCode::Error,
-                        "Julian timestamp exceeds the signed 64-bit range".into(),
-                    ));
-                }
-            };
-            SQLITE_OK
-        }
+        *pOut = 0;
+        let data = VfsAppData::<<IO::Store as VfsStore>::AppData>::get(pVfs);
+        let time = match Self::os(data).epoch_timestamp_in_ms() {
+            Ok(time) => time,
+            Err(error) => return data.store_err::<IO::Store>(error),
+        };
+        *pOut = match time.checked_add(210_866_760_000_000) {
+            Some(time) => time,
+            None => {
+                return data.store_err::<IO::Store>(VfsError::new(
+                    VfsErrorCode::Error,
+                    "Julian timestamp exceeds the signed 64-bit range".into(),
+                ));
+            }
+        };
+        SQLITE_OK
     }
 
     unsafe extern "C" fn xSleep(
@@ -1123,10 +1101,10 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
             return 0;
         }
         let dur = Duration::from_micros(microseconds as u64);
-        unsafe {
-            let data = VfsAppData::<<IO::Store as VfsStore>::AppData>::get(pVfs);
-            Self::os(data).sleep(dur);
-        }
+
+        let data = VfsAppData::<<IO::Store as VfsStore>::AppData>::get(pVfs);
+        Self::os(data).sleep(dur);
+
         microseconds
     }
 }
@@ -1178,35 +1156,33 @@ pub trait SQLiteIoMethods {
     };
 
     unsafe extern "C" fn xClose(pFile: *mut sqlite3_file) -> ::core::ffi::c_int {
-        unsafe {
-            let vfs_file = &mut *SQLiteVfsFile::from_file(pFile);
-            let app_data = VfsAppData::<<Self::Store as VfsStore>::AppData>::get(vfs_file.vfs);
-            let handle = *Box::from_raw(
-                vfs_file
-                    .handle_ptr
-                    .cast::<<Self::Store as VfsStore>::File>(),
-            );
-            let name = if vfs_file.name_ptr.is_null() {
-                None
-            } else {
-                Some(core::str::from_utf8_unchecked(core::slice::from_raw_parts(
-                    vfs_file.name_ptr,
-                    vfs_file.name_length,
-                )))
-            };
-            vfs_file.handle_ptr = core::ptr::null_mut();
-            vfs_file.name_ptr = core::ptr::null();
-            vfs_file.name_length = 0;
-            vfs_file.io_methods.pMethods = core::ptr::null();
-            let options = match OpenOptions::from_raw_flags(vfs_file.flags) {
-                Ok(options) => options,
-                Err(err) => return app_data.store_err::<Self::Store>(err),
-            };
-            // The backend consumes the handle even if close/delete fails.
-            match Self::Store::close_file(app_data, name, handle, options) {
-                Ok(()) => SQLITE_OK,
-                Err(err) => app_data.store_err::<Self::Store>(err),
-            }
+        let vfs_file = &mut *SQLiteVfsFile::from_file(pFile);
+        let app_data = VfsAppData::<<Self::Store as VfsStore>::AppData>::get(vfs_file.vfs);
+        let handle = *Box::from_raw(
+            vfs_file
+                .handle_ptr
+                .cast::<<Self::Store as VfsStore>::File>(),
+        );
+        let name = if vfs_file.name_ptr.is_null() {
+            None
+        } else {
+            Some(core::str::from_utf8_unchecked(core::slice::from_raw_parts(
+                vfs_file.name_ptr,
+                vfs_file.name_length,
+            )))
+        };
+        vfs_file.handle_ptr = core::ptr::null_mut();
+        vfs_file.name_ptr = core::ptr::null();
+        vfs_file.name_length = 0;
+        vfs_file.io_methods.pMethods = core::ptr::null();
+        let options = match OpenOptions::from_raw_flags(vfs_file.flags) {
+            Ok(options) => options,
+            Err(err) => return app_data.store_err::<Self::Store>(err),
+        };
+        // The backend consumes the handle even if close/delete fails.
+        match Self::Store::close_file(app_data, name, handle, options) {
+            Ok(()) => SQLITE_OK,
+            Err(err) => app_data.store_err::<Self::Store>(err),
         }
     }
 
@@ -1216,59 +1192,55 @@ pub trait SQLiteIoMethods {
         iAmt: ::core::ffi::c_int,
         iOfst: sqlite3_int64,
     ) -> ::core::ffi::c_int {
-        unsafe {
-            let vfs_file = &mut *SQLiteVfsFile::from_file(pFile);
-            let app_data = VfsAppData::<<Self::Store as VfsStore>::AppData>::get(vfs_file.vfs);
+        let vfs_file = &mut *SQLiteVfsFile::from_file(pFile);
+        let app_data = VfsAppData::<<Self::Store as VfsStore>::AppData>::get(vfs_file.vfs);
 
-            let f = |file: &mut <Self::Store as VfsStore>::File| {
-                let size = usize::try_from(iAmt).map_err(|_| {
-                    VfsError::new(VfsErrorCode::IoRead, "negative read length".into())
-                })?;
-                let offset = u64::try_from(iOfst).map_err(|_| {
-                    VfsError::new(VfsErrorCode::IoRead, "negative file offset".into())
-                })?;
-                if size == 0 {
-                    return Ok(SQLITE_OK);
-                }
-                // SQLite may supply uninitialized output memory. Safe backend
-                // code is allowed to inspect any byte of its Rust slice.
-                zBuf.cast::<u8>().write_bytes(0, size);
-                let slice = core::slice::from_raw_parts_mut(zBuf.cast::<u8>(), size);
-                let n_read = match file.read(slice, offset) {
-                    Ok(count) => count,
-                    Err(err) => {
-                        // An error has no byte count, so we cannot identify the
-                        // unread tail. Fail rather than report an EOF containing
-                        // uninitialized bytes or discard a valid data prefix.
-                        if err.raw_code() == SQLITE_IOERR_SHORT_READ {
-                            return Err(VfsError::new(
-                                VfsErrorCode::IoRead,
-                                "backend must return a byte count for short reads".into(),
-                            ));
-                        }
-                        return Err(err);
-                    }
-                };
-                if n_read > size {
-                    return Err(VfsError::new(
-                        VfsErrorCode::IoRead,
-                        "read count exceeds buffer length".into(),
-                    ));
-                }
-                if n_read < size {
-                    slice[n_read..].fill(0);
-                    return Err(VfsError::new(
-                        VfsErrorCode::IoShortRead,
-                        "short read at end of file".into(),
-                    ));
-                }
-                Ok(SQLITE_OK)
-            };
-
-            match f(vfs_file.handle_mut::<<Self::Store as VfsStore>::File>()) {
-                Ok(code) => code,
-                Err(err) => app_data.store_err::<Self::Store>(err),
+        let f = |file: &mut <Self::Store as VfsStore>::File| {
+            let size = usize::try_from(iAmt)
+                .map_err(|_| VfsError::new(VfsErrorCode::IoRead, "negative read length".into()))?;
+            let offset = u64::try_from(iOfst)
+                .map_err(|_| VfsError::new(VfsErrorCode::IoRead, "negative file offset".into()))?;
+            if size == 0 {
+                return Ok(SQLITE_OK);
             }
+            // SQLite may supply uninitialized output memory. Safe backend
+            // code is allowed to inspect any byte of its Rust slice.
+            zBuf.cast::<u8>().write_bytes(0, size);
+            let slice = core::slice::from_raw_parts_mut(zBuf.cast::<u8>(), size);
+            let n_read = match file.read(slice, offset) {
+                Ok(count) => count,
+                Err(err) => {
+                    // An error has no byte count, so we cannot identify the
+                    // unread tail. Fail rather than report an EOF containing
+                    // uninitialized bytes or discard a valid data prefix.
+                    if err.raw_code() == SQLITE_IOERR_SHORT_READ {
+                        return Err(VfsError::new(
+                            VfsErrorCode::IoRead,
+                            "backend must return a byte count for short reads".into(),
+                        ));
+                    }
+                    return Err(err);
+                }
+            };
+            if n_read > size {
+                return Err(VfsError::new(
+                    VfsErrorCode::IoRead,
+                    "read count exceeds buffer length".into(),
+                ));
+            }
+            if n_read < size {
+                slice[n_read..].fill(0);
+                return Err(VfsError::new(
+                    VfsErrorCode::IoShortRead,
+                    "short read at end of file".into(),
+                ));
+            }
+            Ok(SQLITE_OK)
+        };
+
+        match f(vfs_file.handle_mut::<<Self::Store as VfsStore>::File>()) {
+            Ok(code) => code,
+            Err(err) => app_data.store_err::<Self::Store>(err),
         }
     }
 
@@ -1278,29 +1250,26 @@ pub trait SQLiteIoMethods {
         iAmt: ::core::ffi::c_int,
         iOfst: sqlite3_int64,
     ) -> ::core::ffi::c_int {
-        unsafe {
-            let vfs_file = &mut *SQLiteVfsFile::from_file(pFile);
-            let app_data = VfsAppData::<<Self::Store as VfsStore>::AppData>::get(vfs_file.vfs);
+        let vfs_file = &mut *SQLiteVfsFile::from_file(pFile);
+        let app_data = VfsAppData::<<Self::Store as VfsStore>::AppData>::get(vfs_file.vfs);
 
-            let f = |file: &mut <Self::Store as VfsStore>::File| {
-                let size = usize::try_from(iAmt).map_err(|_| {
-                    VfsError::new(VfsErrorCode::IoWrite, "negative write length".into())
-                })?;
-                let offset = u64::try_from(iOfst).map_err(|_| {
-                    VfsError::new(VfsErrorCode::IoWrite, "negative file offset".into())
-                })?;
-                if size == 0 {
-                    return Ok(SQLITE_OK);
-                }
-                let slice = core::slice::from_raw_parts(zBuf.cast::<u8>(), size);
-                file.write(slice, offset)?;
-                Ok(SQLITE_OK)
-            };
-
-            match f(vfs_file.handle_mut::<<Self::Store as VfsStore>::File>()) {
-                Ok(code) => code,
-                Err(err) => app_data.store_err::<Self::Store>(err),
+        let f = |file: &mut <Self::Store as VfsStore>::File| {
+            let size = usize::try_from(iAmt).map_err(|_| {
+                VfsError::new(VfsErrorCode::IoWrite, "negative write length".into())
+            })?;
+            let offset = u64::try_from(iOfst)
+                .map_err(|_| VfsError::new(VfsErrorCode::IoWrite, "negative file offset".into()))?;
+            if size == 0 {
+                return Ok(SQLITE_OK);
             }
+            let slice = core::slice::from_raw_parts(zBuf.cast::<u8>(), size);
+            file.write(slice, offset)?;
+            Ok(SQLITE_OK)
+        };
+
+        match f(vfs_file.handle_mut::<<Self::Store as VfsStore>::File>()) {
+            Ok(code) => code,
+            Err(err) => app_data.store_err::<Self::Store>(err),
         }
     }
 
@@ -1308,22 +1277,20 @@ pub trait SQLiteIoMethods {
         pFile: *mut sqlite3_file,
         size: sqlite3_int64,
     ) -> ::core::ffi::c_int {
-        unsafe {
-            let vfs_file = &mut *SQLiteVfsFile::from_file(pFile);
-            let app_data = VfsAppData::<<Self::Store as VfsStore>::AppData>::get(vfs_file.vfs);
+        let vfs_file = &mut *SQLiteVfsFile::from_file(pFile);
+        let app_data = VfsAppData::<<Self::Store as VfsStore>::AppData>::get(vfs_file.vfs);
 
-            let f = |file: &mut <Self::Store as VfsStore>::File| {
-                let size = u64::try_from(size).map_err(|_| {
-                    VfsError::new(VfsErrorCode::IoTruncate, "negative file size".into())
-                })?;
-                file.truncate(size)?;
-                Ok(SQLITE_OK)
-            };
+        let f = |file: &mut <Self::Store as VfsStore>::File| {
+            let size = u64::try_from(size).map_err(|_| {
+                VfsError::new(VfsErrorCode::IoTruncate, "negative file size".into())
+            })?;
+            file.truncate(size)?;
+            Ok(SQLITE_OK)
+        };
 
-            match f(vfs_file.handle_mut::<<Self::Store as VfsStore>::File>()) {
-                Ok(code) => code,
-                Err(err) => app_data.store_err::<Self::Store>(err),
-            }
+        match f(vfs_file.handle_mut::<<Self::Store as VfsStore>::File>()) {
+            Ok(code) => code,
+            Err(err) => app_data.store_err::<Self::Store>(err),
         }
     }
 
@@ -1331,26 +1298,24 @@ pub trait SQLiteIoMethods {
         pFile: *mut sqlite3_file,
         flags: ::core::ffi::c_int,
     ) -> ::core::ffi::c_int {
-        unsafe {
-            let vfs_file = &mut *SQLiteVfsFile::from_file(pFile);
-            let app_data = VfsAppData::<<Self::Store as VfsStore>::AppData>::get(vfs_file.vfs);
+        let vfs_file = &mut *SQLiteVfsFile::from_file(pFile);
+        let app_data = VfsAppData::<<Self::Store as VfsStore>::AppData>::get(vfs_file.vfs);
 
-            let Some(options) = SyncOptions::from_raw_flags(flags) else {
-                return app_data.store_err::<Self::Store>(VfsError::new(
-                    VfsErrorCode::IoSync,
-                    "invalid sync flags".into(),
-                ));
-            };
+        let Some(options) = SyncOptions::from_raw_flags(flags) else {
+            return app_data.store_err::<Self::Store>(VfsError::new(
+                VfsErrorCode::IoSync,
+                "invalid sync flags".into(),
+            ));
+        };
 
-            let f = |file: &mut <Self::Store as VfsStore>::File| {
-                file.sync(options)?;
-                Ok(SQLITE_OK)
-            };
+        let f = |file: &mut <Self::Store as VfsStore>::File| {
+            file.sync(options)?;
+            Ok(SQLITE_OK)
+        };
 
-            match f(vfs_file.handle_mut::<<Self::Store as VfsStore>::File>()) {
-                Ok(code) => code,
-                Err(err) => app_data.store_err::<Self::Store>(err),
-            }
+        match f(vfs_file.handle_mut::<<Self::Store as VfsStore>::File>()) {
+            Ok(code) => code,
+            Err(err) => app_data.store_err::<Self::Store>(err),
         }
     }
 
@@ -1358,26 +1323,24 @@ pub trait SQLiteIoMethods {
         pFile: *mut sqlite3_file,
         pSize: *mut sqlite3_int64,
     ) -> ::core::ffi::c_int {
-        unsafe {
-            *pSize = 0;
-            let vfs_file = &*SQLiteVfsFile::from_file(pFile);
-            let app_data = VfsAppData::<<Self::Store as VfsStore>::AppData>::get(vfs_file.vfs);
+        *pSize = 0;
+        let vfs_file = &*SQLiteVfsFile::from_file(pFile);
+        let app_data = VfsAppData::<<Self::Store as VfsStore>::AppData>::get(vfs_file.vfs);
 
-            let f = |file: &<Self::Store as VfsStore>::File| {
-                let size = sqlite3_int64::try_from(file.size()?).map_err(|_| {
-                    VfsError::new(
-                        VfsErrorCode::IoStat,
-                        "file size exceeds the signed 64-bit range".into(),
-                    )
-                })?;
-                *pSize = size;
-                Ok(SQLITE_OK)
-            };
+        let f = |file: &<Self::Store as VfsStore>::File| {
+            let size = sqlite3_int64::try_from(file.size()?).map_err(|_| {
+                VfsError::new(
+                    VfsErrorCode::IoStat,
+                    "file size exceeds the signed 64-bit range".into(),
+                )
+            })?;
+            *pSize = size;
+            Ok(SQLITE_OK)
+        };
 
-            match f(vfs_file.handle::<<Self::Store as VfsStore>::File>()) {
-                Ok(code) => code,
-                Err(err) => app_data.store_err::<Self::Store>(err),
-            }
+        match f(vfs_file.handle::<<Self::Store as VfsStore>::File>()) {
+            Ok(code) => code,
+            Err(err) => app_data.store_err::<Self::Store>(err),
         }
     }
 
@@ -1385,25 +1348,23 @@ pub trait SQLiteIoMethods {
         pFile: *mut sqlite3_file,
         eLock: ::core::ffi::c_int,
     ) -> ::core::ffi::c_int {
-        unsafe {
-            let file = &mut *SQLiteVfsFile::from_file(pFile);
-            let data = VfsAppData::<<Self::Store as VfsStore>::AppData>::get(file.vfs);
-            let level = match LockLevel::from_raw(eLock) {
-                Some(level) if level != LockLevel::None => level,
-                _ => {
-                    return data.store_err::<Self::Store>(VfsError::new(
-                        VfsErrorCode::IoLock,
-                        "invalid lock level".into(),
-                    ));
-                }
-            };
-            match file
-                .handle_mut::<<Self::Store as VfsStore>::File>()
-                .lock(level)
-            {
-                Ok(()) => SQLITE_OK,
-                Err(err) => data.store_err::<Self::Store>(err),
+        let file = &mut *SQLiteVfsFile::from_file(pFile);
+        let data = VfsAppData::<<Self::Store as VfsStore>::AppData>::get(file.vfs);
+        let level = match LockLevel::from_raw(eLock) {
+            Some(level) if level != LockLevel::None => level,
+            _ => {
+                return data.store_err::<Self::Store>(VfsError::new(
+                    VfsErrorCode::IoLock,
+                    "invalid lock level".into(),
+                ));
             }
+        };
+        match file
+            .handle_mut::<<Self::Store as VfsStore>::File>()
+            .lock(level)
+        {
+            Ok(()) => SQLITE_OK,
+            Err(err) => data.store_err::<Self::Store>(err),
         }
     }
 
@@ -1411,25 +1372,23 @@ pub trait SQLiteIoMethods {
         pFile: *mut sqlite3_file,
         eLock: ::core::ffi::c_int,
     ) -> ::core::ffi::c_int {
-        unsafe {
-            let file = &mut *SQLiteVfsFile::from_file(pFile);
-            let data = VfsAppData::<<Self::Store as VfsStore>::AppData>::get(file.vfs);
-            let level = match LockLevel::from_raw(eLock) {
-                Some(level @ (LockLevel::None | LockLevel::Shared)) => level,
-                _ => {
-                    return data.store_err::<Self::Store>(VfsError::new(
-                        VfsErrorCode::IoUnlock,
-                        "invalid unlock level".into(),
-                    ));
-                }
-            };
-            match file
-                .handle_mut::<<Self::Store as VfsStore>::File>()
-                .unlock(level)
-            {
-                Ok(()) => SQLITE_OK,
-                Err(err) => data.store_err::<Self::Store>(err),
+        let file = &mut *SQLiteVfsFile::from_file(pFile);
+        let data = VfsAppData::<<Self::Store as VfsStore>::AppData>::get(file.vfs);
+        let level = match LockLevel::from_raw(eLock) {
+            Some(level @ (LockLevel::None | LockLevel::Shared)) => level,
+            _ => {
+                return data.store_err::<Self::Store>(VfsError::new(
+                    VfsErrorCode::IoUnlock,
+                    "invalid unlock level".into(),
+                ));
             }
+        };
+        match file
+            .handle_mut::<<Self::Store as VfsStore>::File>()
+            .unlock(level)
+        {
+            Ok(()) => SQLITE_OK,
+            Err(err) => data.store_err::<Self::Store>(err),
         }
     }
 
@@ -1437,20 +1396,18 @@ pub trait SQLiteIoMethods {
         pFile: *mut sqlite3_file,
         pResOut: *mut ::core::ffi::c_int,
     ) -> ::core::ffi::c_int {
-        unsafe {
-            *pResOut = 0;
-            let file = &*SQLiteVfsFile::from_file(pFile);
-            let data = VfsAppData::<<Self::Store as VfsStore>::AppData>::get(file.vfs);
-            match file
-                .handle::<<Self::Store as VfsStore>::File>()
-                .check_reserved_lock()
-            {
-                Ok(held) => {
-                    *pResOut = i32::from(held);
-                    SQLITE_OK
-                }
-                Err(err) => data.store_err::<Self::Store>(err),
+        *pResOut = 0;
+        let file = &*SQLiteVfsFile::from_file(pFile);
+        let data = VfsAppData::<<Self::Store as VfsStore>::AppData>::get(file.vfs);
+        match file
+            .handle::<<Self::Store as VfsStore>::File>()
+            .check_reserved_lock()
+        {
+            Ok(held) => {
+                *pResOut = i32::from(held);
+                SQLITE_OK
             }
+            Err(err) => data.store_err::<Self::Store>(err),
         }
     }
 
@@ -1462,44 +1419,39 @@ pub trait SQLiteIoMethods {
         if op != SQLITE_FCNTL_SIZE_HINT {
             return SQLITE_NOTFOUND;
         }
-        unsafe {
-            let file = &mut *SQLiteVfsFile::from_file(pFile);
-            let data = VfsAppData::<<Self::Store as VfsStore>::AppData>::get(file.vfs);
-            let Ok(size) = u64::try_from(*pArg.cast::<i64>()) else {
-                return data.store_err::<Self::Store>(VfsError::new(
-                    VfsErrorCode::Io,
-                    "negative file size hint".into(),
-                ));
-            };
-            match file
-                .handle_mut::<<Self::Store as VfsStore>::File>()
-                .size_hint(size)
-            {
-                Ok(true) => SQLITE_OK,
-                Ok(false) => SQLITE_NOTFOUND,
-                Err(error) => data.store_err::<Self::Store>(error),
-            }
+
+        let file = &mut *SQLiteVfsFile::from_file(pFile);
+        let data = VfsAppData::<<Self::Store as VfsStore>::AppData>::get(file.vfs);
+        let Ok(size) = u64::try_from(*pArg.cast::<i64>()) else {
+            return data.store_err::<Self::Store>(VfsError::new(
+                VfsErrorCode::Io,
+                "negative file size hint".into(),
+            ));
+        };
+        match file
+            .handle_mut::<<Self::Store as VfsStore>::File>()
+            .size_hint(size)
+        {
+            Ok(true) => SQLITE_OK,
+            Ok(false) => SQLITE_NOTFOUND,
+            Err(error) => data.store_err::<Self::Store>(error),
         }
     }
 
     /// Uses SQLite's usual fallback sector size. Override when the backend's
     /// minimum write unit that can disturb neighboring bytes differs.
     unsafe extern "C" fn xSectorSize(pFile: *mut sqlite3_file) -> ::core::ffi::c_int {
-        unsafe {
-            (&*SQLiteVfsFile::from_file(pFile))
-                .handle::<<Self::Store as VfsStore>::File>()
-                .sector_size()
-                .bytes() as i32
-        }
+        (&*SQLiteVfsFile::from_file(pFile))
+            .handle::<<Self::Store as VfsStore>::File>()
+            .sector_size()
+            .bytes() as i32
     }
 
     unsafe extern "C" fn xDeviceCharacteristics(pFile: *mut sqlite3_file) -> ::core::ffi::c_int {
-        unsafe {
-            (&*SQLiteVfsFile::from_file(pFile))
-                .handle::<<Self::Store as VfsStore>::File>()
-                .device_characteristics()
-                .as_raw()
-        }
+        (&*SQLiteVfsFile::from_file(pFile))
+            .handle::<<Self::Store as VfsStore>::File>()
+            .device_characteristics()
+            .as_raw()
     }
 
     /// Declines memory mapping; SQLite falls back to `xRead`. Required as a
@@ -1510,7 +1462,7 @@ pub trait SQLiteIoMethods {
         _iAmt: i32,
         pp: *mut *mut core::ffi::c_void,
     ) -> i32 {
-        unsafe { *pp = core::ptr::null_mut() };
+        *pp = core::ptr::null_mut();
         SQLITE_OK
     }
 

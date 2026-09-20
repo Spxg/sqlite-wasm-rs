@@ -1853,7 +1853,7 @@ impl OpfsSAHPoolUtil {
             .ok_or(OpfsSAHError::Uninstalled)?;
 
         // SAFETY: The caller guarantees no SQLite users or retained pointers.
-        if let Err((registration, error)) = unsafe { registration.unregister() } {
+        if let Err((registration, error)) = registration.unregister() {
             *self.pool.registration.borrow_mut() = Some(registration);
             return Err(error.into());
         }
