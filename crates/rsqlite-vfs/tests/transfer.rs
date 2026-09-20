@@ -1,8 +1,33 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
-use rsqlite_vfs::transfer::{
-    DbExport, DbImport, ExportSource, ImportDbError, ImportMode, ImportTarget, TransferError,
-};
+use rsqlite_vfs::transfer::{DbTransfer, ExportSource, ImportDbError, ImportTarget, TransferError};
+
+#[derive(Default)]
+struct Store {
+    published: RefCell<Option<Vec<u8>>>,
+    fail_write: Cell<bool>,
+    export_size: Cell<Option<u64>>,
+}
+
+impl DbTransfer for Store {
+    type Error = TransferError;
+    type Target<'a> = Target<'a>;
+    type Source<'a> = Source;
+
+    fn create_import(&self, _: &str, _: u64) -> Result<Target<'_>, Self::Error> {
+        Ok(Target {
+            published: &self.published,
+            bytes: Vec::new(),
+            fail_write: self.fail_write.get(),
+        })
+    }
+
+    fn open_export(&self, _: &str) -> Result<Source, Self::Error> {
+        let bytes = self.published.borrow().as_ref().unwrap().clone();
+        let size = self.export_size.get().unwrap_or(bytes.len() as u64);
+        Ok(Source { bytes, size })
+    }
+}
 
 struct Target<'a> {
     published: &'a RefCell<Option<Vec<u8>>>,
@@ -40,38 +65,34 @@ impl ImportTarget for Target<'_> {
 
 #[test]
 fn test_imports_validate_before_publication_and_poison_failed_writes() {
-    let published = RefCell::new(None);
-    let target = |fail_write| Target {
-        published: &published,
-        bytes: Vec::new(),
-        fail_write,
-    };
+    let store = Store::default();
     let mut bytes = [0; 512];
     bytes[..16].copy_from_slice(b"SQLite format 3\0");
     bytes[16..20].copy_from_slice(&[2, 0, 2, 2]);
 
-    let mut import = DbImport::new(target(false), 512, ImportMode::Checked).unwrap();
+    let mut import = store.begin_import("test.db", 512).unwrap();
     import.write(&bytes[..17]).unwrap();
     import.write(&bytes[17..]).unwrap();
-    assert!(published.borrow().is_none());
+    assert!(store.published.borrow().is_none());
     import.finish().unwrap();
     let mut expected = bytes;
     expected[18..20].copy_from_slice(&[1, 1]);
-    assert_eq!(published.take().unwrap(), expected);
+    assert_eq!(store.published.take().unwrap(), expected);
 
-    let mut import = DbImport::new(target(false), 512, ImportMode::Unchecked).unwrap();
+    let mut import = store.begin_import_unchecked("test.db", 512).unwrap();
     import.write(&bytes).unwrap();
     import.finish().unwrap();
-    assert_eq!(published.take().unwrap(), bytes);
+    assert_eq!(store.published.take().unwrap(), bytes);
 
-    let mut import = DbImport::new(target(false), 512, ImportMode::Checked).unwrap();
+    let mut import = store.begin_import("test.db", 512).unwrap();
     assert!(matches!(
         import.write(&[0; 18]),
         Err(TransferError::ImportDb(ImportDbError::InvalidHeader))
     ));
     assert!(matches!(import.finish(), Err(TransferError::ImportFailed)));
 
-    let mut import = DbImport::new(target(true), 512, ImportMode::Checked).unwrap();
+    store.fail_write.set(true);
+    let mut import = store.begin_import("test.db", 512).unwrap();
     assert!(matches!(
         import.write(&bytes),
         Err(TransferError::OutOfMemory)
@@ -82,20 +103,21 @@ fn test_imports_validate_before_publication_and_poison_failed_writes() {
     ));
     assert!(matches!(import.finish(), Err(TransferError::ImportFailed)));
 
-    let import = DbImport::new(target(false), (1u64 << 32) + 512, ImportMode::Checked).unwrap();
+    store.fail_write.set(false);
+    let import = store.begin_import("test.db", (1u64 << 32) + 512).unwrap();
     assert!(matches!(
         import.finish(),
         Err(TransferError::SizeMismatch { expected, actual: 0 }) if expected == (1u64 << 32) + 512
     ));
-    assert!(published.borrow().is_none());
+    assert!(store.published.borrow().is_none());
 }
 
-struct Source<'a> {
-    bytes: &'a [u8],
+struct Source {
+    bytes: Vec<u8>,
     size: u64,
 }
 
-impl ExportSource for Source<'_> {
+impl ExportSource for Source {
     type Error = TransferError;
 
     fn size(&self) -> u64 {
@@ -113,28 +135,23 @@ impl ExportSource for Source<'_> {
 #[test]
 fn test_exports_retry_partial_reads_but_reject_premature_eof() {
     let bytes = b"a database image";
-    let mut export = DbExport::new(Source {
-        bytes,
-        size: bytes.len() as u64,
-    });
+    let store = Store::default();
+    store.published.replace(Some(bytes.to_vec()));
+    let mut export = store.begin_export("test.db").unwrap();
     let mut prefix = [0; 5];
     assert_eq!(export.read(&mut prefix).unwrap(), prefix.len());
     assert_eq!(prefix, bytes[..5]);
     assert_eq!(export.read_to_vec().unwrap(), bytes[5..]);
 
-    let export = DbExport::new(Source {
-        bytes,
-        size: bytes.len() as u64 + 1,
-    });
+    store.export_size.set(Some(bytes.len() as u64 + 1));
+    let export = store.begin_export("test.db").unwrap();
     assert!(matches!(
         export.read_to_vec(),
         Err(TransferError::ShortRead { actual: 0, .. })
     ));
 
-    let export = DbExport::new(Source {
-        bytes: &[],
-        size: u64::MAX,
-    });
+    store.export_size.set(Some(u64::MAX));
+    let export = store.begin_export("test.db").unwrap();
     assert!(matches!(
         export.read_to_vec(),
         Err(TransferError::FileTooLarge)

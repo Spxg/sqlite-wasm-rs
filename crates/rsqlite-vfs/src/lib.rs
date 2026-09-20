@@ -45,9 +45,6 @@ unsafe fn write_message(out: *mut core::ffi::c_char, capacity: i32, message: &st
     out.add(count).write(0);
 }
 
-/// SQLite database signature, including its terminating NUL byte.
-pub const SQLITE3_HEADER: &str = "SQLite format 3\0";
-
 /// Generates a temporary filename, rejecting unavailable or incomplete randomness.
 pub fn random_name(randomness: impl FnOnce(&mut [u8]) -> usize) -> VfsResult<String> {
     const GEN_ASCII_STR_CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ\
@@ -265,22 +262,24 @@ impl VfsFile for MemChunksFile {
     }
 }
 
-/// C-compatible file handle. Set `szOsFile` to this type's size.
+/// File layout used by the default `xOpen`/`xClose` callbacks.
+/// Customize handle creation/cleanup through [`VfsStore`]. Custom I/O callbacks
+/// can borrow the handle; fully custom layouts must supply matching callbacks.
 #[repr(C)]
 pub struct SQLiteVfsFile {
     /// SQLite header; must remain the first field.
-    pub io_methods: sqlite3_file,
+    io_methods: sqlite3_file,
     /// Owning VFS.
-    pub vfs: *mut sqlite3_vfs,
-    /// Flags used to open the database.
-    pub flags: i32,
+    vfs: *mut sqlite3_vfs,
+    /// Original validated open request.
+    options: OpenOptions,
     /// SQLite-owned filename, valid until xClose. Null for anonymous files.
-    pub name_ptr: *const u8,
+    name_ptr: *const u8,
     /// Filename length in bytes.
-    pub name_length: usize,
+    name_length: usize,
     /// An owned box of the selected `VfsStore::File` type, initialized by
     /// xOpen and consumed by xClose. Must not be accessed after close.
-    pub handle_ptr: *mut core::ffi::c_void,
+    handle_ptr: *mut core::ffi::c_void,
 }
 
 impl SQLiteVfsFile {
@@ -288,6 +287,16 @@ impl SQLiteVfsFile {
     /// `SQLiteVfsFile` and valid lifetime/aliasing.
     pub fn from_file(file: *mut sqlite3_file) -> *mut SQLiteVfsFile {
         file.cast()
+    }
+
+    /// Returns the owning VFS without transferring ownership.
+    pub fn vfs(&self) -> *mut sqlite3_vfs {
+        self.vfs
+    }
+
+    /// Returns the original options supplied to a successful default `xOpen`.
+    pub fn options(&self) -> OpenOptions {
+        self.options
     }
 
     /// Get the file name.
@@ -889,7 +898,7 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
 
         let vfs_file = pFile.cast::<SQLiteVfsFile>();
         (*vfs_file).vfs = pVfs;
-        (*vfs_file).flags = flags;
+        (*vfs_file).options = options;
         (*vfs_file).name_ptr = zName.cast();
         (*vfs_file).name_length = filename.map_or(0, |name| name.path().len());
         (*vfs_file).handle_ptr = Box::into_raw(Box::new(opened.file)).cast();
@@ -1203,12 +1212,8 @@ pub trait SQLiteIoMethods {
         vfs_file.name_ptr = core::ptr::null();
         vfs_file.name_length = 0;
         vfs_file.io_methods.pMethods = core::ptr::null();
-        let options = match OpenOptions::from_raw_flags(vfs_file.flags) {
-            Ok(options) => options,
-            Err(err) => return app_data.store_err::<Self::Store>(err),
-        };
         // The backend consumes the handle even if close/delete fails.
-        match Self::Store::close_file(app_data, name, handle, options) {
+        match Self::Store::close_file(app_data, name, handle, vfs_file.options) {
             Ok(()) => SQLITE_OK,
             Err(err) => app_data.store_err::<Self::Store>(err),
         }

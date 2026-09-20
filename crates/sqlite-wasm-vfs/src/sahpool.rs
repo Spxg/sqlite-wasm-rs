@@ -24,9 +24,7 @@
 //! }
 //! ```
 
-use rsqlite_vfs::transfer::{
-    DbExport, DbImport, DbTransfer, ExportSource, ImportDbError, ImportTarget, TransferError,
-};
+use rsqlite_vfs::transfer::{DbTransfer, ExportSource, ImportDbError, ImportTarget, TransferError};
 use rsqlite_vfs::{
     ffi::{
         sqlite3_vfs_register, sqlite3_vfs_unregister, SQLITE_OK, SQLITE_OPEN_DELETEONCLOSE,
@@ -1502,13 +1500,6 @@ impl OpfsSAHError {
     }
 }
 
-/// Sequential import into an unpublished slot. Call [`Self::finish`] to publish.
-///
-/// Blocks pool management and new file opens, including between awaits. Drop
-/// aborts; cleanup failure quarantines the slot and requires pool recovery.
-/// Keep other SQLite connections on this pool idle during the transfer.
-pub type OpfsSAHImport<'a> = DbImport<OpfsSAHImportTarget<'a>>;
-
 #[doc(hidden)]
 pub struct OpfsSAHImportTarget<'a> {
     pool: &'a OpfsSAHPool,
@@ -1583,11 +1574,6 @@ impl Drop for OpfsSAHImportTarget<'_> {
     }
 }
 
-/// Sequential export of a closed, standalone database. No full-file allocation.
-/// Blocks pool management and new file opens until dropped, including at EOF.
-/// Keep other SQLite connections on this pool idle during the transfer.
-pub type OpfsSAHExport<'a> = DbExport<OpfsSAHExportSource<'a>>;
-
 #[doc(hidden)]
 pub struct OpfsSAHExportSource<'a> {
     file: SyncAccessFile,
@@ -1646,6 +1632,8 @@ impl VfsFilesManager for OpfsSAHPoolUtil {
 }
 
 /// Transfers block pool management/new opens; keep existing connections idle.
+/// Export holds this guard through EOF until dropped. Dropped imports abort;
+/// cleanup failure quarantines the slot and requires pool recovery.
 /// Imports require new names of at most 499 UTF-8 bytes and no same-name sidecars.
 /// Exports reject open files and nonempty journal/WAL files, including PERSIST
 /// journals: recover/checkpoint and close first, then remove retained journals.
