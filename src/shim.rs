@@ -38,13 +38,12 @@ pub unsafe extern "C" fn rust_sqlite_wasm_getentropy(buf: *mut u8, buf_len: c_si
     if buf_len == 0 {
         return 0;
     }
-    unsafe {
-        // C output buffers need not be initialized, but a Rust byte slice must be.
-        ptr::write_bytes(buf, 0, buf_len);
-        match host::fill_entropy(core::slice::from_raw_parts_mut(buf, buf_len)) {
-            Ok(()) => 0,
-            Err(_) => -1,
-        }
+
+    // C output buffers need not be initialized, but a Rust byte slice must be.
+    ptr::write_bytes(buf, 0, buf_len);
+    match host::fill_entropy(core::slice::from_raw_parts_mut(buf, buf_len)) {
+        Ok(()) => 0,
+        Err(_) => -1,
     }
 }
 
@@ -55,12 +54,10 @@ pub unsafe extern "C" fn rust_sqlite_wasm_assert_fail(
     line: c_int,
     func: *const c_char,
 ) {
-    unsafe {
-        let expr = core::ffi::CStr::from_ptr(expr).to_string_lossy();
-        let file = core::ffi::CStr::from_ptr(file).to_string_lossy();
-        let func = core::ffi::CStr::from_ptr(func).to_string_lossy();
-        panic!("Assertion failed: {expr} ({file}: {func}: {line})");
-    }
+    let expr = core::ffi::CStr::from_ptr(expr).to_string_lossy();
+    let file = core::ffi::CStr::from_ptr(file).to_string_lossy();
+    let func = core::ffi::CStr::from_ptr(func).to_string_lossy();
+    panic!("Assertion failed: {expr} ({file}: {func}: {line})");
 }
 
 #[no_mangle]
@@ -71,53 +68,51 @@ pub unsafe extern "C" fn rust_sqlite_wasm_abort() {
 /// Converts host calendar fields to the C ABI. A failed conversion returns null.
 #[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_localtime(t: *const c_time_t) -> *mut tm {
-    unsafe {
-        // Single shared buffer, matches libc behavior; assumes no concurrent callers.
-        static mut TM: tm = tm {
-            tm_sec: 0,
-            tm_min: 0,
-            tm_hour: 0,
-            tm_mday: 0,
-            tm_mon: 0,
-            tm_year: 0,
-            tm_wday: 0,
-            tm_yday: 0,
-            tm_isdst: 0,
-            tm_gmtoff: 0,
-            tm_zone: ptr::null_mut(),
-        };
-        let Ok(local) = host::localtime(*t) else {
-            return ptr::null_mut();
-        };
-        let Some(year) = local.year.checked_sub(1900) else {
-            return ptr::null_mut();
-        };
-        if !(1..=12).contains(&local.month)
-            || !(1..=31).contains(&local.day)
-            || !(0..=23).contains(&local.hour)
-            || !(0..=59).contains(&local.minute)
-            || !(0..=60).contains(&local.second)
-            || !(0..=6).contains(&local.weekday)
-            || !(0..=365).contains(&local.yearday)
-            || !(-1..=1).contains(&local.is_dst)
-        {
-            return ptr::null_mut();
-        }
-        ptr::addr_of_mut!(TM).write(tm {
-            tm_sec: local.second,
-            tm_min: local.minute,
-            tm_hour: local.hour,
-            tm_mday: local.day,
-            tm_mon: local.month - 1,
-            tm_year: year,
-            tm_wday: local.weekday,
-            tm_yday: local.yearday,
-            tm_isdst: local.is_dst,
-            tm_gmtoff: local.utc_offset_seconds,
-            tm_zone: ptr::null_mut(),
-        });
-        ptr::addr_of_mut!(TM)
+    // Single shared buffer, matches libc behavior; assumes no concurrent callers.
+    static mut TM: tm = tm {
+        tm_sec: 0,
+        tm_min: 0,
+        tm_hour: 0,
+        tm_mday: 0,
+        tm_mon: 0,
+        tm_year: 0,
+        tm_wday: 0,
+        tm_yday: 0,
+        tm_isdst: 0,
+        tm_gmtoff: 0,
+        tm_zone: ptr::null_mut(),
+    };
+    let Ok(local) = host::localtime(*t) else {
+        return ptr::null_mut();
+    };
+    let Some(year) = local.year.checked_sub(1900) else {
+        return ptr::null_mut();
+    };
+    if !(1..=12).contains(&local.month)
+        || !(1..=31).contains(&local.day)
+        || !(0..=23).contains(&local.hour)
+        || !(0..=59).contains(&local.minute)
+        || !(0..=60).contains(&local.second)
+        || !(0..=6).contains(&local.weekday)
+        || !(0..=365).contains(&local.yearday)
+        || !(-1..=1).contains(&local.is_dst)
+    {
+        return ptr::null_mut();
     }
+    ptr::addr_of_mut!(TM).write(tm {
+        tm_sec: local.second,
+        tm_min: local.minute,
+        tm_hour: local.hour,
+        tm_mday: local.day,
+        tm_mon: local.month - 1,
+        tm_year: year,
+        tm_wday: local.weekday,
+        tm_yday: local.yearday,
+        tm_isdst: local.is_dst,
+        tm_gmtoff: local.utc_offset_seconds,
+        tm_zone: ptr::null_mut(),
+    });
+    ptr::addr_of_mut!(TM)
 }
 
 // https://github.com/alexcrichton/dlmalloc-rs/blob/fb116603713825b43b113cc734bb7d663cb64be9/src/dlmalloc.rs#L141
@@ -132,17 +127,16 @@ pub unsafe extern "C" fn rust_sqlite_wasm_malloc(size: c_size_t) -> *mut c_void 
     let Some(layout) = allocation_layout(size) else {
         return ptr::null_mut();
     };
-    unsafe {
-        let ptr = alloc::alloc::alloc(layout);
 
-        if ptr.is_null() {
-            return ptr::null_mut();
-        }
-        // Store size for free/realloc; pointer returned is offset by ALIGN.
-        *ptr.cast::<usize>() = size;
+    let ptr = alloc::alloc::alloc(layout);
 
-        ptr.add(ALIGN).cast()
+    if ptr.is_null() {
+        return ptr::null_mut();
     }
+    // Store size for free/realloc; pointer returned is offset by ALIGN.
+    *ptr.cast::<usize>() = size;
+
+    ptr.add(ALIGN).cast()
 }
 
 #[no_mangle]
@@ -150,15 +144,14 @@ pub unsafe extern "C" fn rust_sqlite_wasm_free(ptr: *mut c_void) {
     if ptr.is_null() {
         return;
     }
-    unsafe {
-        // Only accepts pointers allocated by rust_sqlite_wasm_malloc/realloc.
-        let ptr: *mut u8 = ptr.sub(ALIGN).cast();
-        let size = *(ptr.cast::<usize>());
 
-        // This size was validated before allocating the block.
-        let layout = Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
-        alloc::alloc::dealloc(ptr, layout);
-    }
+    // Only accepts pointers allocated by rust_sqlite_wasm_malloc/realloc.
+    let ptr: *mut u8 = ptr.sub(ALIGN).cast();
+    let size = *(ptr.cast::<usize>());
+
+    // This size was validated before allocating the block.
+    let layout = Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
+    alloc::alloc::dealloc(ptr, layout);
 }
 
 #[no_mangle]
@@ -167,28 +160,27 @@ pub unsafe extern "C" fn rust_sqlite_wasm_realloc(
     new_size: c_size_t,
 ) -> *mut c_void {
     if ptr.is_null() {
-        return unsafe { rust_sqlite_wasm_malloc(new_size) };
+        return rust_sqlite_wasm_malloc(new_size);
     }
     let Some(new_layout) = allocation_layout(new_size) else {
         // A failed realloc must leave the original allocation intact.
         return ptr::null_mut();
     };
-    unsafe {
-        // Only accepts pointers allocated by rust_sqlite_wasm_malloc/realloc.
-        let ptr: *mut u8 = ptr.sub(ALIGN).cast();
-        let size = *(ptr.cast::<usize>());
 
-        // The old size was validated before allocating the block.
-        let layout = Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
-        let ptr = alloc::alloc::realloc(ptr, layout, new_layout.size());
+    // Only accepts pointers allocated by rust_sqlite_wasm_malloc/realloc.
+    let ptr: *mut u8 = ptr.sub(ALIGN).cast();
+    let size = *(ptr.cast::<usize>());
 
-        if ptr.is_null() {
-            return ptr::null_mut();
-        }
-        *ptr.cast::<usize>() = new_size;
+    // The old size was validated before allocating the block.
+    let layout = Layout::from_size_align_unchecked(size + ALIGN, ALIGN);
+    let ptr = alloc::alloc::realloc(ptr, layout, new_layout.size());
 
-        ptr.add(ALIGN).cast()
+    if ptr.is_null() {
+        return ptr::null_mut();
     }
+    *ptr.cast::<usize>() = new_size;
+
+    ptr.add(ALIGN).cast()
 }
 
 #[no_mangle]
@@ -196,34 +188,29 @@ pub unsafe extern "C" fn rust_sqlite_wasm_calloc(num: c_size_t, size: c_size_t) 
     let Some(total) = num.checked_mul(size) else {
         return ptr::null_mut();
     };
-    unsafe {
-        let ptr: *mut u8 = rust_sqlite_wasm_malloc(total).cast();
-        if !ptr.is_null() {
-            ptr::write_bytes(ptr, 0, total);
-        }
-        ptr.cast()
+
+    let ptr: *mut u8 = rust_sqlite_wasm_malloc(total).cast();
+    if !ptr.is_null() {
+        ptr::write_bytes(ptr, 0, total);
     }
+    ptr.cast()
 }
 
 /// Installs the default memory VFS during SQLite initialization.
 #[no_mangle]
 pub unsafe extern "C" fn sqlite3_os_init() -> core::ffi::c_int {
-    unsafe {
-        match rsqlite_vfs::memvfs::install(WasmOsCallback, true) {
-            Ok(_) => crate::bindings::SQLITE_OK,
-            Err(_) => crate::bindings::SQLITE_ERROR,
-        }
+    match rsqlite_vfs::memvfs::install(WasmOsCallback, true) {
+        Ok(_) => crate::bindings::SQLITE_OK,
+        Err(_) => crate::bindings::SQLITE_ERROR,
     }
 }
 
 /// Reclaims the memory VFS during SQLite shutdown.
 #[no_mangle]
 pub unsafe extern "C" fn sqlite3_os_end() -> core::ffi::c_int {
-    unsafe {
-        match rsqlite_vfs::memvfs::uninstall() {
-            Ok(()) => crate::bindings::SQLITE_OK,
-            Err(_) => crate::bindings::SQLITE_ERROR,
-        }
+    match rsqlite_vfs::memvfs::uninstall() {
+        Ok(()) => crate::bindings::SQLITE_OK,
+        Err(_) => crate::bindings::SQLITE_ERROR,
     }
 }
 

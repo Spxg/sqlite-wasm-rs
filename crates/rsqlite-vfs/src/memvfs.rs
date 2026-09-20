@@ -291,14 +291,12 @@ impl MemVfsUtil {
     /// Call on the installing thread, with serialized access to SQLite VFS
     /// registration. All SQLite use of memvfs must stay on that same thread.
     pub unsafe fn get() -> Result<Self> {
-        unsafe {
-            let vfs = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
-            if vfs.is_null() {
-                return Err(MemVfsError::NotInstalled);
-            }
-            check_owned(vfs)?;
-            Ok(Self(VfsAppData::<MemAppData>::get(vfs).data.clone()))
+        let vfs = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
+        if vfs.is_null() {
+            return Err(MemVfsError::NotInstalled);
         }
+        check_owned(vfs)?;
+        Ok(Self(VfsAppData::<MemAppData>::get(vfs).data.clone()))
     }
 
     fn import_db_unchecked_impl(
@@ -416,46 +414,43 @@ pub unsafe fn install(
     os: impl OsCallback + 'static,
     default_vfs: bool,
 ) -> core::result::Result<MemVfsUtil, crate::RegisterVfsError> {
-    unsafe {
-        let registered = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
-        if !registered.is_null() {
-            check_owned(registered)?;
-        }
-        // Lookup may initialize SQLite and install memvfs through sqlite3_os_init.
-        // Read ownership afterwards, independently of registry membership.
-        let owned = MEM_VFS.load(Ordering::Relaxed);
+    let registered = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
+    if !registered.is_null() {
+        check_owned(registered)?;
+    }
+    // Lookup may initialize SQLite and install memvfs through sqlite3_os_init.
+    // Read ownership afterwards, independently of registry membership.
+    let owned = MEM_VFS.load(Ordering::Relaxed);
 
-        let vfs = if owned.is_null() {
-            // SAFETY: The name is static, app data is retained until uninstall,
-            // and MemVfs/MemIoMethods use the matching default file layout.
-            // The caller guarantees serialized access to the SQLite context.
-            let data = VfsAppData::new(MemAppData::new(os)).leak();
-            let vfs = Box::into_raw(Box::new(MemVfs::vfs(VFS_NAME.as_ptr(), data)));
-            let code = bindings::sqlite3_vfs_register(vfs, i32::from(default_vfs));
+    let vfs = if owned.is_null() {
+        // SAFETY: The name is static, app data is retained until uninstall,
+        // and MemVfs/MemIoMethods use the matching default file layout.
+        // The caller guarantees serialized access to the SQLite context.
+        let data = VfsAppData::new(MemAppData::new(os)).leak();
+        let vfs = Box::into_raw(Box::new(MemVfs::vfs(VFS_NAME.as_ptr(), data)));
+        let code = bindings::sqlite3_vfs_register(vfs, i32::from(default_vfs));
+        if code != bindings::SQLITE_OK {
+            drop(Box::from_raw(vfs));
+            drop(VfsAppData::from_raw(data));
+            return Err(crate::RegisterVfsError::RegisterVfs(
+                VfsErrorCode::from_raw(code).expect("SQLite must return a valid error code"),
+            ));
+        }
+        MEM_VFS.store(vfs, Ordering::Relaxed);
+        vfs
+    } else {
+        if registered.is_null() || default_vfs {
+            let code = bindings::sqlite3_vfs_register(owned, i32::from(default_vfs));
             if code != bindings::SQLITE_OK {
-                drop(Box::from_raw(vfs));
-                drop(VfsAppData::from_raw(data));
                 return Err(crate::RegisterVfsError::RegisterVfs(
                     VfsErrorCode::from_raw(code).expect("SQLite must return a valid error code"),
                 ));
             }
-            MEM_VFS.store(vfs, Ordering::Relaxed);
-            vfs
-        } else {
-            if registered.is_null() || default_vfs {
-                let code = bindings::sqlite3_vfs_register(owned, i32::from(default_vfs));
-                if code != bindings::SQLITE_OK {
-                    return Err(crate::RegisterVfsError::RegisterVfs(
-                        VfsErrorCode::from_raw(code)
-                            .expect("SQLite must return a valid error code"),
-                    ));
-                }
-            }
-            owned
-        };
+        }
+        owned
+    };
 
-        Ok(MemVfsUtil(VfsAppData::<MemAppData>::get(vfs).data.clone()))
-    }
+    Ok(MemVfsUtil(VfsAppData::<MemAppData>::get(vfs).data.clone()))
 }
 
 fn check_owned(
@@ -477,29 +472,28 @@ fn check_owned(
 /// references (`MemVfsUtil` may outlive uninstall). Owned allocations must
 /// not have been freed or replaced through raw pointers.
 pub unsafe fn uninstall() -> core::result::Result<(), crate::RegisterVfsError> {
-    unsafe {
-        let registered = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
-        let vfs = MEM_VFS.load(Ordering::Relaxed);
+    let registered = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
+    let vfs = MEM_VFS.load(Ordering::Relaxed);
 
-        if vfs.is_null() {
-            if !registered.is_null() {
-                check_owned(registered)?;
-            }
-        } else {
-            let code = bindings::sqlite3_vfs_unregister(vfs);
-            if code != bindings::SQLITE_OK {
-                return Err(crate::RegisterVfsError::UnregisterVfs(
-                    VfsErrorCode::from_raw(code).expect("SQLite must return a valid error code"),
-                ));
-            }
-            MEM_VFS.store(core::ptr::null_mut(), Ordering::Relaxed);
-            // Reconstitute both owners before running backend destructors.
-            let vfs = Box::from_raw(vfs);
-            let data = Box::from_raw(vfs.pAppData.cast::<VfsAppData<MemAppData>>());
-            drop(data);
-            drop(vfs);
+    if vfs.is_null() {
+        if !registered.is_null() {
+            check_owned(registered)?;
         }
+    } else {
+        let code = bindings::sqlite3_vfs_unregister(vfs);
+        if code != bindings::SQLITE_OK {
+            return Err(crate::RegisterVfsError::UnregisterVfs(
+                VfsErrorCode::from_raw(code).expect("SQLite must return a valid error code"),
+            ));
+        }
+        MEM_VFS.store(core::ptr::null_mut(), Ordering::Relaxed);
+        // Reconstitute both owners before running backend destructors.
+        let vfs = Box::from_raw(vfs);
+        let data = Box::from_raw(vfs.pAppData.cast::<VfsAppData<MemAppData>>());
+        drop(data);
+        drop(vfs);
     }
+
     Ok(())
 }
 
