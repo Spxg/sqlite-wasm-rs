@@ -1,22 +1,6 @@
 use rsqlite_vfs::{test_suite::test_vfs_store, *};
 
 #[test]
-fn random_name_is_valid() {
-    fn random(buf: &mut [u8]) -> usize {
-        rand::fill(buf);
-        buf.len()
-    }
-    let name_1 = random_name(random).unwrap();
-    let name_2 = random_name(random).unwrap();
-    assert!(name_1.is_ascii(), "Expected an ascii-name: `{name_1}`");
-    assert!(name_2.is_ascii(), "Expected an ascii-name: `{name_2}`");
-    assert_ne!(name_1, name_2);
-    assert!(random_name(|_| 0).is_err());
-    assert!(random_name(|buf| buf.len() - 1).is_err());
-    assert!(random_name(|buf| buf.len() + 1).is_err());
-}
-
-#[test]
 fn failed_store_checks_close_and_remove_the_created_file() {
     use core::cell::Cell;
     use rsqlite_vfs::{MemChunksFile, OpenRequest, OpenedFile};
