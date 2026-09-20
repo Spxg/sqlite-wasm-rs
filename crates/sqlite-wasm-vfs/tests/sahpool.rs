@@ -311,6 +311,57 @@ async fn test_transfer_roundtrip() {
 }
 
 #[wasm_bindgen_test]
+#[ignore = "writes over 4 GiB to OPFS; requires sufficient storage quota"]
+async fn test_database_over_4gib() {
+    let util = pool("large-database", 2).await;
+    let db = Db::open("large-database", "large.db");
+    db.exec(c"PRAGMA page_size=65536; PRAGMA cache_size=-2048; CREATE TABLE padding(data);");
+    db.exec(c"BEGIN;");
+
+    // Fill the database without allocating its full contents in wasm memory.
+    for _ in 0..65 {
+        db.exec(c"INSERT INTO padding VALUES(zeroblob(64 * 1024 * 1024));");
+    }
+
+    db.exec(c"CREATE TABLE tail(n); INSERT INTO tail VALUES(42); COMMIT;");
+
+    let page_size = db.scalar(c"PRAGMA page_size;");
+    let root_page = db.scalar(c"SELECT rootpage FROM sqlite_schema WHERE name='tail';");
+    assert!((root_page - 1) * page_size > (1i64 << 32));
+
+    let size = db.scalar(c"PRAGMA page_count;") * page_size;
+    drop(db);
+
+    let export = util.begin_export("large.db").unwrap();
+    assert_eq!(export.size(), size as u64);
+    assert!(export.size() > (1u64 << 32));
+    drop(export);
+
+    util.pause().unwrap();
+    util.resume().await.unwrap();
+
+    let db = Db::open("large-database", "large.db");
+    assert_eq!(
+        db.scalar(c"SELECT sum(length(data)) FROM padding;"),
+        65i64 << 26
+    );
+    assert_eq!(db.scalar(c"SELECT n FROM tail;"), 42);
+
+    db.exec(c"BEGIN; UPDATE tail SET n=99; ROLLBACK;");
+    assert_eq!(db.scalar(c"SELECT n FROM tail;"), 42);
+
+    db.exec(c"UPDATE tail SET n=43;");
+    drop(db);
+
+    let db = Db::open("large-database", "large.db");
+    assert_eq!(db.scalar(c"SELECT n FROM tail;"), 43);
+    drop(db);
+
+    util.clear().unwrap();
+    unsafe { util.uninstall().unwrap() };
+}
+
+#[wasm_bindgen_test]
 async fn test_import_cleanup() {
     enum Finish {
         Drop,
