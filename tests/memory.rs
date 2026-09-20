@@ -55,8 +55,8 @@ fn database_names_reserve_room_for_all_journals() {
     let before = util.count();
 
     for checked in [true, false] {
-        for length in [500, 501] {
-            let name = "é".repeat(250) + if length == 501 { "x" } else { "" };
+        for length in [1012, 1013] {
+            let name = "é".repeat(506) + if length == 1013 { "x" } else { "" };
             let result = if checked {
                 util.import_db(&name, &bytes)
             } else {
@@ -64,7 +64,7 @@ fn database_names_reserve_room_for_all_journals() {
                 util.import_db_unchecked(&name, &bytes, page_size)
             };
 
-            if length == 501 {
+            if length == 1013 {
                 assert!(matches!(result, Err(MemVfsError::InvalidFilename)));
                 assert!(matches!(
                     Db::open(&name, "memvfs", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE),

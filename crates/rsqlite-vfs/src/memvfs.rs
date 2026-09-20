@@ -24,9 +24,7 @@ use core::ffi::CStr;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
 const VFS_NAME: &CStr = c"memvfs";
-// SQLite's pager uses page-sized scratch space for super-journal names.
-// Keep paths within even the minimum supported 512-byte database page.
-const MAX_PATH_SIZE: i32 = 512;
+const MAX_PATH_SIZE: i32 = 1024;
 // SQLite may append '-' followed by up to 11 characters (e.g. super-journals).
 const MAX_DB_FILENAME_SIZE: usize = MAX_PATH_SIZE as usize - 12;
 
@@ -270,7 +268,7 @@ pub enum MemVfsError {
     NotInstalled,
     #[error(transparent)]
     Registration(#[from] crate::RegisterVfsError),
-    #[error("filename must be nonempty, NUL-free and at most 500 UTF-8 bytes")]
+    #[error("filename must be nonempty, NUL-free and at most 1012 UTF-8 bytes")]
     InvalidFilename,
     #[error(transparent)]
     ImportDb(#[from] ImportDbError),
@@ -334,7 +332,7 @@ impl MemVfsUtil {
     }
 
     /// Imports a standalone image under a new, nonempty, NUL-free name
-    /// (at most 500 UTF-8 bytes, reserving journal space).
+    /// (at most 1012 UTF-8 bytes, reserving journal space).
     /// Checks signature/page layout, not integrity; resets header flags to
     /// rollback mode without recovering journals or merging a WAL.
     /// Fails on invalid/occupied names, invalid layout or allocation failure.
