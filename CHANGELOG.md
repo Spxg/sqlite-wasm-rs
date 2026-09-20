@@ -1,7 +1,7 @@
 # `sqlite-wasm-rs` Change Log
 --------------------------------------------------------------------------------
 
-## Unreleased
+## [0.6.1](https://github.com/Spxg/sqlite-wasm-rs/compare/0.6.0...0.6.1)
 
 ### Changed
 
