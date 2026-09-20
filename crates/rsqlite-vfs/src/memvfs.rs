@@ -9,8 +9,9 @@ use crate::ffi as bindings;
 
 use crate::{
     check_db_and_page_size, check_import_db, AccessMode, FileKind, ImportDbError, LockLevel,
-    MemChunksFile, OpenAccess, OpenOptions, OpenedFile, OsCallback, SQLiteIoMethods, SQLiteVfs,
-    SyncOptions, VfsAppData, VfsError, VfsErrorCode, VfsFile, VfsResult, VfsStore,
+    MemChunksFile, OpenAccess, OpenOptions, OpenedFile, OsCallback, RegisterVfsError,
+    SQLiteIoMethods, SQLiteVfs, SyncOptions, VfsAppData, VfsError, VfsErrorCode, VfsFile,
+    VfsResult, VfsStore,
 };
 
 use alloc::boxed::Box;
@@ -32,9 +33,9 @@ const MAX_DB_FILENAME_SIZE: usize = MAX_PATH_SIZE as usize - 12;
 // to MemAppData or freed by uninstall. This does not make the VFS thread-safe.
 static MEM_VFS: AtomicPtr<bindings::sqlite3_vfs> = AtomicPtr::new(core::ptr::null_mut());
 
-type Result<T> = core::result::Result<T, MemVfsError>;
+type MemVfsResult<T, E = MemVfsError> = Result<T, E>;
 
-fn validate_db_filename(name: &str) -> Result<()> {
+fn validate_db_filename(name: &str) -> MemVfsResult<()> {
     if name.is_empty() || name.as_bytes().contains(&0) || name.len() > MAX_DB_FILENAME_SIZE {
         return Err(MemVfsError::InvalidFilename);
     }
@@ -264,7 +265,7 @@ pub enum MemVfsError {
     #[error("memory VFS is not installed")]
     NotInstalled,
     #[error(transparent)]
-    Registration(#[from] crate::RegisterVfsError),
+    Registration(#[from] RegisterVfsError),
     #[error("filename must be nonempty, NUL-free and at most 1012 UTF-8 bytes")]
     InvalidFilename,
     #[error(transparent)]
@@ -290,7 +291,7 @@ impl MemVfsUtil {
     /// # Safety
     /// Call on the installing thread, with serialized access to SQLite VFS
     /// registration. All SQLite use of memvfs must stay on that same thread.
-    pub unsafe fn get() -> Result<Self> {
+    pub unsafe fn get() -> MemVfsResult<Self> {
         let vfs = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
         if vfs.is_null() {
             return Err(MemVfsError::NotInstalled);
@@ -305,7 +306,7 @@ impl MemVfsUtil {
         bytes: &[u8],
         page_size: usize,
         clear_wal: bool,
-    ) -> Result<()> {
+    ) -> MemVfsResult<()> {
         validate_db_filename(filename)?;
         check_db_and_page_size(bytes.len(), page_size)?;
         if self.exists(filename) {
@@ -332,7 +333,7 @@ impl MemVfsUtil {
     /// rollback mode without recovering journals or merging a WAL.
     /// Fails on invalid/occupied names, invalid layout or allocation failure.
     /// For encrypted images use [`Self::import_db_unchecked`].
-    pub fn import_db(&self, filename: &str, bytes: &[u8]) -> Result<()> {
+    pub fn import_db(&self, filename: &str, bytes: &[u8]) -> MemVfsResult<()> {
         let page_size = check_import_db(bytes)?;
         self.import_db_unchecked_impl(filename, bytes, page_size, true)
     }
@@ -345,7 +346,7 @@ impl MemVfsUtil {
         filename: &str,
         bytes: &[u8],
         page_size: usize,
-    ) -> Result<()> {
+    ) -> MemVfsResult<()> {
         self.import_db_unchecked_impl(filename, bytes, page_size, false)
     }
 
@@ -353,7 +354,7 @@ impl MemVfsUtil {
     /// Finish transactions, checkpoint WAL and close connections first.
     /// Fails if absent or unable to allocate a contiguous buffer
     /// (at most `isize::MAX` bytes, less than 2 GiB on wasm32).
-    pub fn export_db(&self, filename: &str) -> Result<Vec<u8>> {
+    pub fn export_db(&self, filename: &str) -> MemVfsResult<Vec<u8>> {
         let name2file = self.0.borrow();
 
         if let Some(file) = name2file.get(filename) {
@@ -413,7 +414,7 @@ impl MemVfsUtil {
 pub unsafe fn install(
     os: impl OsCallback + 'static,
     default_vfs: bool,
-) -> core::result::Result<MemVfsUtil, crate::RegisterVfsError> {
+) -> MemVfsResult<MemVfsUtil, RegisterVfsError> {
     let registered = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
     if !registered.is_null() {
         check_owned(registered)?;
@@ -432,7 +433,7 @@ pub unsafe fn install(
         if code != bindings::SQLITE_OK {
             drop(Box::from_raw(vfs));
             drop(VfsAppData::from_raw(data));
-            return Err(crate::RegisterVfsError::RegisterVfs(
+            return Err(RegisterVfsError::RegisterVfs(
                 VfsErrorCode::from_raw(code).expect("SQLite must return a valid error code"),
             ));
         }
@@ -442,7 +443,7 @@ pub unsafe fn install(
         if registered.is_null() || default_vfs {
             let code = bindings::sqlite3_vfs_register(owned, i32::from(default_vfs));
             if code != bindings::SQLITE_OK {
-                return Err(crate::RegisterVfsError::RegisterVfs(
+                return Err(RegisterVfsError::RegisterVfs(
                     VfsErrorCode::from_raw(code).expect("SQLite must return a valid error code"),
                 ));
             }
@@ -453,11 +454,9 @@ pub unsafe fn install(
     Ok(MemVfsUtil(VfsAppData::<MemAppData>::get(vfs).data.clone()))
 }
 
-fn check_owned(
-    vfs: *mut bindings::sqlite3_vfs,
-) -> core::result::Result<(), crate::RegisterVfsError> {
+fn check_owned(vfs: *mut bindings::sqlite3_vfs) -> MemVfsResult<(), RegisterVfsError> {
     if vfs != MEM_VFS.load(Ordering::Relaxed) {
-        return Err(crate::RegisterVfsError::NameConflict("memvfs".into()));
+        return Err(RegisterVfsError::NameConflict("memvfs".into()));
     }
     Ok(())
 }
@@ -471,28 +470,31 @@ fn check_owned(
 /// installation/uninstallation. Close all files and retire VFS/app-data
 /// references (`MemVfsUtil` may outlive uninstall). Owned allocations must
 /// not have been freed or replaced through raw pointers.
-pub unsafe fn uninstall() -> core::result::Result<(), crate::RegisterVfsError> {
+pub unsafe fn uninstall() -> MemVfsResult<(), RegisterVfsError> {
     let registered = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
     let vfs = MEM_VFS.load(Ordering::Relaxed);
 
     if vfs.is_null() {
+        // A same-name VFS belongs to someone else.
         if !registered.is_null() {
             check_owned(registered)?;
         }
-    } else {
-        let code = bindings::sqlite3_vfs_unregister(vfs);
-        if code != bindings::SQLITE_OK {
-            return Err(crate::RegisterVfsError::UnregisterVfs(
-                VfsErrorCode::from_raw(code).expect("SQLite must return a valid error code"),
-            ));
-        }
-        MEM_VFS.store(core::ptr::null_mut(), Ordering::Relaxed);
-        // Reconstitute both owners before running backend destructors.
-        let vfs = Box::from_raw(vfs);
-        let data = Box::from_raw(vfs.pAppData.cast::<VfsAppData<MemAppData>>());
-        drop(data);
-        drop(vfs);
+        return Ok(());
     }
+
+    let code = bindings::sqlite3_vfs_unregister(vfs);
+    if code != bindings::SQLITE_OK {
+        return Err(RegisterVfsError::UnregisterVfs(
+            VfsErrorCode::from_raw(code).expect("SQLite must return a valid error code"),
+        ));
+    }
+
+    MEM_VFS.store(core::ptr::null_mut(), Ordering::Relaxed);
+    // Reconstitute both owners before running backend destructors.
+    let vfs = Box::from_raw(vfs);
+    let data = Box::from_raw(vfs.pAppData.cast::<VfsAppData<MemAppData>>());
+    drop(data);
+    drop(vfs);
 
     Ok(())
 }
