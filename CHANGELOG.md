@@ -3,126 +3,98 @@
 
 ## Unreleased
 
+Changes since 0.5.5, covering `sqlite-wasm-rs` 0.6.0, `rsqlite-vfs` 0.2.0
+and `sqlite-wasm-vfs` 0.3.0.
+
+### Breaking changes
+
+* No features are enabled by default. Enable `wasm-bindgen` in `sqlite-wasm-rs`
+  for the JavaScript host adapter, and `sahpool` in `sqlite-wasm-vfs` for OPFS.
+  Without `wasm-bindgen`, applications must supply the C ABI host hooks.
+
+* Remove `relaxed_idb` support. Its asynchronous persistence did not meet
+  SQLite's synchronous durability requirements.
+
+* Replace `sqlite_wasm_rs::utils` with `sqlite_wasm_rs::vfs`. Access `MemVfsUtil`
+  and `MemVfsError` through `vfs::memvfs` instead of the crate root.
+
+* Redesign `VfsStore` around owned per-open handles, associated `File`/`AppData`
+  types and typed open options. `open_file` takes `OpenRequest` and returns
+  `OpenedFile`; backends implement close, access, path resolution and deletion.
+
+* Use `u64` for file offsets and lengths. `VfsFile::read` now takes `&mut self`
+  and returns a byte count. Replace `flush` with `sync(SyncOptions)` and require
+  lock delegates; deletion receives `sync_dir`.
+
+* Make `OsCallback` instance-based through `SQLiteVfs::Os` and `os`. Clocks
+  return a result and randomness reports the number of bytes filled.
+  Backends own diagnostic storage and synchronization; `VfsError` uses typed
+  SQLite/OS codes and borrowed or owned messages.
+
+* Make raw VFS construction, lookup and registration unsafe. `register_vfs`
+  returns `VfsRegistration` with explicit unsafe `unregister`; dropping the
+  handle leaves the VFS registered. Raw file access no longer returns static references.
+
+* Separate memory VFS installation from management: use fallible
+  `memvfs::install(os, default_vfs)` and non-generic `MemVfsUtil::get()`.
+  Installation, lookup and uninstallation require unsafe, same-thread access.
+
+* Move management methods to `VfsFilesManager`: `remove`, `clear`, `contains`,
+  `names`, `len` and `is_empty`. Move import/export methods to `transfer::DbTransfer`;
+  import these traits to call their methods. Unchecked imports preserve all bytes
+  and no longer take `clear_wal`.
+
+* Rename SAH pool methods to `capacity`, `ensure_capacity`, `pause` and `resume`;
+  capacity values use `usize`. Add unsafe `uninstall`; `install` now requires
+  `OsCallback + Default + 'static`. Limit database names to 499 UTF-8 bytes for
+  SAH pools and 1012 for memvfs, reserving space for journal suffixes.
+
+* Remove `xOpenImpl`, `xCloseImpl`, `memvfs::MemFile`, public helper macros,
+  `random_name`, `SQLITE3_HEADER`, `check_import_db` and `check_db_and_page_size`.
+  Move `ImportDbError` to `transfer`.
+
 ### Added
 
-* SAH pool chunked import/export handles with `u64` lengths and caller-provided
-  buffers, avoiding full-database allocations on wasm32.
+* C ABI host adapters, with `host-js` and `host-c` examples for environments
+  without wasm-bindgen.
 
-* `SQLITE_WASM_RS_SOURCE_DIR` selects a custom SQLite or SQLite3MC amalgamation
-  directory for compilation and optional binding generation.
+* `SQLITE_WASM_RS_SOURCE_DIR` for custom SQLite or SQLite3MC amalgamations.
+  Enable `bindgen` to generate bindings from the selected headers.
 
-* C ABI host hooks for custom `wasm32-unknown-unknown` environments. The
-  default `wasm-bindgen` feature preserves the JavaScript adapter; disabling it
-  removes the core library's `wasm-bindgen` and `js-sys` dependencies. The
-  `host-js` and `host-c` examples demonstrate direct JavaScript imports and a
-  statically linked C/WASI adapter, without generated glue.
-
-* Public, doc-hidden `test_suite` with reusable file and store conformance checks
-  for custom VFS implementations.
-
-* Default-enabled `sahpool` feature in `sqlite-wasm-vfs`, allowing the OPFS
-  implementation and its filesystem bindings to be disabled.
+* Reusable chunked import/export through `DbTransfer`, implemented by memvfs
+  and SAH pools. Transfers use `u64` lengths without requiring a full-image buffer;
+  unfinished imports are discarded. Memory and backend limits still apply.
 
 ### Changed
 
-* Lower the minimum supported Rust version to 1.81.0 and use Edition 2021.
+* Update SQLite to 3.53.4, SQLite3MC to 2.5.1 and printf to 6.4.0.
 
-* **Breaking:** Replace `sqlite_wasm_rs::utils` with `sqlite_wasm_rs::vfs`,
-  re-exporting the complete `rsqlite-vfs` API. Access `MemVfsError` and
-  `MemVfsUtil` through `sqlite_wasm_rs::vfs::memvfs` instead of the crate root.
+* Default `SQLiteVfs::VERSION` to 2 and `SQLiteIoMethods::VERSION` to 1.
+  Add typed delegates for size hints, sector size and device characteristics.
 
-* Align `code_to_str` with `libsqlite3-sys` by using SQLite's own error messages.
+* Remove `hashbrown` from `rsqlite-vfs`, retaining `no_std` support, and replace
+  Tokio with `futures-util` in `sqlite-wasm-vfs`.
 
-* Replace the Tokio dependency in `sqlite-wasm-vfs` with `futures-util`.
-  Disabling `sahpool` now disables all of the crate's normal dependencies.
-
-* **Breaking:** Harden SAH pool lifecycle and management. Validate names,
-  reuse paused installations, and provide explicit unsafe `uninstall`.
-  Management errors are typed; export requires closed databases without
-  nonempty journal/WAL sidecars and reports oversized/allocation failures.
-
-* **Breaking:** Reserve journal suffix space in database names: at most 499 UTF-8
-  bytes for SAH pools and 1012 for memvfs.
-
-* **Breaking:** Redesign VFS backend traits around owned per-open handles and
-  typed options/errors. `VfsStore` owns the `File` and `AppData` types;
-  `open_file` receives `OpenRequest` and returns `OpenedFile` with the actual
-  access mode. Backends implement close/delete-on-close, access, path resolution,
-  synchronization and locking; safe delegates also cover storage hints and
-  device capabilities. `sync` replaces `flush`, and deletion receives `sync_dir`.
-
-* **Breaking:** File offsets and sizes use `u64`, including on wasm32.
-  `VfsFile::read` takes `&mut self` and returns a byte count; the default `xRead`
-  handles zero-filling and short-read errors. Memory and backend limits still apply.
-
-* **Breaking:** Platform services use instance-based `OsCallback` methods through
-  `SQLiteVfs::Os` and `os`. Clocks are fallible, randomness reports bytes filled,
-  and `random_name` rejects incomplete random input.
-
-* **Breaking:** Backends own diagnostic storage and synchronization instead of
-  relying on a built-in `RefCell`. `VfsError` uses validated `VfsErrorCode` values,
-  optional `SystemErrorCode` diagnostics and borrowed or owned messages, and
-  implements `Display` and `core::error::Error`.
-
-* **Breaking:** Raw VFS construction, lookup and registration are explicitly
-  unsafe. `register_vfs` rejects empty/conflicting names and returns an owned
-  `VfsRegistration` with explicit unsafe unregistration; dropping it keeps the
-  registration alive. Raw file/app-data access no longer exposes static references.
-
-* **Breaking:** Separate memory VFS installation from management access:
-  `memvfs::install(os, default_vfs)` is fallible, `MemVfsUtil` is non-generic,
-  and `get` only acquires an installed instance. Lifecycle operations require
-  unsafe, serialized same-thread access; management errors are typed.
-  Align management names and return types, including SAH pool `capacity`,
-  `ensure_capacity`, `pause` and `resume`.
-
-* Remove the `hashbrown` dependency from `rsqlite-vfs` while retaining `no_std`
-  support; reduce memory-file allocation overhead and handle bulk allocation
-  failures without corrupting existing data.
+* Use SQLite's own error messages in `code_to_str`. Expand the doc-hidden
+  `test_suite` for custom VFS implementations and provide a native VFS example.
 
 ### Fixed
 
-* Restore SAH pool hot-journal recovery, flush persistent name changes and
-  imports, and validate complete header I/O. Reclaim handles after errors or
-  cancellation, roll back failed imports, and isolate incomplete namespace
-  updates. Lock directory ownership even for empty pools while preserving the
-  existing on-disk header format.
-  Preserve files with invalid type flags, recover zero-filled incomplete slots,
-  and retain shared handles for SQLite's internal journal inspection.
+* Correct default VFS callback buffer handling, short reads, time conversion,
+  diagnostics and unsupported operations. Preserve SQLite filename URI metadata
+  and fix registration ownership, cleanup and reinstallation.
 
-* Reject oversized or nonempty null buffers in the JavaScript host adapter's
-  C ABI random hooks.
+* Fix memory-file truncation, sparse writes and allocation failure handling.
+  Preserve open-file identity after deletion/recreation and enforce exclusive creation.
 
-* Handle null pointers and allocation-size overflow in the C allocation shim;
-  initialize entropy output buffers safely and split Web Crypto requests to
-  avoid unnecessary fallback for buffers larger than 64 KiB.
+* Fix SAH hot-journal recovery, persistent namespace updates and header validation.
+  Recover resources after failures or cancellation, prevent overlapping directory
+  ownership and preserve invalid files for recovery. Transfers reject open files
+  and nonempty journal/WAL sidecars; the on-disk pool format is unchanged.
 
-* Align default callbacks with SQLite's buffer, short-read, time, diagnostic and
-  unsupported-operation contracts. Preserve URI metadata for database, journal
-  and WAL opens, and keep OS error numbers separate from SQLite result codes.
-  The no-atomics wasm sleep limitation is unchanged.
-
-* Correct VFS pointer ownership and cleanup across registration failures,
-  unregistration and reinstallation. Keep memory management handles valid after
-  uninstall, reject foreign same-name registrations, and release file handles
-  even when delete-on-close fails.
-
-* Correct memory-file truncation and sparse-write behavior; validate imported
-  filenames and SQLite headers. Preserve open memory-file identity after
-  deletion/recreation, enforce exclusive creation, and prevent SAH pool removal
-  or pausing while file handles remain open.
-
-* Correct the SQLite extension symbol callback signature and update database
-  configuration constants to match the bundled SQLite headers.
-
-### Removed
-
-* **Breaking:** Remove `xOpenImpl`, `xCloseImpl`, `memvfs::MemFile` and the public
-  `bail!`, `check_result!`, `check_option!` and `unused!` helper macros.
-
-* **Breaking:** Remove the `relaxed_idb` module, `relaxed-idb` feature and
-  `indexed_db_futures` dependency. Its asynchronous persistence did not provide
-  SQLite's synchronous durability guarantees; use `sahpool` for persistent storage.
+* Fix C allocation overflow/null handling, entropy buffer initialization and
+  invalid local-time handling. Split Web Crypto requests at 64 KiB. Correct the
+  extension symbol callback signature and refresh SQLite configuration constants.
 
 --------------------------------------------------------------------------------
 
