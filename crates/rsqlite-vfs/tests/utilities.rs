@@ -1,37 +1,6 @@
 use rsqlite_vfs::{test_suite::test_vfs_store, *};
 
 #[test]
-fn import_rejects_invalid_header_and_page_boundaries() {
-    use rsqlite_vfs::{check_db_and_page_size, check_import_db, ImportDbError};
-    let mut db = std::vec![0; 65536];
-    db[..16].copy_from_slice(b"SQLite format 3\0");
-    db[16..18].copy_from_slice(&1u16.to_be_bytes());
-    assert_eq!(check_import_db(&db).unwrap(), 65536);
-    assert!(matches!(
-        check_import_db(&db[..512]),
-        Err(ImportDbError::InvalidDbSize)
-    ));
-    for page_size in [0u16, 256, 513, 65535] {
-        db[16..18].copy_from_slice(&page_size.to_be_bytes());
-        assert!(matches!(
-            check_import_db(&db),
-            Err(ImportDbError::InvalidPageSize)
-        ));
-        assert!(matches!(
-            check_db_and_page_size(db.len(), usize::from(page_size)),
-            Err(ImportDbError::InvalidPageSize)
-        ));
-    }
-    db[16..18].copy_from_slice(&512u16.to_be_bytes());
-    assert_eq!(check_import_db(&db[..512]).unwrap(), 512);
-    db[15] = b'x';
-    assert!(matches!(
-        check_import_db(&db),
-        Err(ImportDbError::InvalidHeader)
-    ));
-}
-
-#[test]
 fn random_name_is_valid() {
     fn random(buf: &mut [u8]) -> usize {
         rand::fill(buf);

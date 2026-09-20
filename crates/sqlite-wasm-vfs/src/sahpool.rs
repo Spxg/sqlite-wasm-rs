@@ -24,18 +24,19 @@
 //! }
 //! ```
 
+use rsqlite_vfs::transfer::{
+    DbExport, DbImport, DbTransfer, ExportSource, ImportDbError, ImportTarget, TransferError,
+};
 use rsqlite_vfs::{
-    check_db_and_page_size, check_import_db,
     ffi::{
         sqlite3_vfs_register, sqlite3_vfs_unregister, SQLITE_OK, SQLITE_OPEN_DELETEONCLOSE,
         SQLITE_OPEN_MAIN_DB, SQLITE_OPEN_MAIN_JOURNAL, SQLITE_OPEN_SUBJOURNAL,
         SQLITE_OPEN_SUPER_JOURNAL, SQLITE_OPEN_TEMP_DB, SQLITE_OPEN_TEMP_JOURNAL,
         SQLITE_OPEN_TRANSIENT_DB, SQLITE_OPEN_WAL,
     },
-    register_vfs, registered_vfs, AccessMode, DeviceCharacteristics, FileKind, ImportDbError,
-    LockLevel, OpenAccess, OpenOptions, OpenedFile, OsCallback, RegisterVfsError, SQLiteIoMethods,
-    SQLiteVfs, SectorSize, SyncOptions, VfsError, VfsErrorCode, VfsFile, VfsRegistration,
-    VfsResult, VfsStore, SQLITE3_HEADER,
+    register_vfs, registered_vfs, AccessMode, DeviceCharacteristics, FileKind, LockLevel,
+    OpenAccess, OpenOptions, OpenedFile, OsCallback, RegisterVfsError, SQLiteIoMethods, SQLiteVfs,
+    SectorSize, SyncOptions, VfsError, VfsErrorCode, VfsFile, VfsRegistration, VfsResult, VfsStore,
 };
 use std::{
     any::TypeId,
@@ -1033,8 +1034,14 @@ impl OpfsSAHPool {
 
         Ok(())
     }
+}
 
-    fn begin_export(&self, filename: &str) -> Result<OpfsSAHExport<'_>> {
+impl DbTransfer for OpfsSAHPool {
+    type Error = OpfsSAHError;
+    type Target<'a> = OpfsSAHImportTarget<'a>;
+    type Source<'a> = OpfsSAHExportSource<'a>;
+
+    fn open_export(&self, filename: &str) -> Result<Self::Source<'_>> {
         self.check_active()?;
         validate_filename(filename)?;
 
@@ -1057,50 +1064,17 @@ impl OpfsSAHPool {
         }
 
         let size = file.size()?;
-        Ok(OpfsSAHExport {
+        Ok(OpfsSAHExportSource {
             file: file.clone(),
             size,
-            offset: 0,
             _operation: self.begin_operation()?,
         })
     }
 
-    fn export_db(&self, filename: &str) -> Result<Vec<u8>> {
-        let mut export = self.begin_export(filename)?;
-        let size = usize::try_from(export.size())
-            .ok()
-            .filter(|&n| n <= isize::MAX as usize)
-            .ok_or(OpfsSAHError::FileTooLarge)?;
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(size)
-            .map_err(|_| OpfsSAHError::OutOfMemory)?;
-        bytes.resize(size, 0);
-
-        export.read(&mut bytes)?;
-
-        Ok(bytes)
-    }
-
-    fn import_db(&self, filename: &str, bytes: &[u8]) -> Result<()> {
-        check_import_db(bytes)?;
-        self.import_db_unchecked(filename, bytes, true)
-    }
-
-    fn import_db_unchecked(&self, filename: &str, bytes: &[u8], checked: bool) -> Result<()> {
-        let mut import = self.begin_import(filename, bytes.len() as u64, checked)?;
-        import.write(bytes)?;
-        import.finish()
-    }
-
-    fn begin_import(&self, filename: &str, size: u64, checked: bool) -> Result<OpfsSAHImport<'_>> {
+    fn create_import(&self, filename: &str, size: u64) -> Result<Self::Target<'_>> {
         self.check_active()?;
         validate_db_filename(filename)?;
         physical_offset(size, 0, VfsErrorCode::IoWrite)?;
-
-        if checked && (size < 512 || size % 512 != 0) {
-            return Err(ImportDbError::InvalidDbSize.into());
-        }
 
         if self.has_filename(filename) {
             return Err(OpfsSAHError::FileExists(filename.into()));
@@ -1125,14 +1099,10 @@ impl OpfsSAHPool {
 
         // Keep the reserved slot counted in capacity. The operation guard
         // prevents reuse until finish/abort removes or clears it.
-        Ok(OpfsSAHImport {
+        Ok(OpfsSAHImportTarget {
             pool: self,
             file,
             filename: filename.into(),
-            size,
-            offset: 0,
-            checked,
-            failed: false,
             done: false,
             _operation: self.begin_operation()?,
         })
@@ -1447,6 +1417,8 @@ pub enum OpfsSAHError {
     ImportSizeMismatch { expected: u64, actual: u64 },
     #[error("database import cannot finish after a failed write")]
     ImportFailed,
+    #[error(transparent)]
+    Transfer(TransferError),
     #[error("unable to allocate memory for file data or pool capacity")]
     OutOfMemory,
     #[error("{error}; slot cleanup also failed: {cleanup}")]
@@ -1456,6 +1428,26 @@ pub enum OpfsSAHError {
         /// Subsequent failure while trying to reclaim the slot.
         cleanup: Box<OpfsSAHError>,
     },
+}
+
+impl From<TransferError> for OpfsSAHError {
+    fn from(error: TransferError) -> Self {
+        match error {
+            TransferError::ImportDb(error) => Self::ImportDb(error),
+            TransferError::SizeMismatch { expected, actual } => {
+                Self::ImportSizeMismatch { expected, actual }
+            }
+            TransferError::ImportFailed => Self::ImportFailed,
+            TransferError::FileTooLarge => Self::FileTooLarge,
+            TransferError::OutOfMemory => Self::OutOfMemory,
+            TransferError::ShortRead { expected, actual } => Self::ShortIo {
+                operation: "export database",
+                expected,
+                actual: actual as f64,
+            },
+            error => Self::Transfer(error),
+        }
+    }
 }
 
 impl OpfsSAHError {
@@ -1514,103 +1506,34 @@ impl OpfsSAHError {
 /// Blocks pool management and new file opens, including between awaits. Drop
 /// aborts; cleanup failure quarantines the slot and requires pool recovery.
 /// Keep other SQLite connections on this pool idle during the transfer.
-#[must_use = "write the database and finish, or drop to abort"]
-pub struct OpfsSAHImport<'a> {
+pub type OpfsSAHImport<'a> = DbImport<OpfsSAHImportTarget<'a>>;
+
+#[doc(hidden)]
+pub struct OpfsSAHImportTarget<'a> {
     pool: &'a OpfsSAHPool,
     file: SyncAccessFile,
     filename: String,
-    size: u64,
-    offset: u64,
-    checked: bool,
-    failed: bool,
     done: bool,
     _operation: Operation<'a>,
 }
 
-impl OpfsSAHImport<'_> {
-    /// Writes a complete chunk at the current offset. Chunks need not align to
-    /// pages or headers. Any error prevents publication, even if ignored.
-    pub fn write(&mut self, bytes: &[u8]) -> Result<()> {
-        if self.failed {
-            return Err(OpfsSAHError::ImportFailed);
-        }
+impl ImportTarget for OpfsSAHImportTarget<'_> {
+    type Error = OpfsSAHError;
 
-        let result = (|| {
-            let end = self.offset + bytes.len() as u64;
-            if end > self.size {
-                return Err(OpfsSAHError::ImportSizeMismatch {
-                    expected: self.size,
-                    actual: end,
-                });
-            }
-
-            if !bytes.is_empty() {
-                let at = physical_offset(self.offset, bytes.len(), VfsErrorCode::IoWrite)?;
-                self.file.write_at(bytes, at)?;
-            }
-            self.offset = end;
-
-            Ok(())
-        })();
-        self.failed = result.is_err();
-        result
+    fn write_at(&mut self, offset: u64, bytes: &[u8]) -> Result<()> {
+        let at = physical_offset(offset, bytes.len(), VfsErrorCode::IoWrite)?;
+        self.file.write_at(bytes, at)
     }
 
-    /// Verifies the declared length, validates checked imports, flushes data,
-    /// and publishes the name. On error the slot is reclaimed or quarantined.
-    pub fn finish(mut self) -> Result<()> {
+    fn commit(mut self) -> Result<()> {
         let result = (|| {
-            if self.failed {
-                return Err(OpfsSAHError::ImportFailed);
-            }
-            if self.offset != self.size {
-                return Err(OpfsSAHError::ImportSizeMismatch {
-                    expected: self.size,
-                    actual: self.offset,
-                });
-            }
-
-            if self.checked {
-                let mut header = [0; 18];
-                let count = self.file.read_at(&mut header, HEADER_OFFSET_DATA as f64)?;
-                if count != header.len() {
-                    return Err(OpfsSAHError::ShortIo {
-                        operation: "read database header",
-                        expected: header.len(),
-                        actual: count as f64,
-                    });
-                }
-                if !header.starts_with(SQLITE3_HEADER.as_bytes()) {
-                    return Err(ImportDbError::InvalidHeader.into());
-                }
-
-                let page_size = u16::from_be_bytes([header[16], header[17]]);
-                let page_size = if page_size == 1 {
-                    65536
-                } else {
-                    usize::from(page_size)
-                };
-                check_db_and_page_size(0, page_size)?;
-                if self.size % page_size as u64 != 0 {
-                    return Err(ImportDbError::InvalidDbSize.into());
-                }
-                self.file
-                    .write_at(&[1, 1], (HEADER_OFFSET_DATA + 18) as f64)?;
-            }
-
             self.file.flush()?;
             self.file
                 .associate(Some(&self.filename), SQLITE_OPEN_MAIN_DB)
         })();
 
         if let Err(error) = result {
-            return match self.cleanup() {
-                Ok(()) => Err(error),
-                Err(cleanup) => Err(OpfsSAHError::Cleanup {
-                    error: Box::new(error),
-                    cleanup: Box::new(cleanup),
-                }),
-            };
+            return Err(self.abort_with_error(error));
         }
 
         let file = self.pool.available_files.borrow_mut().pop().unwrap();
@@ -1622,11 +1545,22 @@ impl OpfsSAHImport<'_> {
         Ok(())
     }
 
-    /// Aborts explicitly, reporting cleanup errors that Drop cannot return.
-    pub fn abort(mut self) -> Result<()> {
+    fn abort(mut self) -> Result<()> {
         self.cleanup()
     }
 
+    fn abort_with_error(mut self, error: OpfsSAHError) -> OpfsSAHError {
+        match self.cleanup() {
+            Ok(()) => error,
+            Err(cleanup) => OpfsSAHError::Cleanup {
+                error: Box::new(error),
+                cleanup: Box::new(cleanup),
+            },
+        }
+    }
+}
+
+impl OpfsSAHImportTarget<'_> {
     fn cleanup(&mut self) -> Result<()> {
         self.done = true;
         if let Err(err) = self.file.associate(None, 0) {
@@ -1640,7 +1574,7 @@ impl OpfsSAHImport<'_> {
     }
 }
 
-impl Drop for OpfsSAHImport<'_> {
+impl Drop for OpfsSAHImportTarget<'_> {
     fn drop(&mut self) {
         if !self.done {
             let _ = self.cleanup();
@@ -1651,39 +1585,25 @@ impl Drop for OpfsSAHImport<'_> {
 /// Sequential export of a closed, standalone database. No full-file allocation.
 /// Blocks pool management and new file opens until dropped, including at EOF.
 /// Keep other SQLite connections on this pool idle during the transfer.
-pub struct OpfsSAHExport<'a> {
+pub type OpfsSAHExport<'a> = DbExport<OpfsSAHExportSource<'a>>;
+
+#[doc(hidden)]
+pub struct OpfsSAHExportSource<'a> {
     file: SyncAccessFile,
     size: u64,
-    offset: u64,
     _operation: Operation<'a>,
 }
 
-impl OpfsSAHExport<'_> {
-    /// Total database size, excluding the pool's private header.
-    pub fn size(&self) -> u64 {
+impl ExportSource for OpfsSAHExportSource<'_> {
+    type Error = OpfsSAHError;
+
+    fn size(&self) -> u64 {
         self.size
     }
 
-    /// Fills the buffer up to EOF. Returns zero at EOF or for an empty buffer.
-    /// The buffer can be reused after its contents have been consumed.
-    pub fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        let length = (self.size - self.offset).min(buf.len() as u64) as usize;
-        if length == 0 {
-            return Ok(0);
-        }
-
-        let at = physical_offset(self.offset, length, VfsErrorCode::IoRead)?;
-        let count = self.file.read_at(&mut buf[..length], at)?;
-        if count != length {
-            return Err(OpfsSAHError::ShortIo {
-                operation: "export database",
-                expected: length,
-                actual: count as f64,
-            });
-        }
-        self.offset += count as u64;
-
-        Ok(count)
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<usize> {
+        let at = physical_offset(offset, buf.len(), VfsErrorCode::IoRead)?;
+        self.file.read_at(buf, at)
     }
 }
 
@@ -1691,9 +1611,28 @@ impl OpfsSAHExport<'_> {
 ///
 /// Drop leaves the VFS installed. [`Self::pause`] releases OPFS locks;
 /// [`Self::uninstall`] also frees registration and disables old handles.
+/// Import [`DbTransfer`] for whole-image and chunked transfers.
 #[derive(Clone)]
 pub struct OpfsSAHPoolUtil {
     pool: Rc<OpfsSAHPool>,
+}
+
+/// Transfers block pool management/new opens; keep existing connections idle.
+/// Imports require new names of at most 499 UTF-8 bytes and no same-name sidecars.
+/// Exports reject open files and nonempty journal/WAL files, including PERSIST
+/// journals: recover/checkpoint and close first, then remove retained journals.
+impl DbTransfer for OpfsSAHPoolUtil {
+    type Error = OpfsSAHError;
+    type Target<'a> = OpfsSAHImportTarget<'a>;
+    type Source<'a> = OpfsSAHExportSource<'a>;
+
+    fn create_import(&self, name: &str, size: u64) -> Result<Self::Target<'_>> {
+        self.pool.create_import(name, size)
+    }
+
+    fn open_export(&self, name: &str) -> Result<Self::Source<'_>> {
+        self.pool.open_export(name)
+    }
 }
 
 impl OpfsSAHPoolUtil {
@@ -1722,52 +1661,6 @@ impl OpfsSAHPoolUtil {
     /// Ensures at least `min` held slots, without shrinking an existing pool.
     pub async fn ensure_capacity(&self, min: usize) -> Result<()> {
         self.pool.ensure_capacity(min).await
-    }
-
-    /// Imports and flushes a standalone image under a new, nonempty, NUL-free
-    /// name (at most 499 UTF-8 bytes, reserving journal space).
-    /// Checks header/page layout, not integrity; resets header flags to rollback
-    /// mode without merging WAL or recovering journals. Checkpoint/close the
-    /// source first. For encryption use [`Self::import_db_unchecked`].
-    /// For chunked input use [`Self::begin_import`].
-    pub fn import_db(&self, filename: &str, bytes: &[u8]) -> Result<()> {
-        self.pool.import_db(filename, bytes)
-    }
-
-    /// Like [`Self::import_db`], but skips header validation/modification for
-    /// encrypted images. Name, standalone-image and complete-write rules apply.
-    pub fn import_db_unchecked(&self, filename: &str, bytes: &[u8]) -> Result<()> {
-        self.pool.import_db_unchecked(filename, bytes, false)
-    }
-
-    /// Starts a checked, sequential import of exactly `size` bytes. Does not
-    /// preallocate the image. The name stays hidden until `finish` succeeds.
-    /// Same standalone-image rules as [`Self::import_db`]; chunks may cross headers.
-    /// Blocks pool management and new file opens until finished or dropped.
-    pub fn begin_import(&self, filename: &str, size: u64) -> Result<OpfsSAHImport<'_>> {
-        self.pool.begin_import(filename, size, true)
-    }
-
-    /// Like [`Self::begin_import`], but preserves encrypted headers unchanged.
-    /// Still enforces the declared length and complete writes.
-    pub fn begin_import_unchecked(&self, filename: &str, size: u64) -> Result<OpfsSAHImport<'_>> {
-        self.pool.begin_import(filename, size, false)
-    }
-
-    /// Starts a sequential export into caller-provided buffers, including files
-    /// larger than wasm32 memory. Same closed/standalone rules as [`Self::export_db`].
-    /// Blocks pool management and new file opens until the reader is dropped.
-    pub fn begin_export(&self, filename: &str) -> Result<OpfsSAHExport<'_>> {
-        self.pool.begin_export(filename)
-    }
-
-    /// Copies a closed database into memory; not an online backup.
-    /// Rejects nonempty journal/WAL sidecars, including retained PERSIST journals:
-    /// recover/checkpoint and close first, then remove retained journals.
-    /// Needs a contiguous allocation below 2 GiB on wasm32.
-    /// Use [`Self::begin_export`] for larger databases or bounded memory usage.
-    pub fn export_db(&self, filename: &str) -> Result<Vec<u8>> {
-        self.pool.export_db(filename)
     }
 
     /// Deletes only the named file and flushes removal; returns `false` if absent.
@@ -1968,6 +1861,7 @@ mod tests {
         install, physical_offset, OpfsSAHError, OpfsSAHPool, OpfsSAHPoolCfg, OpfsSAHPoolCfgBuilder,
         SyncAccessHandleStore, HEADER_OFFSET_DATA, MAX_SAFE_INTEGER,
     };
+    use rsqlite_vfs::transfer::DbTransfer;
     use rsqlite_vfs::{
         test_suite::test_vfs_store, FileKind, LockLevel, OpenAccess, OpenOptions, OpenRequest,
         VfsAppData, VfsErrorCode, VfsFile, VfsStore,

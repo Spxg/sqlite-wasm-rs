@@ -6,12 +6,12 @@
 //! and repeated opens share data without enforcing this restriction.
 
 use crate::ffi as bindings;
+use crate::transfer::{DbTransfer, ExportSource, ImportDbError, ImportTarget, TransferError};
 
 use crate::{
-    check_db_and_page_size, check_import_db, AccessMode, FileKind, ImportDbError, LockLevel,
-    MemChunksFile, OpenAccess, OpenOptions, OpenedFile, OsCallback, RegisterVfsError,
-    SQLiteIoMethods, SQLiteVfs, SyncOptions, VfsAppData, VfsError, VfsErrorCode, VfsFile,
-    VfsResult, VfsStore,
+    AccessMode, FileKind, LockLevel, MemChunksFile, OpenAccess, OpenOptions, OpenedFile,
+    OsCallback, RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SyncOptions, VfsAppData, VfsError,
+    VfsErrorCode, VfsFile, VfsResult, VfsStore,
 };
 
 use alloc::boxed::Box;
@@ -278,10 +278,24 @@ pub enum MemVfsError {
     FileTooLarge,
     #[error(transparent)]
     Io(#[from] VfsError),
+    #[error(transparent)]
+    Transfer(TransferError),
+}
+
+impl From<TransferError> for MemVfsError {
+    fn from(error: TransferError) -> Self {
+        match error {
+            TransferError::ImportDb(error) => Self::ImportDb(error),
+            TransferError::FileTooLarge => Self::FileTooLarge,
+            TransferError::OutOfMemory => Self::Io(crate::no_memory()),
+            error => Self::Transfer(error),
+        }
+    }
 }
 
 /// MemVfs management tool. Keeps its data alive even if the VFS is uninstalled.
 /// After reinstallation, create a new tool to access the new VFS instance.
+/// Import [`DbTransfer`] for whole-image and chunked transfers.
 pub struct MemVfsUtil(MemAppData);
 
 impl MemVfsUtil {
@@ -298,80 +312,6 @@ impl MemVfsUtil {
         }
         check_owned(vfs)?;
         Ok(Self(VfsAppData::<MemAppData>::get(vfs).data.clone()))
-    }
-
-    fn import_db_unchecked_impl(
-        &self,
-        filename: &str,
-        bytes: &[u8],
-        page_size: usize,
-        clear_wal: bool,
-    ) -> MemVfsResult<()> {
-        validate_db_filename(filename)?;
-        check_db_and_page_size(bytes.len(), page_size)?;
-        if self.exists(filename) {
-            return Err(MemVfsError::AlreadyExists(filename.into()));
-        }
-
-        self.0.borrow_mut().insert(filename.into(), {
-            let mut file = MemChunksFile::new(page_size);
-            file.write(bytes, 0)?;
-            if clear_wal {
-                // Set the read/write format versions to rollback-journal mode.
-                // This does not checkpoint a WAL or recover missing pages.
-                file.write(&[1, 1], 18)?;
-            }
-            Rc::new(RefCell::new(file))
-        });
-
-        Ok(())
-    }
-
-    /// Imports a standalone image under a new, nonempty, NUL-free name
-    /// (at most 1012 UTF-8 bytes, reserving journal space).
-    /// Checks signature/page layout, not integrity; resets header flags to
-    /// rollback mode without recovering journals or merging a WAL.
-    /// Fails on invalid/occupied names, invalid layout or allocation failure.
-    /// For encrypted images use [`Self::import_db_unchecked`].
-    pub fn import_db(&self, filename: &str, bytes: &[u8]) -> MemVfsResult<()> {
-        let page_size = check_import_db(bytes)?;
-        self.import_db_unchecked_impl(filename, bytes, page_size, true)
-    }
-
-    /// Like [`Self::import_db`], but preserves the header for encrypted images.
-    /// Still validates the supplied `page_size` (bytes) and alignment.
-    /// Empty images are allowed; name and standalone-image rules still apply.
-    pub fn import_db_unchecked(
-        &self,
-        filename: &str,
-        bytes: &[u8],
-        page_size: usize,
-    ) -> MemVfsResult<()> {
-        self.import_db_unchecked_impl(filename, bytes, page_size, false)
-    }
-
-    /// Copies file bytes, excluding sidecars; not a transactional backup.
-    /// Finish transactions, checkpoint WAL and close connections first.
-    /// Fails if absent or unable to allocate a contiguous buffer
-    /// (at most `isize::MAX` bytes, less than 2 GiB on wasm32).
-    pub fn export_db(&self, filename: &str) -> MemVfsResult<Vec<u8>> {
-        let name2file = self.0.borrow();
-
-        if let Some(file) = name2file.get(filename) {
-            let mut file = file.borrow_mut();
-            let file_size = usize::try_from(file.size()?)
-                .ok()
-                .filter(|&size| size <= isize::MAX as usize)
-                .ok_or(MemVfsError::FileTooLarge)?;
-            let mut ret = Vec::new();
-            ret.try_reserve_exact(file_size)
-                .map_err(|_| crate::no_memory())?;
-            ret.resize(file_size, 0);
-            file.read(&mut ret, 0)?;
-            Ok(ret)
-        } else {
-            Err(MemVfsError::NotFound(filename.into()))
-        }
     }
 
     /// Deletes the named file, returning whether it existed.
@@ -399,6 +339,92 @@ impl MemVfsUtil {
     /// Returns the number of files, including auxiliary files.
     pub fn count(&self) -> usize {
         self.0.borrow().len()
+    }
+}
+
+/// Imports use 4 KiB memory chunks independently of SQLite's page size.
+/// New names must be nonempty, NUL-free and at most 1012 UTF-8 bytes.
+impl DbTransfer for MemVfsUtil {
+    type Error = MemVfsError;
+    type Target<'a> = MemImportTarget<'a>;
+    type Source<'a> = MemExportSource;
+
+    fn create_import(&self, name: &str, size: u64) -> MemVfsResult<Self::Target<'_>> {
+        validate_db_filename(name)?;
+        if self.exists(name) {
+            return Err(MemVfsError::AlreadyExists(name.into()));
+        }
+        usize::try_from(size).map_err(|_| {
+            VfsError::new(VfsErrorCode::Full, "file size exceeds address space".into())
+        })?;
+
+        Ok(MemImportTarget {
+            util: self,
+            filename: name.into(),
+            file: MemChunksFile::new(4096),
+        })
+    }
+
+    fn open_export(&self, name: &str) -> MemVfsResult<Self::Source<'_>> {
+        let file = self
+            .0
+            .borrow()
+            .get(name)
+            .cloned()
+            .ok_or_else(|| MemVfsError::NotFound(name.into()))?;
+        let size = file.borrow().size()?;
+        Ok(MemExportSource { file, size })
+    }
+}
+
+#[doc(hidden)]
+pub struct MemImportTarget<'a> {
+    util: &'a MemVfsUtil,
+    filename: String,
+    file: MemChunksFile,
+}
+
+impl ImportTarget for MemImportTarget<'_> {
+    type Error = MemVfsError;
+
+    fn write_at(&mut self, offset: u64, bytes: &[u8]) -> MemVfsResult<()> {
+        self.file.write(bytes, offset)?;
+        Ok(())
+    }
+
+    fn commit(self) -> MemVfsResult<()> {
+        let mut files = self.util.0.borrow_mut();
+        if files.contains_key(&self.filename) {
+            return Err(MemVfsError::AlreadyExists(self.filename));
+        }
+        files.insert(self.filename, Rc::new(RefCell::new(self.file)));
+        Ok(())
+    }
+
+    fn abort(self) -> MemVfsResult<()> {
+        Ok(())
+    }
+
+    fn abort_with_error(self, error: MemVfsError) -> MemVfsError {
+        error
+    }
+}
+
+#[doc(hidden)]
+pub struct MemExportSource {
+    file: Rc<RefCell<MemChunksFile>>,
+    size: u64,
+}
+
+impl ExportSource for MemExportSource {
+    type Error = MemVfsError;
+
+    fn size(&self) -> u64 {
+        self.size
+    }
+
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> MemVfsResult<usize> {
+        Ok(self.file.borrow_mut().read(buf, offset)?)
     }
 }
 

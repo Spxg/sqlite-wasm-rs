@@ -2,6 +2,7 @@ mod common;
 
 use common::Db;
 use sqlite_wasm_rs as ffi;
+use sqlite_wasm_rs::vfs::transfer::DbTransfer;
 use sqlite_wasm_vfs::sahpool::{install, OpfsSAHError, OpfsSAHPoolCfg, OpfsSAHPoolCfgBuilder};
 use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -322,8 +323,12 @@ async fn incomplete_chunked_imports_never_publish_or_leak_slots() {
         let mut import = pool
             .begin_import("invalid.db", header.len() as u64)
             .unwrap();
-        import.write(&header).unwrap();
-        assert!(matches!(import.finish(), Err(OpfsSAHError::ImportDb(_))));
+        import.write(&header[..17]).unwrap();
+        assert!(matches!(
+            import.write(&header[17..18]),
+            Err(OpfsSAHError::ImportDb(_))
+        ));
+        assert!(matches!(import.finish(), Err(OpfsSAHError::ImportFailed)));
     }
 
     assert!(pool.list().is_empty());
