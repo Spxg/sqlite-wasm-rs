@@ -38,7 +38,7 @@ typedef struct rust_sqlite_wasm_local_time {
  * be initialized. Fallible hooks return a status above and fully write their
  * outputs on success. Output contents are unspecified on failure.
  * Buffers must lie within one allocation, with exclusive access during the
- * call and len <= PTRDIFF_MAX (Rust isize::MAX on wasm32). The default adapter
+ * call and len <= PTRDIFF_MAX (Rust isize::MAX on wasm32). The wasm-bindgen adapter
  * rejects larger lengths or null buffers with nonzero lengths before accessing
  * memory: random returns 0, fill_entropy returns RUST_SQLITE_WASM_HOST_UNAVAILABLE.
  */

@@ -9,6 +9,7 @@ pub struct SystemErrorCode(core::num::NonZeroI32);
 
 impl SystemErrorCode {
     /// Wraps an OS error number. Zero means no system error and returns `None`.
+    ///
     /// Capture the number at the failing operation, before another call changes it.
     pub const fn from_raw(code: i32) -> Option<Self> {
         match core::num::NonZeroI32::new(code) {
@@ -23,7 +24,8 @@ impl SystemErrorCode {
 }
 
 /// A validated raw SQLite error code, obtained through [`VfsErrorCode::from_raw`].
-/// Its private field prevents bypassing validation when constructing `Other`.
+///
+/// Its private field prevents bypassing validation for [`VfsErrorCode::Other`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RawVfsErrorCode(i32);
 
@@ -108,6 +110,7 @@ impl VfsErrorCode {
     }
 
     /// Converts an error code, preserving extended bits. Prefer named variants.
+    ///
     /// Rejects negative values and unknown/non-error primary codes, including
     /// `SQLITE_OK`, `SQLITE_ROW` and `SQLITE_DONE`.
     ///

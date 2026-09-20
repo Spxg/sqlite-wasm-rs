@@ -1,9 +1,10 @@
-//! Reusable `VfsFile`/`VfsStore` checks, also available with `no_std` + `alloc`.
+//! Reusable [`VfsFile`]/[`VfsStore`] checks, available with `no_std` + `alloc`.
+//!
 //! File checks overwrite inputs. Store checks require an isolated writable
 //! namespace with room for two files and reserve `___test_vfs_store*` names.
 //! Cleanup is best-effort on failure/unwinding; backend panics are not caught.
 //!
-//! Contract failures return `VfsErrorCode::Io`; backend errors retain their codes.
+//! Contract failures return [`VfsErrorCode::Io`]; backend errors retain their codes.
 //! Both include case/operation context. These do not verify durability, locking
 //! or crash recovery.
 

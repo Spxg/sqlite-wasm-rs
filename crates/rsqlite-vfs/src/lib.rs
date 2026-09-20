@@ -46,6 +46,7 @@ unsafe fn write_message(out: *mut core::ffi::c_char, capacity: i32, message: &st
 }
 
 /// Chunked temporary storage, limited by address space and available memory.
+///
 /// Truncation only shrinks. Sync and locks are no-ops: no persistence or
 /// coordination between connections.
 pub struct MemChunksFile {
@@ -68,9 +69,10 @@ impl MemChunksFile {
         Ok(bytes.into_boxed_slice())
     }
 
-    /// Creates a new `MemChunksFile` with a specified chunk size.
+    /// Creates an empty file with the given chunk size in bytes.
     ///
     /// # Panics
+    ///
     /// Panics if `chunk_size` is zero.
     pub fn new(chunk_size: usize) -> Self {
         assert!(chunk_size != 0, "chunk size can't be zero");
@@ -251,12 +253,12 @@ pub struct SQLiteVfsFile {
     vfs: *mut sqlite3_vfs,
     /// Original validated open request.
     options: OpenOptions,
-    /// SQLite-owned filename, valid until xClose. Null for anonymous files.
+    /// SQLite-owned filename, valid until `xClose`. Null for anonymous files.
     name_ptr: *const u8,
     /// Filename length in bytes.
     name_length: usize,
-    /// An owned box of the selected `VfsStore::File` type, initialized by
-    /// xOpen and consumed by xClose. Must not be accessed after close.
+    /// An owned box of the selected [`VfsStore::File`] type, initialized by
+    /// `xOpen` and consumed by `xClose`. Must not be accessed after close.
     handle_ptr: *mut core::ffi::c_void,
 }
 
@@ -277,7 +279,7 @@ impl SQLiteVfsFile {
         self.options
     }
 
-    /// Get the file name.
+    /// Returns the filename, or `None` for an anonymous file.
     ///
     /// # Safety
     ///
@@ -305,6 +307,7 @@ impl SQLiteVfsFile {
     /// Borrows the backend handle for a custom I/O callback.
     ///
     /// # Safety
+    ///
     /// `F` must be the exact file type used to open this live SQLite file.
     /// The handle must be valid and not mutably borrowed for this borrow.
     ///
@@ -321,6 +324,7 @@ impl SQLiteVfsFile {
     /// Mutably borrows the backend handle for a custom I/O callback.
     ///
     /// # Safety
+    ///
     /// `F` must be the exact file type used to open this live SQLite file.
     /// The handle must be valid and exclusively accessible for this borrow.
     ///
@@ -335,6 +339,7 @@ impl SQLiteVfsFile {
     }
 
     /// Returns a pointer to the SQLite file header from an exclusive borrow.
+    ///
     /// The pointer must not be used after this file is moved or freed, or while
     /// conflicting references exist.
     pub fn sqlite3_file(&mut self) -> *mut sqlite3_file {
@@ -343,6 +348,7 @@ impl SQLiteVfsFile {
 }
 
 /// Errors from VFS lookup, registration or unregistration.
+///
 /// Match variants rather than the human-readable display text.
 #[derive(thiserror::Error, Debug)]
 pub enum RegisterVfsError {
@@ -361,6 +367,7 @@ pub enum RegisterVfsError {
 /// Looks up a VFS without retaining it. May initialize SQLite.
 ///
 /// # Safety
+///
 /// Obey the linked SQLite library's global initialization and threading rules.
 /// In single-thread mode, serialize this call with all other SQLite use.
 /// Coordinate with VFS owners to prevent freeing a registration during lookup
@@ -371,7 +378,9 @@ pub unsafe fn registered_vfs(vfs_name: &str) -> Result<Option<*mut sqlite3_vfs>,
     Ok((!vfs.is_null()).then_some(vfs))
 }
 
-/// Owns a VFS registration. Drop leaves it and its data alive for SQLite.
+/// Owns a VFS registration.
+///
+/// Dropping this handle leaves the VFS and its data alive for SQLite.
 /// Keep the handle for explicit [`Self::unregister`], or use [`Self::into_raw`]
 /// for process-lifetime registration.
 #[must_use = "keep the registration for explicit cleanup, or call into_raw for permanent registration"]
@@ -412,22 +421,28 @@ impl<T> core::fmt::Debug for VfsRegistration<T> {
 
 impl<T> VfsRegistration<T> {
     /// Returns the SQLite pointer without transferring allocation ownership.
-    /// It must not be freed separately or used after successful `unregister`.
+    ///
+    /// It must not be freed separately or used after successful [`Self::unregister`].
     pub fn as_ptr(&self) -> *mut sqlite3_vfs {
         self.allocations.vfs
     }
 
-    /// Gives up managed cleanup and retains all allocations. The returned
-    /// pointer remains valid for the process lifetime unless manually freed.
+    /// Gives up managed cleanup and retains all allocations.
+    ///
+    /// The pointer remains valid for the process lifetime unless manually freed.
     /// Calling SQLite's raw unregister function alone will not free it.
     pub fn into_raw(self) -> *mut sqlite3_vfs {
         self.allocations.vfs
     }
 
-    /// Unregisters and frees the VFS, name and data. Failure returns the intact
-    /// handle and error for retry.
+    /// Unregisters and frees the VFS, name and data.
+    ///
+    /// # Errors
+    ///
+    /// On failure, returns the intact handle and error for retry.
     ///
     /// # Safety
+    ///
     /// Close all connections/files and retire callbacks, saved pointers and
     /// delegating wrappers. Serialize with VFS lookup, registration and use;
     /// obey SQLite initialization and backend threading rules. Owned allocations
@@ -449,6 +464,7 @@ impl<T> VfsRegistration<T> {
 }
 
 /// Registers a VFS, rejecting empty or occupied names.
+///
 /// The returned handle requires explicit cleanup; drop does not unregister it.
 ///
 /// # Safety
@@ -495,7 +511,8 @@ pub unsafe fn register_vfs<IO: SQLiteIoMethods, V: SQLiteVfs<IO>>(
     })
 }
 
-/// A container for VFS-specific errors, holding both an error code and a descriptive message.
+/// A SQLite error code with a backend diagnostic and optional OS error.
+///
 /// Use [`Self::code`] for error handling; messages are human-readable diagnostics,
 /// not a stable format for programmatic matching.
 #[derive(thiserror::Error, Debug, Clone)]
@@ -507,6 +524,7 @@ pub struct VfsError {
 }
 
 impl VfsError {
+    /// Creates an error without an OS error number.
     pub fn new(code: VfsErrorCode, message: Cow<'static, str>) -> Self {
         VfsError {
             code,
@@ -531,7 +549,7 @@ impl VfsError {
         self.code
     }
 
-    /// Explicit SQLite interoperability, preserving extended error codes.
+    /// Returns the raw SQLite result code, preserving extended error codes.
     pub fn raw_code(&self) -> i32 {
         self.code.as_raw()
     }
@@ -552,10 +570,14 @@ fn no_memory() -> VfsError {
     )
 }
 
-/// The handle and access mode actually obtained by the backend. A read-write
-/// request may fall back to read-only; SQLite must be told through `pOutFlags`.
+/// The handle and access mode actually obtained by the backend.
+///
+/// A read-write request may fall back to read-only; the default `xOpen` reports
+/// the actual access to SQLite through `pOutFlags`.
 pub struct OpenedFile<F> {
+    /// The newly opened backend handle.
     pub file: F,
+    /// The handle's actual access mode, which may differ from the request.
     pub access: OpenAccess,
 }
 
@@ -567,9 +589,11 @@ pub struct VfsAppData<T> {
 
 impl<T> VfsAppData<T> {
     /// Borrows app data without borrowing the SQLite-owned VFS structure.
+    ///
     /// SQLite may independently mutate the registry's `pNext` field.
     ///
     /// # Safety
+    ///
     /// `vfs` must be valid and aligned, with `pAppData` unchanged during this
     /// call. It must point to an aligned `VfsAppData<T>` of exactly this type,
     /// live for the caller-chosen `'a`. Obey Rust shared-reference rules and
@@ -578,6 +602,7 @@ impl<T> VfsAppData<T> {
         &*core::ptr::addr_of!((*vfs).pAppData).read().cast()
     }
 
+    /// Wraps backend data without adding synchronization.
     pub fn new(t: T) -> Self {
         VfsAppData { data: t }
     }
@@ -615,11 +640,13 @@ impl<T> Deref for VfsAppData<T> {
 }
 
 /// I/O on an independently opened handle; underlying file data may be shared.
+///
 /// Offsets/sizes are byte counts independent of pointer width. Reject values
 /// beyond backend limits rather than truncating them; buffers remain address-space limited.
 pub trait VfsFile {
-    /// Optional preallocation hint, never a request to shrink the file.
-    /// Return true when handled, false when unsupported. This is only an
+    /// Handles an optional preallocation hint, never shrinking the file.
+    ///
+    /// Return `true` when handled, `false` when unsupported. This is only an
     /// optimization; do not assume SQLite always sends it before writing.
     fn size_hint(&mut self, _size: u64) -> VfsResult<bool> {
         Ok(false)
@@ -630,7 +657,7 @@ pub trait VfsFile {
         SectorSize::DEFAULT
     }
 
-    /// Only advertise guarantees actually provided by this file's storage.
+    /// Returns guarantees actually provided by this file's storage.
     fn device_characteristics(&self) -> DeviceCharacteristics {
         DeviceCharacteristics::NONE
     }
@@ -639,7 +666,7 @@ pub trait VfsFile {
     ///
     /// Fill as much as available; return zero at/beyond EOF or for an empty buffer.
     /// Short reads mean EOF and are not retried. Return `Ok(count)`, never
-    /// `IoShortRead`: `xRead` needs the count to zero-fill the unread tail and
+    /// [`VfsErrorCode::IoShortRead`]: `xRead` needs the count to zero-fill the unread tail and
     /// report `SQLITE_IOERR_SHORT_READ`.
     fn read(&mut self, buf: &mut [u8], offset: u64) -> VfsResult<usize>;
 
@@ -652,28 +679,34 @@ pub trait VfsFile {
     fn truncate(&mut self, size: u64) -> VfsResult<()>;
 
     /// Synchronizes prior writes according to SQLite's requested semantics.
-    /// `Full` is not `PRAGMA synchronous=FULL`; see `SyncMode`.
+    ///
+    /// [`SyncMode::Full`] is not `PRAGMA synchronous=FULL`.
     fn sync(&mut self, options: SyncOptions) -> VfsResult<()>;
 
     /// Returns the logical file length in bytes, not its allocated storage size.
     fn size(&self) -> VfsResult<u64>;
 
-    /// Upgrades to `level`, leaving an already higher lock unchanged. Return
-    /// `Busy` for contention; failed upgrades may retain a PENDING lock.
-    /// SQLite never requests `None` here.
+    /// Upgrades to `level`, leaving an already higher lock unchanged.
+    ///
+    /// Return [`VfsErrorCode::Busy`] for contention; failed upgrades may retain
+    /// [`LockLevel::Pending`]. SQLite never requests [`LockLevel::None`] here.
     fn lock(&mut self, level: LockLevel) -> VfsResult<()>;
 
-    /// Downgrades to Shared or None, leaving an already lower lock unchanged.
+    /// Downgrades to [`LockLevel::Shared`] or [`LockLevel::None`], leaving an
+    /// already lower lock unchanged.
     fn unlock(&mut self, level: LockLevel) -> VfsResult<()>;
 
-    /// Whether any connection (including this one) holds Reserved, Pending, or
-    /// Exclusive on this file. This must include other processes where relevant.
+    /// Returns whether any connection holds a reserved or stronger lock.
+    ///
+    /// Include this connection and, where relevant, other processes.
     fn check_reserved_lock(&self) -> VfsResult<bool>;
 }
 
 /// Synchronous management of the backend's current named files.
+///
 /// Includes journal/WAL files, but excludes anonymous files and unused slots.
 pub trait VfsFilesManager {
+    /// Backend file-management error.
     type Error;
 
     /// Removes only this file, returning whether it existed. Close its database
@@ -693,16 +726,19 @@ pub trait VfsFilesManager {
     /// Returns the number of named files without allocating a list.
     fn len(&self) -> usize;
 
+    /// Returns whether the current view contains no named files.
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }
 
-/// Opens backend handles and manages the file namespace. I/O uses the returned
-/// handle directly, without looking up its filename again.
+/// Opens backend handles and manages the file namespace.
+///
+/// I/O uses the returned handle directly, without looking up its filename again.
 pub trait VfsStore {
-    /// Backend handle retained from xOpen until xClose.
+    /// Backend handle retained from `xOpen` until `xClose`.
     type File: VfsFile + 'static;
+    /// Per-VFS data shared by callbacks; synchronization is backend-specific.
     type AppData: 'static;
 
     /// Records optional diagnostics for `xGetLastError`. Concurrent backends must
@@ -711,15 +747,19 @@ pub trait VfsStore {
     /// callback result codes are still returned to SQLite unchanged.
     fn record_error(_data: &Self::AppData, _error: VfsError) {}
 
-    /// Returns the calling thread's snapshot without consuming it. Override with `record_error`
-    /// to support `xGetLastError`; the default reports no additional diagnostic.
+    /// Returns the calling thread's last diagnostic without consuming it.
+    ///
+    /// Override together with [`Self::record_error`] to support `xGetLastError`;
+    /// the default reports no additional diagnostic.
     fn last_error(_data: &Self::AppData) -> Option<VfsError> {
         None
     }
 
-    /// Returns a fresh handle for each `xOpen`. Create only with CREATE;
-    /// CREATE | EXCLUSIVE must reject existing files. Report actual access in
-    /// `OpenedFile`; read-only fallback is allowed, read-write upgrades are not.
+    /// Returns a fresh handle for each `xOpen`.
+    ///
+    /// Create only with `CREATE`; `CREATE | EXCLUSIVE` must reject existing files.
+    /// Report actual access in [`OpenedFile`]; read-only fallback is allowed,
+    /// read-write upgrades are not.
     /// Keep the resource alive until close, regardless of namespace changes.
     /// Clean up failed opens here: no close follows.
     fn open_file(
@@ -727,10 +767,12 @@ pub trait VfsStore {
         request: OpenRequest<'_>,
     ) -> VfsResult<OpenedFile<Self::File>>;
 
-    /// Closes the handle even on error. DELETEONCLOSE must remove the opened
-    /// resource, not a same-name replacement; unlinking at open is allowed.
+    /// Closes the handle even on error.
+    ///
+    /// `DELETEONCLOSE` must remove the opened resource, not a same-name replacement;
+    /// unlinking at open is allowed.
     /// `name` is absent for anonymous opens; `options` is the original request,
-    /// not the actual access reported by `OpenedFile`.
+    /// not the actual access reported by [`OpenedFile`].
     fn close_file(
         data: &Self::AppData,
         name: Option<&str>,
@@ -766,10 +808,12 @@ pub trait OsCallback {
     fn epoch_timestamp_in_ms(&self) -> VfsResult<i64>;
 }
 
-/// SQLite VFS callbacks, delegating to typed `VfsStore` methods by default.
+/// SQLite VFS callbacks, delegating to typed [`VfsStore`] methods by default.
+///
 /// See the [SQLite VFS contract](https://www.sqlite.org/c3ref/vfs.html).
 ///
 /// # Raw callback safety
+///
 /// Callers must satisfy the SQLite contract for each callback: pointers must
 /// have the required lifetime, alignment and readable/writable extent. The VFS
 /// must carry the matching store's app data, and `xOpen` needs storage for
@@ -1124,11 +1168,13 @@ pub trait SQLiteVfs<IO: SQLiteIoMethods> {
     }
 }
 
-/// SQLite I/O callbacks, delegating to `VfsFile` by default.
+/// SQLite I/O callbacks, delegating to [`VfsFile`] by default.
+///
 /// The backend supplies locking/sync; WAL requires shared-memory overrides.
 /// See the [SQLite I/O contract](https://www.sqlite.org/c3ref/io_methods.html).
 ///
 /// # Raw callback safety
+///
 /// File pointers must refer to a live [`SQLiteVfsFile`] initialized by a
 /// successful matching `xOpen`, with its VFS and backend data still alive.
 /// Call `xClose` only once. Buffers and other pointers must satisfy the SQLite
@@ -1449,8 +1495,7 @@ pub trait SQLiteIoMethods {
         }
     }
 
-    /// Uses SQLite's usual fallback sector size. Override when the backend's
-    /// minimum write unit that can disturb neighboring bytes differs.
+    /// Reports [`VfsFile::sector_size`], defaulting to [`SectorSize::DEFAULT`].
     unsafe extern "C" fn xSectorSize(pFile: *mut sqlite3_file) -> ::core::ffi::c_int {
         (&*SQLiteVfsFile::from_file(pFile))
             .handle::<<Self::Store as VfsStore>::File>()

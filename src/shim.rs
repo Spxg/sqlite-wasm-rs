@@ -1,4 +1,4 @@
-//! This module fills in the external functions needed to link to `sqlite.o`
+//! C runtime hooks used by the bundled SQLite library.
 
 use crate::{host, WasmOsCallback};
 use core::alloc::Layout;
@@ -11,7 +11,7 @@ type c_size_t = usize;
 #[allow(non_camel_case_types)]
 type c_time_t = c_longlong;
 
-/// https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/musl/include/time.h#L40
+/// Matches [Emscripten's `struct tm`](https://github.com/emscripten-core/emscripten/blob/df69e2ccc287beab6f580f33b33e6b5692f5d20b/system/lib/libc/musl/include/time.h#L40).
 #[repr(C)]
 pub struct tm {
     pub tm_sec: c_int,
@@ -27,12 +27,15 @@ pub struct tm {
     pub tm_zone: *mut c_char,
 }
 
-/// Internal SQLite3MC entropy hook: returns 0 on success and -1 on failure.
+/// Supplies secure entropy to SQLite3MC, returning `0` on success or `-1` on failure.
+///
 /// Uses the host's secure entropy hook, without a weak fallback or errno reporting.
 ///
 /// # Safety
-/// For a nonzero length, `buf` must be writable for `buf_len` bytes in a single
-/// allocation, with `buf_len <= isize::MAX`. Its contents may be uninitialized.
+///
+/// For a nonzero length, `buf` must be exclusively writable for `buf_len` bytes
+/// in one allocation, with `buf_len <= isize::MAX`. Contents may be uninitialized.
+/// A null pointer is allowed only when `buf_len` is zero.
 #[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_getentropy(buf: *mut u8, buf_len: c_size_t) -> c_int {
     if buf_len == 0 {
@@ -47,6 +50,11 @@ pub unsafe extern "C" fn rust_sqlite_wasm_getentropy(buf: *mut u8, buf_len: c_si
     }
 }
 
+/// Reports a C assertion failure by panicking; cannot unwind through the C ABI.
+///
+/// # Safety
+///
+/// `expr`, `file` and `func` must point to readable, NUL-terminated strings.
 #[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_assert_fail(
     expr: *const c_char,
@@ -66,6 +74,13 @@ pub unsafe extern "C" fn rust_sqlite_wasm_abort() {
 }
 
 /// Converts host calendar fields to the C ABI. A failed conversion returns null.
+///
+/// The result uses static storage, overwritten by the next successful call.
+///
+/// # Safety
+///
+/// `t` must be aligned and readable. Serialize calls and accesses to the returned
+/// storage, and never free the returned pointer.
 #[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_localtime(t: *const c_time_t) -> *mut tm {
     // Single shared buffer, matches libc behavior; assumes no concurrent callers.
@@ -115,6 +130,7 @@ pub unsafe extern "C" fn rust_sqlite_wasm_localtime(t: *const c_time_t) -> *mut 
     ptr::addr_of_mut!(TM)
 }
 
+// Match dlmalloc's two-word alignment:
 // https://github.com/alexcrichton/dlmalloc-rs/blob/fb116603713825b43b113cc734bb7d663cb64be9/src/dlmalloc.rs#L141
 const ALIGN: usize = core::mem::size_of::<usize>() * 2;
 
@@ -139,13 +155,18 @@ pub unsafe extern "C" fn rust_sqlite_wasm_malloc(size: c_size_t) -> *mut c_void 
     ptr.add(ALIGN).cast()
 }
 
+/// Frees an allocation from this shim; a null pointer is a no-op.
+///
+/// # Safety
+///
+/// A non-null `ptr` must be a live allocation returned by this shim's allocation
+/// functions. No references or other accesses to the allocation may remain.
 #[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_free(ptr: *mut c_void) {
     if ptr.is_null() {
         return;
     }
 
-    // Only accepts pointers allocated by rust_sqlite_wasm_malloc/realloc.
     let ptr: *mut u8 = ptr.sub(ALIGN).cast();
     let size = *(ptr.cast::<usize>());
 
@@ -154,6 +175,12 @@ pub unsafe extern "C" fn rust_sqlite_wasm_free(ptr: *mut c_void) {
     alloc::alloc::dealloc(ptr, layout);
 }
 
+/// Resizes an allocation, leaving it intact on failure. Null acts as `malloc`.
+///
+/// # Safety
+///
+/// A non-null `ptr` must be a live allocation returned by this shim's allocation
+/// functions. No references or other accesses to the allocation may remain.
 #[no_mangle]
 pub unsafe extern "C" fn rust_sqlite_wasm_realloc(
     ptr: *mut c_void,
@@ -167,7 +194,6 @@ pub unsafe extern "C" fn rust_sqlite_wasm_realloc(
         return ptr::null_mut();
     };
 
-    // Only accepts pointers allocated by rust_sqlite_wasm_malloc/realloc.
     let ptr: *mut u8 = ptr.sub(ALIGN).cast();
     let size = *(ptr.cast::<usize>());
 
@@ -197,6 +223,10 @@ pub unsafe extern "C" fn rust_sqlite_wasm_calloc(num: c_size_t, size: c_size_t) 
 }
 
 /// Installs the default memory VFS during SQLite initialization.
+///
+/// # Safety
+///
+/// Must satisfy [`rsqlite_vfs::memvfs::install`]'s threading and ownership contract.
 #[no_mangle]
 pub unsafe extern "C" fn sqlite3_os_init() -> core::ffi::c_int {
     match rsqlite_vfs::memvfs::install(WasmOsCallback, true) {
@@ -206,6 +236,10 @@ pub unsafe extern "C" fn sqlite3_os_init() -> core::ffi::c_int {
 }
 
 /// Reclaims the memory VFS during SQLite shutdown.
+///
+/// # Safety
+///
+/// Must satisfy [`rsqlite_vfs::memvfs::uninstall`]'s cleanup and threading contract.
 #[no_mangle]
 pub unsafe extern "C" fn sqlite3_os_end() -> core::ffi::c_int {
     match rsqlite_vfs::memvfs::uninstall() {

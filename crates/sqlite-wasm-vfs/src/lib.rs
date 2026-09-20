@@ -1,4 +1,6 @@
 //! SQLite VFS implementations for `wasm32-unknown-unknown`.
+//!
+//! Enable the `sahpool` feature for the OPFS sync access handle pool VFS.
 
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]

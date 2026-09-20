@@ -3,6 +3,7 @@ use core::ffi::{c_char, CStr};
 use crate::{ffi, OpenOptions};
 
 /// Borrowed filename with URI metadata only when supplied by SQLite.
+///
 /// Default `xOpen` exposes metadata for main databases, journals and WAL files
 /// (journal/WAL lookup needs SQLite 3.31.0+). Copy values retained after the call.
 #[derive(Clone, Copy, Debug)]
@@ -31,11 +32,13 @@ impl<'a> VfsFilename<'a> {
         Self { path, sqlite }
     }
 
+    /// Returns the filename without URI metadata.
     pub const fn path(self) -> &'a str {
         self.path
     }
 
     /// Returns the parameter value supplied by SQLite, without assuming UTF-8.
+    ///
     /// This is not the original URI text. Returns `None` for a missing parameter
     /// or a plain path; a parameter without a value yields an empty C string.
     pub fn parameter(self, key: &CStr) -> Option<&'a CStr> {
@@ -46,19 +49,19 @@ impl<'a> VfsFilename<'a> {
         }
     }
 
-    /// Uses SQLite's boolean conversion. Missing or unrecognized values, and
-    /// plain paths without URI metadata, return `default`.
-    /// See <https://www.sqlite.org/c3ref/uri_boolean.html> for accepted values.
+    /// Reads a parameter using [SQLite's boolean conversion](https://www.sqlite.org/c3ref/uri_boolean.html).
+    ///
+    /// Missing or unrecognized values, and plain paths, return `default`.
     pub fn boolean(self, key: &CStr, default: bool) -> bool {
         self.sqlite.map_or(default, |filename| unsafe {
             ffi::sqlite3_uri_boolean(filename, key.as_ptr(), i32::from(default)) != 0
         })
     }
 
-    /// Uses SQLite's signed 64-bit integer conversion. Missing parameters and
-    /// plain paths return `default`; non-integer values follow SQLite's parsing
-    /// rules, not Rust's `str::parse`.
-    /// See <https://www.sqlite.org/c3ref/uri_boolean.html>.
+    /// Reads a parameter using [SQLite's integer conversion](https://www.sqlite.org/c3ref/uri_boolean.html).
+    ///
+    /// Missing parameters and plain paths return `default`. Parsing follows
+    /// SQLite's rules, not Rust's [`str::parse`].
     pub fn integer(self, key: &CStr, default: i64) -> i64 {
         self.sqlite.map_or(default, |filename| unsafe {
             ffi::sqlite3_uri_int64(filename, key.as_ptr(), default)
@@ -66,11 +69,14 @@ impl<'a> VfsFilename<'a> {
     }
 }
 
-/// A named open or an anonymous temporary-file request. A temporary request
-/// has no filename; the backend chooses how to create and remove its resource.
+/// A named open or an anonymous temporary-file request.
+///
+/// For anonymous files, the backend chooses how to create and remove the resource.
 #[derive(Clone, Copy, Debug)]
 pub struct OpenRequest<'a> {
+    /// Filename and optional URI metadata; `None` for an anonymous temporary file.
     pub filename: Option<VfsFilename<'a>>,
+    /// Requested access, file kind and creation flags.
     pub options: OpenOptions,
 }
 

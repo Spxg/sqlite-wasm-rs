@@ -6,7 +6,9 @@
 //! per database at a time: repeated opens share storage but do not coordinate
 //! locks between connections. Shared-memory WAL is not supported.
 //!
-//! ```rust
+//! # Examples
+//!
+//! ```no_run
 //! use sqlite_wasm_rs as ffi;
 //! use sqlite_wasm_vfs::sahpool::{install, OpfsSAHPoolCfg};
 //!
@@ -1290,13 +1292,16 @@ impl OpfsSAHPoolCfgBuilder {
         Self(OpfsSAHPoolCfg::default())
     }
 
-    /// Nonempty, NUL-free SQLite VFS name. Defaults to `opfs-sahpool`.
+    /// Sets the SQLite VFS name; defaults to `opfs-sahpool`.
+    ///
+    /// Must be nonempty and NUL-free.
     pub fn vfs_name(mut self, name: &str) -> Self {
         self.0.vfs_name = name.into();
         self
     }
 
-    /// OPFS-root-relative directory; defaults to `.opfs-sahpool`.
+    /// Sets the OPFS-root-relative directory; defaults to `.opfs-sahpool`.
+    ///
     /// Empty slash-separated components are ignored; NUL, `.`, `..` and
     /// entirely empty paths are rejected.
     pub fn directory(mut self, directory: &str) -> Self {
@@ -1305,13 +1310,15 @@ impl OpfsSAHPoolCfgBuilder {
     }
 
     /// Clears existing files after acquiring every slot on first install.
+    ///
     /// Destructive and not atomic; ignored when reusing a pool. Defaults to `false`.
     pub fn clear_on_init(mut self, set: bool) -> Self {
         self.0.clear_on_init = set;
         self
     }
 
-    /// Minimum initial slot count, including journals. Defaults to six.
+    /// Sets the minimum initial slot count, including journals; defaults to six.
+    ///
     /// Does not shrink an existing larger pool.
     pub fn initial_capacity(mut self, cap: usize) -> Self {
         self.0.initial_capacity = cap;
@@ -1331,6 +1338,7 @@ impl Default for OpfsSAHPoolCfgBuilder {
 }
 
 /// Pool configuration, created with [`OpfsSAHPoolCfgBuilder`] or [`Self::default`].
+///
 /// Validated by [`install`].
 pub struct OpfsSAHPoolCfg {
     vfs_name: String,
@@ -1392,7 +1400,7 @@ pub enum OpfsSAHError {
     #[error("pool has been uninstalled")]
     Uninstalled,
     /// An interrupted namespace update requires reconciliation, not necessarily
-    /// SQLite transaction recovery. `clear` discards all database contents.
+    /// SQLite transaction recovery. [`VfsFilesManager::clear`] discards all contents.
     #[error("pool namespace needs recovery; close databases, then pause/resume or call clear to discard all data")]
     NeedsRecovery,
     #[error("existing pool uses a different directory or OS callback type")]
@@ -1417,8 +1425,8 @@ pub enum OpfsSAHError {
         expected: usize,
         actual: f64,
     },
-    /// Sidecars prevent a standalone import/export. Their presence does not
-    /// prove a hot journal; retained PERSIST journals can also trigger this.
+    /// Journal/WAL files prevent a standalone transfer. Their presence does not
+    /// prove a hot journal; retained `PERSIST` journals can also trigger this.
     #[error("database has journal or WAL sidecars: {0:?}")]
     RecoveryRequired(String),
     #[error("file is too large to export into a contiguous memory buffer")]
@@ -1607,7 +1615,7 @@ impl ExportSource for OpfsSAHExportSource<'_> {
 
 /// Management handle for one pool, confined to its dedicated worker.
 ///
-/// Drop leaves the VFS installed. [`Self::pause`] releases OPFS locks;
+/// Dropping this handle leaves the VFS installed. [`Self::pause`] releases OPFS locks;
 /// [`Self::uninstall`] also frees registration and disables old handles.
 /// Import [`VfsFilesManager`] for file management and [`DbTransfer`] for transfers.
 #[derive(Clone)]
@@ -1615,9 +1623,11 @@ pub struct OpfsSAHPoolUtil {
     pool: Rc<OpfsSAHPool>,
 }
 
-/// Queries describe held files, returning an empty view while paused/uninstalled.
-/// Removal flushes the namespace and keeps slots for reuse. Clear requires an
-/// active, idle pool, but also permits namespace recovery.
+/// Queries return an empty view while paused or uninstalled.
+///
+/// Removal flushes the namespace and keeps slots for reuse. Clearing requires
+/// an active pool with no open files or management operations; it also permits
+/// discarding data when the namespace needs recovery.
 impl VfsFilesManager for OpfsSAHPoolUtil {
     type Error = OpfsSAHError;
 
@@ -1642,11 +1652,13 @@ impl VfsFilesManager for OpfsSAHPoolUtil {
     }
 }
 
-/// Transfers block pool management/new opens; keep existing connections idle.
-/// Export holds this guard through EOF until dropped. Dropped imports abort;
-/// cleanup failure quarantines the slot and requires pool recovery.
+/// Transfers block pool management and new opens; keep existing connections idle.
+///
+/// Exports retain this restriction until dropped, including at EOF. Dropping an
+/// import aborts it; cleanup failure quarantines the slot and requires recovery.
+///
 /// Imports require new names of at most 499 UTF-8 bytes and no same-name sidecars.
-/// Exports reject open files and nonempty journal/WAL files, including PERSIST
+/// Exports reject open files and nonempty journal/WAL files, including `PERSIST`
 /// journals: recover/checkpoint and close first, then remove retained journals.
 impl DbTransfer for OpfsSAHPoolUtil {
     type Error = OpfsSAHError;
@@ -1663,24 +1675,33 @@ impl DbTransfer for OpfsSAHPoolUtil {
 }
 
 impl OpfsSAHPoolUtil {
-    /// Number of currently held slots, including assigned and quarantined slots.
+    /// Returns the held slot count, including assigned and quarantined slots.
+    ///
     /// Returns zero while paused or after uninstall.
     pub fn capacity(&self) -> usize {
         self.pool.capacity()
     }
 
-    /// Adds slots and returns the total capacity. Requires an active, idle pool.
+    /// Adds slots and returns the total capacity.
     ///
-    /// Failure/cancellation releases newly acquired handles; unused physical
-    /// files may remain and are rediscovered on the next resume.
+    /// Requires an active pool with no other management operation or transfer.
+    ///
+    /// # Errors and cancellation
+    ///
+    /// Failure or cancellation releases newly acquired handles. Unused physical
+    /// files may remain and are rediscovered by [`Self::resume`].
     pub async fn add_capacity(&self, n: usize) -> Result<usize> {
         self.pool.add_capacity(n).await
     }
 
     /// Removes up to `n` unused slots and returns the number removed.
     ///
-    /// Assigned files are retained. Failure/cancellation may partially reduce
-    /// capacity; an undeleted closed slot is rediscovered on the next resume.
+    /// Assigned files are retained.
+    ///
+    /// # Errors and cancellation
+    ///
+    /// Failure or cancellation may partially reduce capacity. An undeleted,
+    /// closed slot is rediscovered by [`Self::resume`].
     pub async fn reduce_capacity(&self, n: usize) -> Result<usize> {
         self.pool.reduce_capacity(n).await
     }
@@ -1690,35 +1711,45 @@ impl OpfsSAHPoolUtil {
         self.pool.ensure_capacity(min).await
     }
 
-    /// Unregisters and releases OPFS handles, retaining data and registration
-    /// memory for [`Self::resume`]. Close all databases first.
+    /// Unregisters the VFS and releases OPFS handles until [`Self::resume`].
+    ///
+    /// Retains data and registration memory. Close all databases first.
+    /// Does nothing if already paused.
+    ///
+    /// # Errors
+    ///
     /// Open files or active management cause failure without side effects.
-    /// Already paused is a no-op.
     pub fn pause(&self) -> Result<()> {
         self.pool.pause()
     }
 
-    /// Reacquires slots and restores registration/default status; active healthy
-    /// pools are unchanged. Acquisition failure/cancellation leaves the pool
-    /// paused for retry; pending acquisitions close unused handles in background.
+    /// Reacquires slots and restores registration and default-VFS status.
+    ///
+    /// Does nothing for an active, healthy pool.
     /// Reclaims abandoned temporary files and verified empty incomplete slots,
     /// but reports invalid persistent headers. Restores the namespace only;
     /// SQLite recovers transactions when opening a database.
+    ///
+    /// # Errors and cancellation
+    ///
+    /// Acquisition failure or cancellation leaves the pool paused for retry.
+    /// Pending acquisitions close unused handles in the background.
     pub async fn resume(&self) -> Result<()> {
         self.pool.resume().await
     }
 
-    /// Whether the pool is paused (not uninstalled).
+    /// Returns whether the pool is paused, but not uninstalled.
     pub fn is_paused(&self) -> bool {
         self.pool.state.get() == PoolState::Paused
     }
 
-    /// Whether this pool's SQLite registration has been permanently removed.
+    /// Returns whether this pool's SQLite registration has been permanently removed.
     pub fn is_uninstalled(&self) -> bool {
         self.pool.state.get() == PoolState::Removed
     }
 
     /// Unregisters and frees the VFS, releases handles, and permits reinstall.
+    ///
     /// Persistent files are not deleted. Already uninstalled is a no-op.
     ///
     /// # Safety
@@ -1758,6 +1789,7 @@ impl OpfsSAHPoolUtil {
 }
 
 /// Installs or reuses a pool, validating [`OpfsSAHPoolCfg`].
+///
 /// Reuse requires the same directory and callback type; it neither resumes a
 /// paused pool nor reapplies initial capacity/clearing. Each directory has one
 /// owner per worker; uninstall that owner before using a different VFS name.

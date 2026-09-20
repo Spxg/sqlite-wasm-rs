@@ -1,5 +1,6 @@
 //! Reusable transfers of closed, standalone database images, not online backups.
-//! Keep the database and its sidecars idle until the transfer is finished/dropped.
+//!
+//! Keep the database and its sidecar files idle until the transfer finishes or is dropped.
 
 use alloc::vec::Vec;
 
@@ -43,8 +44,11 @@ enum ImportMode {
     Unchecked,
 }
 
-/// An unpublished destination. Drop must reclaim it unless committed.
+/// An unpublished import destination.
+///
+/// Implementations must reclaim it on drop unless [`Self::commit`] succeeds.
 pub trait ImportTarget: Sized {
+    /// Backend error, including common transfer failures.
     type Error: From<TransferError>;
 
     /// Writes the entire buffer at a logical database offset, or returns an error.
@@ -61,10 +65,13 @@ pub trait ImportTarget: Sized {
 }
 
 /// A database image kept available until this handle is dropped.
+///
 /// The caller must not modify it during export; backends may enforce this.
 pub trait ExportSource {
+    /// Backend error, including common transfer failures.
     type Error: From<TransferError>;
 
+    /// Returns the image length in bytes, which must remain unchanged during export.
     fn size(&self) -> u64;
 
     /// Returns the bytes read, at most `buf.len()`. Zero means EOF.
@@ -73,13 +80,17 @@ pub trait ExportSource {
 }
 
 /// Optional import/export support, independent of SQLite's VFS callbacks.
+///
 /// Checkpoint/recover and close the database first; keep it idle during transfer.
 /// Only the main file is copied, without merging WAL or recovering journals.
 pub trait DbTransfer {
+    /// Backend error, including common transfer failures.
     type Error: From<TransferError>;
+    /// Reserved destination owned by an import.
     type Target<'a>: ImportTarget<Error = Self::Error>
     where
         Self: 'a;
+    /// Image retained for the duration of an export.
     type Source<'a>: ExportSource<Error = Self::Error>
     where
         Self: 'a;
@@ -91,6 +102,9 @@ pub trait DbTransfer {
     fn open_export(&self, name: &str) -> Result<Self::Source<'_>, Self::Error>;
 
     /// Starts a checked import of exactly `size` bytes.
+    ///
+    /// Header validation occurs during [`DbImport::write`]; [`DbImport::finish`]
+    /// checks completeness and resets the header's read/write versions to rollback mode.
     fn begin_import(
         &self,
         name: &str,
@@ -105,6 +119,8 @@ pub trait DbTransfer {
     }
 
     /// Starts a byte-preserving import of exactly `size` bytes.
+    ///
+    /// Skips header validation, including for encrypted images. Length checks still apply.
     fn begin_import_unchecked(
         &self,
         name: &str,
@@ -117,14 +133,17 @@ pub trait DbTransfer {
         ))
     }
 
-    /// Validates layout (not integrity), imports, and resets read/write versions
-    /// to rollback mode. Use `import_db_unchecked` for encrypted images.
+    /// Imports an image after validating its signature, size and page alignment.
+    ///
+    /// Resets header read/write versions to rollback mode; does not check integrity.
+    /// Use [`Self::import_db_unchecked`] for encrypted images.
     fn import_db(&self, name: &str, bytes: &[u8]) -> Result<(), Self::Error> {
         check_import_header(bytes, bytes.len() as u64).map_err(TransferError::from)?;
         import_bytes(self.begin_import(name, bytes.len() as u64)?, bytes)
     }
 
     /// Imports arbitrary bytes without interpreting or modifying the header.
+    ///
     /// Empty images are allowed; no page size/alignment checks are performed.
     fn import_db_unchecked(&self, name: &str, bytes: &[u8]) -> Result<(), Self::Error> {
         import_bytes(
@@ -133,12 +152,15 @@ pub trait DbTransfer {
         )
     }
 
+    /// Starts a sequential export, retaining the source until the export is dropped.
     fn begin_export(&self, name: &str) -> Result<DbExport<Self::Source<'_>>, Self::Error> {
         Ok(DbExport::new(self.open_export(name)?))
     }
 
-    /// Exports into one allocation, limited to `isize::MAX` bytes (below 2 GiB
-    /// on wasm32). Use `begin_export` for bounded memory usage.
+    /// Exports the whole image into one allocation.
+    ///
+    /// Limited to [`isize::MAX`] bytes (below 2 GiB on wasm32).
+    /// Use [`Self::begin_export`] for bounded memory usage.
     fn export_db(&self, name: &str) -> Result<Vec<u8>, Self::Error> {
         self.begin_export(name)?.read_to_vec()
     }
@@ -180,7 +202,7 @@ fn check_import_header(header: &[u8], size: u64) -> Result<(), ImportDbError> {
     Ok(())
 }
 
-/// Sequential import. Finish publishes; dropping the target aborts.
+/// A sequential import, published by [`Self::finish`] or aborted on drop.
 #[must_use = "write the database and finish, or drop to abort"]
 pub struct DbImport<T: ImportTarget> {
     target: T,
@@ -203,8 +225,14 @@ impl<T: ImportTarget> DbImport<T> {
         }
     }
 
-    /// Writes a complete chunk. Any error prevents subsequent writes/commit.
+    /// Writes a complete chunk at the current offset.
+    ///
     /// Checked imports validate as soon as the first 18 bytes are available.
+    ///
+    /// # Errors
+    ///
+    /// Fails on excess data, an invalid checked header or a backend write error.
+    /// Any error prevents further writes and committing the import.
     pub fn write(&mut self, bytes: &[u8]) -> Result<(), T::Error> {
         if self.failed {
             return Err(TransferError::ImportFailed.into());
@@ -243,6 +271,11 @@ impl<T: ImportTarget> DbImport<T> {
     }
 
     /// Checks completeness, resets checked headers to rollback mode, and commits.
+    ///
+    /// # Errors
+    ///
+    /// Fails if data is incomplete, a prior write failed, or the backend cannot
+    /// finish the import. The target is reclaimed; cleanup errors are preserved.
     pub fn finish(mut self) -> Result<(), T::Error> {
         let result = if self.failed {
             Err(TransferError::ImportFailed.into())
@@ -264,12 +297,13 @@ impl<T: ImportTarget> DbImport<T> {
         }
     }
 
+    /// Aborts the import, reporting any cleanup error.
     pub fn abort(self) -> Result<(), T::Error> {
         self.target.abort()
     }
 }
 
-/// Sequential export. Retains the source until dropped, including at EOF.
+/// A sequential export that retains its source until dropped, including at EOF.
 pub struct DbExport<S: ExportSource> {
     source: S,
     size: u64,
@@ -286,11 +320,18 @@ impl<S: ExportSource> DbExport<S> {
         }
     }
 
+    /// Returns the total image length in bytes, not the number of bytes remaining.
     pub fn size(&self) -> u64 {
         self.size
     }
 
-    /// Fills up to EOF. Returns zero for an empty buffer or at EOF.
+    /// Reads into `buf` up to EOF, returning the number of bytes read.
+    ///
+    /// Returns zero for an empty buffer or at EOF.
+    ///
+    /// # Errors
+    ///
+    /// Fails on backend errors or a short read before the advertised image length.
     /// On error the buffer may be partially filled; the cursor is unchanged.
     pub fn read(&mut self, buf: &mut [u8]) -> Result<usize, S::Error> {
         let length = (self.size - self.offset).min(buf.len() as u64) as usize;
@@ -313,6 +354,11 @@ impl<S: ExportSource> DbExport<S> {
     }
 
     /// Collects the remaining bytes into a contiguous allocation.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the remaining length exceeds [`isize::MAX`], allocation fails,
+    /// or [`Self::read`] fails.
     pub fn read_to_vec(mut self) -> Result<Vec<u8>, S::Error> {
         let size = usize::try_from(self.size - self.offset)
             .ok()

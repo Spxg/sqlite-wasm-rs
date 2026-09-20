@@ -1,4 +1,4 @@
-//! Default JavaScript host adapter.
+//! `wasm-bindgen` implementation of the C ABI host hooks.
 
 use super::{Error, LocalTime, Result, OK};
 use core::time::Duration;
@@ -6,6 +6,7 @@ use js_sys::{Date, Math, Number};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 
+/// Sleeps using atomic waits, or returns immediately when atomics are unavailable.
 #[export_name = "rust_sqlite_wasm_host_sleep"]
 pub extern "C" fn sleep(seconds: u64, nanoseconds: u32) {
     let duration = Duration::new(seconds, nanoseconds);
@@ -26,6 +27,11 @@ pub extern "C" fn sleep(seconds: u64, nanoseconds: u32) {
     let _ = duration;
 }
 
+/// Fills a buffer using Web Crypto, falling back to non-cryptographic randomness.
+///
+/// # Safety
+///
+/// `buf` and `len` must satisfy the buffer contract in [`crate::host`].
 #[export_name = "rust_sqlite_wasm_host_random"]
 pub unsafe extern "C" fn random(buf: *mut u8, len: usize) -> usize {
     let Ok(buf) = output_buffer(buf, len) else {
@@ -40,6 +46,11 @@ pub unsafe extern "C" fn random(buf: *mut u8, len: usize) -> usize {
     buf.len()
 }
 
+/// Writes UTC Unix milliseconds from JavaScript's clock.
+///
+/// # Safety
+///
+/// `out` must be aligned and exclusively writable for one `i64`.
 #[export_name = "rust_sqlite_wasm_host_epoch_timestamp_in_ms"]
 pub unsafe extern "C" fn epoch_timestamp_in_ms(out: *mut i64) -> i32 {
     let milliseconds = Date::new_0().get_time();
@@ -61,6 +72,11 @@ extern "C" {
     fn get_random_values(buf: &js_sys::Uint8Array) -> core::result::Result<(), JsValue>;
 }
 
+/// Fills a buffer using Web Crypto, without a weak randomness fallback.
+///
+/// # Safety
+///
+/// `buf` and `len` must satisfy the buffer contract in [`crate::host`].
 #[export_name = "rust_sqlite_wasm_host_fill_entropy"]
 pub unsafe extern "C" fn fill_entropy(buf: *mut u8, len: usize) -> i32 {
     match output_buffer(buf, len).and_then(fill_entropy_impl) {
@@ -69,8 +85,12 @@ pub unsafe extern "C" fn fill_entropy(buf: *mut u8, len: usize) -> i32 {
     }
 }
 
-// Caller provides one exclusively writable allocation; null is allowed at zero
-// length. Initialize C output storage before exposing it as a Rust slice.
+/// Initializes C output storage before exposing it as a Rust slice.
+///
+/// # Safety
+///
+/// For nonzero lengths, `buf` must point to one writable allocation, exclusively
+/// accessible for `'a`. Null is allowed only for zero length.
 unsafe fn output_buffer<'a>(buf: *mut u8, len: usize) -> Result<&'a mut [u8]> {
     if len == 0 {
         return Ok(&mut []);
@@ -100,7 +120,11 @@ fn fill_entropy_impl(buf: &mut [u8]) -> Result<()> {
     Ok(())
 }
 
-// Mirrors the existing Emscripten localtime handling, including DST logic.
+/// Converts Unix seconds to local time using Emscripten's DST detection approach.
+///
+/// # Safety
+///
+/// `out` must be aligned and exclusively writable for one [`LocalTime`].
 #[export_name = "rust_sqlite_wasm_host_localtime"]
 pub unsafe extern "C" fn localtime(unix_seconds: i64, out: *mut LocalTime) -> i32 {
     let date = Date::new(&Number::from(unix_seconds as f64 * 1000.0).into());

@@ -2,7 +2,7 @@
 //!
 //! The optional `wasm-bindgen` feature supplies all five hooks. For a custom host,
 //! leave it disabled throughout the dependency graph and implement the C ABI in
-//! [`sqlite-wasm-rs.h`](https://github.com/Spxg/sqlite-wasm-rs/blob/master/sqlite-wasm-rs.h).
+//! [`sqlite-wasm-rs.h`](https://github.com/Spxg/sqlite-wasm-rs/blob/master/examples/host-c/sqlite-wasm-rs.h).
 //! Define each symbol once: link a C/Rust adapter or provide `env` imports.
 //! See [host-c](https://github.com/Spxg/sqlite-wasm-rs/tree/master/examples/host-c)
 //! and [host-js](https://github.com/Spxg/sqlite-wasm-rs/tree/master/examples/host-js).
@@ -21,8 +21,9 @@
 //! uninitialized, must occupy one exclusively accessible allocation with
 //! `len <= isize::MAX`, and may be null only for zero length.
 //!
-//! `sleep` and `random` follow [`rsqlite_vfs::OsCallback`]; sleep's nanoseconds
-//! are less than 1,000,000,000. The clock returns UTC Unix milliseconds.
+//! `random` follows [`OsCallback::random`]. Sleep's nanoseconds are less than
+//! 1,000,000,000; the `wasm-bindgen` adapter cannot sleep without atomics.
+//! The clock returns UTC Unix milliseconds.
 //! `fill_entropy` must fill the buffer securely or fail, never fall back to
 //! weak randomness; SQLite3MC may abort on failure. `localtime` converts Unix
 //! seconds to local time or fails, without a UTC fallback.
@@ -37,15 +38,18 @@ mod wasm_bindgen;
 /// Successful completion of a fallible C ABI host hook.
 pub const OK: i32 = 0;
 
-/// A host capability is unsupported, unavailable, or returned an invalid time.
+/// Status codes returned by fallible host hooks.
 ///
 /// Return the discriminant as `i32` from a C ABI hook.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
 #[non_exhaustive]
 pub enum Error {
+    /// The host does not implement the requested capability.
     Unsupported = 1,
+    /// The host service is currently unavailable or failed.
     Unavailable = 2,
+    /// The host could not represent or convert the requested time.
     InvalidTime = 3,
 }
 
@@ -61,6 +65,7 @@ impl fmt::Display for Error {
 
 impl core::error::Error for Error {}
 
+/// A result from a fallible host service.
 pub type Result<T> = core::result::Result<T, Error>;
 
 /// C ABI local Gregorian calendar fields, matching `rust_sqlite_wasm_local_time`.
@@ -72,21 +77,21 @@ pub type Result<T> = core::result::Result<T, Error>;
 pub struct LocalTime {
     /// Full calendar year, not an offset from 1900.
     pub year: i32,
-    /// Month in 1..=12.
+    /// Month in `1..=12`.
     pub month: i32,
-    /// Day of the month in 1..=31, valid for the month and year.
+    /// Day of the month in `1..=31`, valid for the month and year.
     pub day: i32,
-    /// Hour in 0..=23.
+    /// Hour in `0..=23`.
     pub hour: i32,
-    /// Minute in 0..=59.
+    /// Minute in `0..=59`.
     pub minute: i32,
-    /// Second in 0..=60 (including a leap second).
+    /// Second in `0..=60` (including a leap second).
     pub second: i32,
-    /// Day of the week in 0..=6, with Sunday equal to zero.
+    /// Day of the week in `0..=6`, with Sunday equal to zero.
     pub weekday: i32,
-    /// Day of the year in 0..=365, with January 1 equal to zero.
+    /// Day of the year in `0..=365`, with January 1 equal to zero.
     pub yearday: i32,
-    /// Daylight saving time: 1 if active, 0 if inactive, -1 if unknown.
+    /// Daylight saving time: `1` if active, `0` if inactive, `-1` if unknown.
     pub is_dst: i32,
     /// Local time minus UTC, in seconds.
     pub utc_offset_seconds: i32,
@@ -130,7 +135,8 @@ pub(crate) fn localtime(unix_seconds: i64) -> Result<LocalTime> {
 
 /// VFS platform services supplied by the linked host adapter.
 ///
-/// Uses wasm-bindgen when enabled, otherwise application-defined hooks.
+/// Uses `wasm-bindgen` when enabled, otherwise application-defined hooks.
+/// Without atomics, the `wasm-bindgen` adapter's sleep is a no-op.
 /// Does not make SQLite or the default memory VFS thread-safe.
 #[derive(Default)]
 pub struct WasmOsCallback;

@@ -8,9 +8,11 @@ use crate::{ffi::*, VfsError, VfsErrorCode, VfsResult};
 pub struct SectorSize(i32);
 
 impl SectorSize {
+    /// SQLite's fallback sector size: 4096 bytes.
     pub const DEFAULT: Self = Self(4096);
 
     /// Validates only that `bytes` is positive and fits in a signed 32-bit integer.
+    ///
     /// The caller must supply the actual storage guarantee; no power-of-two or
     /// hardware-sector validation is performed.
     pub const fn new(bytes: u32) -> Option<Self> {
@@ -26,9 +28,10 @@ impl SectorSize {
     }
 }
 
-/// Guarantees of the underlying storage, not requested features. Advertising
-/// guarantees the backend cannot meet can cause database corruption.
-/// See <https://www.sqlite.org/c3ref/c_iocap_atomic.html>.
+/// Storage guarantees reported through SQLite's [`SQLITE_IOCAP_*` flags](https://www.sqlite.org/c3ref/c_iocap_atomic.html).
+///
+/// These are not requested features. Advertising unsupported guarantees can
+/// cause database corruption.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DeviceCharacteristics(i32);
 
@@ -69,7 +72,9 @@ impl core::ops::BitOr for DeviceCharacteristics {
 }
 
 /// SQLite database-file lock levels, ordered from least to most restrictive.
-/// `lock` upgrades; `unlock` downgrades. These are not OS-specific lock values.
+///
+/// [`crate::VfsFile::lock`] upgrades; [`crate::VfsFile::unlock`] downgrades.
+/// These are not OS-specific lock values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LockLevel {
     None,
@@ -120,8 +125,10 @@ pub enum SyncMode {
     Full,
 }
 
+/// Synchronization strength and metadata requirements for `xSync`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyncOptions {
+    /// Requested synchronization strength.
     pub mode: SyncMode,
     /// Data must be synchronized; inode metadata need not be. Synchronizing
     /// more than requested is permitted.
@@ -129,6 +136,7 @@ pub struct SyncOptions {
 }
 
 impl SyncOptions {
+    /// Parses SQLite sync flags, returning `None` for unknown flags or modes.
     pub const fn from_raw_flags(flags: i32) -> Option<Self> {
         let mode = match flags & 0x0f {
             SQLITE_SYNC_NORMAL => SyncMode::Normal,
@@ -145,6 +153,7 @@ impl SyncOptions {
     }
 }
 
+/// Read-only or read-write access, independent of creation flags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenAccess {
     ReadOnly,
@@ -188,8 +197,10 @@ const FILE_KIND_MASK: i32 = SQLITE_OPEN_MAIN_DB
     | SQLITE_OPEN_SUPER_JOURNAL
     | SQLITE_OPEN_WAL;
 
-/// Validated `xOpen` options. Unknown/platform-specific bits are retained for
-/// lossless interoperability, but normal backend code uses the typed getters.
+/// Validated options for SQLite's `xOpen` callback.
+///
+/// Unknown/platform-specific bits are retained for lossless interoperability.
+/// Backend code can use the typed getters.
 /// This is a VFS interface, not `sqlite3_open_v2`'s application-level flags API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpenOptions(i32);
@@ -204,6 +215,12 @@ impl OpenOptions {
         Self(access | kind.as_raw())
     }
 
+    /// Validates access, creation and file-kind flags, preserving unknown bits.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VfsErrorCode::CantOpen`] for conflicting access modes, multiple
+    /// file kinds, or creation flags that violate SQLite's requirements.
     pub fn from_raw_flags(flags: i32) -> VfsResult<Self> {
         let access = flags & (SQLITE_OPEN_READONLY | SQLITE_OPEN_READWRITE);
         if !matches!(access, SQLITE_OPEN_READONLY | SQLITE_OPEN_READWRITE)
@@ -220,7 +237,7 @@ impl OpenOptions {
         Ok(Self(flags))
     }
 
-    /// Explicit raw interoperability, including bits not interpreted here.
+    /// Returns the original flags, including bits not interpreted by this crate.
     pub const fn raw_flags(self) -> i32 {
         self.0
     }

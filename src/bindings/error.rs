@@ -2,67 +2,71 @@ use core::error;
 use core::ffi::c_int;
 use core::fmt;
 
-/// Error Codes
+/// Primary SQLite error categories.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ErrorCode {
-    /// Internal logic error in `SQLite`
+    /// Internal logic error in SQLite.
     InternalMalfunction,
-    /// Access permission denied
+    /// Access permission denied.
     PermissionDenied,
-    /// Callback routine requested an abort
+    /// Callback routine requested an abort.
     OperationAborted,
-    /// The database file is locked
+    /// The database file is locked.
     DatabaseBusy,
-    /// A table in the database is locked
+    /// A table in the database is locked.
     DatabaseLocked,
-    /// A `malloc()` failed
+    /// Memory allocation failed.
     OutOfMemory,
-    /// Attempt to write a readonly database
+    /// Attempt to write a read-only database.
     ReadOnly,
-    /// Operation terminated by `sqlite3_interrupt()`
+    /// Operation terminated by [`super::sqlite3_interrupt`].
     OperationInterrupted,
-    /// Some kind of disk I/O error occurred
+    /// A disk I/O error occurred.
     SystemIoFailure,
-    /// The database disk image is malformed
+    /// The database disk image is malformed.
     DatabaseCorrupt,
-    /// Unknown opcode in `sqlite3_file_control()`
+    /// Unknown operation in [`super::sqlite3_file_control`].
     NotFound,
-    /// Insertion failed because database is full
+    /// Insertion failed because the database is full.
     DiskFull,
-    /// Unable to open the database file
+    /// Unable to open the database file.
     CannotOpen,
-    /// Database lock protocol error
+    /// Database lock protocol error.
     FileLockingProtocolFailed,
-    /// The database schema changed
+    /// The database schema changed.
     SchemaChanged,
-    /// String or BLOB exceeds size limit
+    /// A string or BLOB exceeds the size limit.
     TooBig,
-    /// Abort due to constraint violation
+    /// Abort due to a constraint violation.
     ConstraintViolation,
-    /// Data type mismatch
+    /// Data type mismatch.
     TypeMismatch,
-    /// Library used incorrectly
+    /// Library used incorrectly.
     ApiMisuse,
-    /// Uses OS features not supported on host
+    /// Uses OS features not supported by the host.
     NoLargeFileSupport,
-    /// Authorization denied
+    /// Authorization denied.
     AuthorizationForStatementDenied,
-    /// 2nd parameter to `sqlite3_bind` out of range
+    /// Parameter index for a `sqlite3_bind_*` function is out of range.
     ParameterOutOfRange,
-    /// File opened that is not a database file
+    /// Opened file is not a database.
     NotADatabase,
-    /// SQL error or missing database
+    /// A generic SQL error or a code not mapped to another category.
     Unknown,
 }
 
+/// A SQLite result code and its primary error category.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Error {
+    /// Primary category, or [`ErrorCode::Unknown`] for unmapped codes.
     pub code: ErrorCode,
+    /// Original result code, including extended error bits.
     pub extended_code: c_int,
 }
 
 impl Error {
+    /// Wraps a result code without validating that it represents an error.
     #[must_use]
     pub fn new(result_code: c_int) -> Self {
         let code = match result_code & 0xff {
@@ -116,6 +120,7 @@ impl error::Error for Error {
     }
 }
 
+/// Returns SQLite's static description of a result code.
 #[must_use]
 pub fn code_to_str(code: c_int) -> &'static str {
     let err_str = unsafe { super::sqlite3_errstr(code) };

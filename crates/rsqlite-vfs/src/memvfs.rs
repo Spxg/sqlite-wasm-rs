@@ -293,8 +293,9 @@ impl From<TransferError> for MemVfsError {
     }
 }
 
-/// MemVfs management tool. Keeps its data alive even if the VFS is uninstalled.
-/// After reinstallation, create a new tool to access the new VFS instance.
+/// A management handle that keeps memory files alive after VFS uninstallation.
+///
+/// After reinstallation, obtain a new handle to access the new VFS instance.
 /// Import [`VfsFilesManager`] for file management and [`DbTransfer`] for transfers.
 pub struct MemVfsUtil(MemAppData);
 
@@ -303,6 +304,7 @@ impl MemVfsUtil {
     /// default VFS. SQLite's own automatic initialization may still run.
     ///
     /// # Safety
+    ///
     /// Call on the installing thread, with serialized access to SQLite VFS
     /// registration. All SQLite use of memvfs must stay on that same thread.
     pub unsafe fn get() -> Result<Self> {
@@ -427,6 +429,7 @@ impl ExportSource for MemExportSource {
 }
 
 /// Installs memvfs, reusing its owned registration, services and data if present.
+///
 /// Re-registers the same allocation if raw SQLite unregistration detached it.
 ///
 /// # Safety
@@ -485,8 +488,9 @@ fn check_owned(vfs: *mut bindings::sqlite3_vfs) -> Result<(), RegisterVfsError> 
     Ok(())
 }
 
-/// Frees the owned registration, even if already raw-unregistered; leaves any
-/// same-name replacement alone. [`MemVfsUtil`] handles retain their file data.
+/// Frees the owned registration, even if already unregistered through SQLite.
+///
+/// Leaves any same-name replacement alone. [`MemVfsUtil`] handles retain their file data.
 ///
 /// # Safety
 ///

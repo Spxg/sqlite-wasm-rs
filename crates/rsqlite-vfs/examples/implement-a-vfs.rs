@@ -66,13 +66,8 @@ impl MemFile {
     }
 }
 
-/// Some basic capabilities of file
 impl VfsFile for MemFile {
-    /// Called by `xRead`
-    ///
-    /// We copy the data starting at offset in the memory file to buffer,
-    /// returning the number of bytes copied. `xRead` handles zero-filling
-    /// and reports a short read if the buffer cannot be filled.
+    // Return the available byte count; xRead zero-fills and reports short reads.
     fn read(&mut self, buf: &mut [u8], offset: u64) -> VfsResult<usize> {
         println!("VfsFile::read(offset={offset}, len={})", buf.len());
 
@@ -90,10 +85,7 @@ impl VfsFile for MemFile {
         Ok(read_size)
     }
 
-    /// Called by `xWrite`
-    ///
-    /// We copy the data in the buffer to the memory file,
-    /// and if the size is not enough, expand it.
+    // Grow as needed, filling any gap before the write with zeros.
     fn write(&mut self, buf: &[u8], offset: u64) -> VfsResult<()> {
         println!("VfsFile::write(offset={offset}, len={})", buf.len());
 
@@ -118,9 +110,6 @@ impl VfsFile for MemFile {
         Ok(())
     }
 
-    /// Called by `xTruncate`
-    ///
-    /// Truncate the memory file, which happens during vacuum
     fn truncate(&mut self, size: u64) -> VfsResult<()> {
         println!("VfsFile::truncate(size={size})");
 
@@ -132,12 +121,7 @@ impl VfsFile for MemFile {
         Ok(())
     }
 
-    /// Called by `xSync`
-    ///
-    /// Write the data back to "disk".
-    ///
-    /// Since we are in memory, the write operation takes effect immediately,
-    /// so we return directly.
+    // Memory-only storage has nothing to flush to persistent storage.
     fn sync(&mut self, options: SyncOptions) -> VfsResult<()> {
         println!("VfsFile::sync(options={options:?})");
 
@@ -164,9 +148,6 @@ impl VfsFile for MemFile {
         Ok(true)
     }
 
-    /// Called by `xFileSize`
-    ///
-    /// Get the memory file size
     fn size(&self) -> VfsResult<u64> {
         println!("VfsFile::size()");
 
@@ -174,20 +155,16 @@ impl VfsFile for MemFile {
     }
 }
 
-/// This is where we store our data.
-///
-/// Since we will have multiple different databases,
-/// we use hashmap to store the data with the file name as the key.
+/// Named files and the last diagnostic, shared by this VFS's handles.
 #[derive(Default)]
 struct MemAppData {
     files: RefCell<HashMap<String, Rc<RefCell<Vec<u8>>>>>,
     error: RefCell<Option<VfsError>>,
 }
 
-/// Something that manages our memory files
+/// Manages the memory file namespace.
 struct MemFileStore;
 
-/// Make changes to files
 impl VfsStore for MemFileStore {
     type File = MemFile;
     type AppData = MemAppData;
@@ -204,9 +181,7 @@ impl VfsStore for MemFileStore {
         data.error.borrow().clone()
     }
 
-    /// Called by `xOpen`
-    ///
-    /// Return a fresh handle, creating the underlying data only when requested.
+    // Each open gets its own handle; named files share the underlying bytes.
     fn open_file(
         app_data: &MemAppData,
         request: rsqlite_vfs::OpenRequest<'_>,
@@ -258,9 +233,7 @@ impl VfsStore for MemFileStore {
         })
     }
 
-    /// Called by `xAccess`
-    ///
-    /// Check if the file already exists, which will affect the behavior of opening the db
+    // All files in this namespace are readable and writable.
     fn access(app_data: &MemAppData, file: &str, mode: AccessMode) -> VfsResult<bool> {
         println!("VfsStore::access(name={file:?}, mode={mode:?})");
 
@@ -273,9 +246,6 @@ impl VfsStore for MemFileStore {
         Ok(name.into())
     }
 
-    /// Called by `xDelete` and `xClose`
-    ///
-    /// Delete files, often used in temporary db
     fn delete_file(app_data: &MemAppData, file: &str, sync_dir: bool) -> VfsResult<()> {
         println!("VfsStore::delete_file(name={file:?}, sync_dir={sync_dir})");
 
@@ -283,7 +253,7 @@ impl VfsStore for MemFileStore {
         Ok(())
     }
 
-    /// Consume the handle on close; never delete a replacement with the same name.
+    // Delete-on-close must not remove a replacement created under the same name.
     fn close_file(
         app_data: &MemAppData,
         name: Option<&str>,
@@ -308,18 +278,16 @@ impl VfsStore for MemFileStore {
     }
 }
 
-/// Our io methods
+/// Uses the default I/O callbacks backed by `MemFileStore`.
 struct MemIoMethods;
 
-/// Implementing the io methods is very simple, just like this:
 impl SQLiteIoMethods for MemIoMethods {
     type Store = MemFileStore;
 }
 
-/// Our vfs
+/// Uses the default VFS callbacks with native OS services.
 struct MemVfs;
 
-/// Implementing vfs is just as simple, just like this
 impl SQLiteVfs<MemIoMethods> for MemVfs {
     type Os = NativeOs;
 
@@ -328,8 +296,6 @@ impl SQLiteVfs<MemIoMethods> for MemVfs {
 
         &NativeOs
     }
-
-    // As above, you can still override the default implementation
 }
 
 fn main() {
