@@ -122,12 +122,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Install wasm-pack
-      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - name: Test implement-a-vfs example
-      run: |
-        cd examples/implement-a-vfs
-        wasm-pack test --node -- -- --nocapture
+      run: cargo run -p rsqlite-vfs --example implement-a-vfs
 
   test_fmt:
     runs-on: ubuntu-latest

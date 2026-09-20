@@ -52,7 +52,6 @@ members = [
   "crates/sqlite-wasm-libc",
   "crates/sqlite-wasm-vfs",
   "extensions/sqlite-vec",
-  "examples/implement-a-vfs",
   "examples/nodejs",
   "examples/use-prebuild-lib",
 ]
@@ -64,6 +63,7 @@ license = "MIT"
 rust-version = "1.81.0"
 include = [
     'src/**/*.rs',
+    'examples/*.rs',
     'build.rs',
     'sqlite3/**/*.c',
     'sqlite3/**/*.h',

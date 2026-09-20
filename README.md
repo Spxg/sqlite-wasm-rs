@@ -39,7 +39,6 @@ fn open_db() {
 
 ```toml
 [dependencies]
-# Use with sqlite-wasm-rs 0.6.
 sqlite-wasm-vfs = { version = "0.3", features = ["sahpool"] }
 ```
 
@@ -50,31 +49,25 @@ The following vfs have been implemented:
 
 ### How to implement a VFS
 
-Here is an example showing how to implement a simple in-memory VFS, see [`implement-a-vfs`](./examples/implement-a-vfs) example.
+Here is an example showing how to implement a simple in-memory VFS, see [`implement-a-vfs`](./crates/rsqlite-vfs/examples/implement-a-vfs.rs) example.
+
+```sh
+cargo run -p rsqlite-vfs --example implement-a-vfs
+```
 
 ## About multithreading
 
-This library is not thread-safe:
-
-* The default memory VFS must be used on the installing thread.
-* sqlite is compiled with `-DSQLITE_THREADSAFE=0`.
+Multithreading is not supported, SQLite is compiled with `-DSQLITE_THREADSAFE=0`.
 
 ## Use without wasm-bindgen
 
-```toml
-[dependencies]
-sqlite-wasm-rs = "0.6"
-```
+No features are enabled by default, provide your own host functions.
 
-No features are enabled by default. Implement the host functions in [`sqlite-wasm-rs.h`](https://github.com/Spxg/sqlite-wasm-rs/blob/master/sqlite-wasm-rs.h).
 See [`host-js`](./examples/host-js) or [`host-c`](./examples/host-c) example.
 
 ## Use custom SQLite sources
 
-Set `SQLITE_WASM_RS_SOURCE_DIR` to the directory containing `sqlite3.c` and `sqlite3.h`.
-With `sqlite3mc`, use `sqlite3mc_amalgamation.c` and `sqlite3mc_amalgamation.h` instead.
-
-> `bindgen` regenerates the C bindings from that header; without it, the bundled bindings must match your SQLite version.
+Point `SQLITE_WASM_RS_SOURCE_DIR` to your `sqlite3.c/.h` files (`sqlite3mc_amalgamation.c/.h` for `sqlite3mc`):
 
 ```sh
 SQLITE_WASM_RS_SOURCE_DIR=/path/to/sqlite cargo build --target wasm32-unknown-unknown --features bindgen
