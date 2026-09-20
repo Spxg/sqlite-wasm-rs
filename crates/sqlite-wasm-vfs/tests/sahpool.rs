@@ -6,11 +6,59 @@ use sqlite_wasm_rs::*;
 use sqlite_wasm_vfs::sahpool::{install, OpfsSAHError, OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil};
 use std::{
     ffi::{CStr, CString},
+    future::{poll_fn, Future},
     ptr,
 };
+use wasm_bindgen::{prelude::wasm_bindgen, JsValue};
+use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::wasm_bindgen_test;
 
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_dedicated_worker);
+
+#[wasm_bindgen(module = "/tests/sahpool.js")]
+extern "C" {
+    #[wasm_bindgen(js_name = failNext)]
+    fn fail_next(method: &str, count: u32, name: &str) -> js_sys::Function;
+
+    type AcquisitionGate;
+
+    #[wasm_bindgen(constructor)]
+    fn new(skip: u32) -> AcquisitionGate;
+    #[wasm_bindgen(method, getter)]
+    fn acquired(this: &AcquisitionGate) -> js_sys::Promise;
+    #[wasm_bindgen(method, getter)]
+    fn closed(this: &AcquisitionGate) -> js_sys::Promise;
+    #[wasm_bindgen(method)]
+    fn release(this: &AcquisitionGate);
+    #[wasm_bindgen(method, getter)]
+    fn restore(this: &AcquisitionGate) -> js_sys::Function;
+}
+
+struct Restore(js_sys::Function);
+
+impl Drop for Restore {
+    fn drop(&mut self) {
+        self.0.call0(&JsValue::UNDEFINED).unwrap();
+    }
+}
+
+async fn cancel_acquisition<T>(operation: impl Future<Output = T>, skip: u32) {
+    let gate = AcquisitionGate::new(skip);
+    let _restore = Restore(gate.restore());
+    let mut operation = Box::pin(operation);
+    let mut acquired = Box::pin(JsFuture::from(gate.acquired()));
+
+    poll_fn(|cx| {
+        assert!(operation.as_mut().poll(cx).is_pending());
+        acquired.as_mut().poll(cx)
+    })
+    .await
+    .unwrap();
+
+    drop(operation);
+    gate.release();
+    JsFuture::from(gate.closed()).await.unwrap();
+}
 
 fn config(name: &str) -> OpfsSAHPoolCfgBuilder {
     OpfsSAHPoolCfgBuilder::new()
@@ -311,7 +359,7 @@ async fn test_transfer_roundtrip() {
 }
 
 #[wasm_bindgen_test]
-#[ignore = "writes over 4 GiB to OPFS; requires sufficient storage quota"]
+#[ignore = "stores two databases over 4 GiB in OPFS; requires sufficient storage quota"]
 async fn test_database_over_4gib() {
     let util = pool("large-database", 2).await;
     let db = Db::open("large-database", "large.db");
@@ -357,7 +405,168 @@ async fn test_database_over_4gib() {
     assert_eq!(db.scalar(c"SELECT n FROM tail;"), 43);
     drop(db);
 
+    // Separate pools allow export and import to remain active together.
+    let copy = pool("large-copy", 2).await;
+    let mut export = util.begin_export("large.db").unwrap();
+    let mut import = copy.begin_import("copy.db", export.size()).unwrap();
+    let mut buffer = vec![0; 1024 * 1024 + 17];
+    let mut transferred = 0u64;
+
+    loop {
+        let count = export.read(&mut buffer).unwrap();
+        if count == 0 {
+            break;
+        }
+
+        import.write(&buffer[..count]).unwrap();
+        transferred += count as u64;
+    }
+
+    assert_eq!(transferred, size as u64);
+    drop(export);
+    import.finish().unwrap();
+    copy.pause().unwrap();
+    copy.resume().await.unwrap();
+
+    let mut original = util.begin_export("large.db").unwrap();
+    let mut imported = copy.begin_export("copy.db").unwrap();
+    assert_eq!(original.size(), imported.size());
+    let mut other = vec![0; buffer.len()];
+
+    loop {
+        let count = original.read(&mut buffer).unwrap();
+        assert_eq!(imported.read(&mut other).unwrap(), count);
+        assert_eq!(&buffer[..count], &other[..count]);
+        if count == 0 {
+            break;
+        }
+    }
+    drop(original);
+    drop(imported);
+
+    let db = Db::open("large-copy", "copy.db");
+    assert_eq!(db.scalar(c"SELECT n FROM tail;"), 43);
+    drop(db);
+
+    copy.clear().unwrap();
+    unsafe { copy.uninstall().unwrap() };
     util.clear().unwrap();
+    unsafe { util.uninstall().unwrap() };
+}
+
+#[wasm_bindgen_test]
+async fn test_opfs_write_failure() {
+    let util = pool("write-failure", 2).await;
+    let db = Db::open("write-failure", "main.db");
+    db.exec(c"CREATE TABLE t(n); INSERT INTO t VALUES(42);");
+
+    let fault = Restore(fail_next("write", 1, "QuotaExceededError"));
+    let code = unsafe {
+        sqlite3_exec(
+            db.0,
+            c"INSERT INTO t VALUES(99);".as_ptr(),
+            None,
+            ptr::null_mut(),
+            ptr::null_mut(),
+        )
+    };
+    drop(fault);
+    assert_eq!(code, SQLITE_FULL);
+    drop(db);
+
+    let db = Db::open("write-failure", "main.db");
+    assert_eq!(db.scalar(c"SELECT sum(n) FROM t;"), 42);
+    db.exec(c"INSERT INTO t VALUES(43);");
+    assert_eq!(db.scalar(c"SELECT sum(n) FROM t;"), 85);
+    drop(db);
+
+    unsafe { util.uninstall().unwrap() };
+}
+
+#[wasm_bindgen_test]
+async fn test_opfs_flush_failure() {
+    let util = pool("flush-failure", 2).await;
+    util.import_db_unchecked("kept", b"preserved").unwrap();
+
+    for failures in [1, 2] {
+        let mut import = util.begin_import_unchecked("pending", 7).unwrap();
+        import.write(b"pending").unwrap();
+
+        let fault = Restore(fail_next("flush", failures, "UnknownError"));
+        let error = import.finish().unwrap_err();
+        drop(fault);
+
+        if failures == 1 {
+            assert!(matches!(
+                error,
+                OpfsSAHError::Opfs {
+                    operation: "flush file",
+                    ..
+                }
+            ));
+        } else {
+            let OpfsSAHError::Cleanup { error, cleanup } = error else {
+                panic!("expected both commit and cleanup failures");
+            };
+            assert!(matches!(
+                *error,
+                OpfsSAHError::Opfs {
+                    operation: "flush file",
+                    ..
+                }
+            ));
+            assert!(matches!(
+                *cleanup,
+                OpfsSAHError::Opfs {
+                    operation: "flush file",
+                    ..
+                }
+            ));
+            assert!(matches!(util.names(), Err(OpfsSAHError::NeedsRecovery)));
+            assert!(matches!(
+                util.begin_import_unchecked("blocked", 0),
+                Err(OpfsSAHError::NeedsRecovery)
+            ));
+
+            util.pause().unwrap();
+            util.resume().await.unwrap();
+        }
+
+        assert_eq!(util.capacity(), 2);
+        assert!(!util.contains("pending").unwrap());
+        assert_eq!(util.export_db("kept").unwrap(), b"preserved");
+        util.import_db_unchecked("reused", b"replacement").unwrap();
+        assert!(util.remove("reused").unwrap());
+    }
+
+    unsafe { util.uninstall().unwrap() };
+}
+
+#[wasm_bindgen_test]
+async fn test_cancelled_pool_operations() {
+    let util = pool("cancelled", 1).await;
+    util.import_db_unchecked("kept", b"preserved").unwrap();
+
+    // Cancel after the first new slot is initialized and the second is locked.
+    cancel_acquisition(util.add_capacity(2), 1).await;
+    assert_eq!(util.capacity(), 1);
+    assert_eq!(util.export_db("kept").unwrap(), b"preserved");
+
+    util.pause().unwrap();
+    util.resume().await.unwrap();
+    assert_eq!(util.capacity(), 3);
+    assert_eq!(util.export_db("kept").unwrap(), b"preserved");
+
+    util.pause().unwrap();
+    // Cancel with the directory lease held and a slot acquisition pending.
+    cancel_acquisition(util.resume(), 1).await;
+    assert!(util.is_paused());
+    assert_eq!(util.capacity(), 0);
+
+    util.resume().await.unwrap();
+    assert_eq!(util.capacity(), 3);
+    assert_eq!(util.export_db("kept").unwrap(), b"preserved");
+
     unsafe { util.uninstall().unwrap() };
 }
 
