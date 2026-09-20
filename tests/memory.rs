@@ -4,6 +4,7 @@ mod common;
 
 use common::Db;
 use sqlite_wasm_rs::vfs::memvfs::{MemVfsError, MemVfsUtil};
+use sqlite_wasm_rs::vfs::transfer::DbTransfer;
 use sqlite_wasm_rs::*;
 use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -26,7 +27,18 @@ fn export_import_preserves_rows_after_reopen() {
 
     let bytes = util.export_db("memory-original.db").unwrap();
     assert!(util.delete_db("memory-original.db"));
-    util.import_db("memory-restored.db", &bytes).unwrap();
+    let mut import =
+        DbTransfer::begin_import(&util, "memory-restored.db", bytes.len() as u64).unwrap();
+    import.write(&bytes[..17]).unwrap();
+    import.write(&bytes[17..]).unwrap();
+    assert!(!util.exists("memory-restored.db"));
+    import.finish().unwrap();
+
+    let mut export = DbTransfer::begin_export(&util, "memory-restored.db").unwrap();
+    let mut prefix = [0; 17];
+    export.read(&mut prefix).unwrap();
+    assert_eq!(prefix, bytes[..17]);
+    assert_eq!(export.read_to_vec().unwrap(), bytes[17..]);
 
     // Reject replacement without damaging the existing database.
     assert!(util.import_db("memory-restored.db", &bytes).is_err());
@@ -60,8 +72,7 @@ fn database_names_reserve_room_for_all_journals() {
             let result = if checked {
                 util.import_db(&name, &bytes)
             } else {
-                let page_size = vfs::check_import_db(&bytes).unwrap();
-                util.import_db_unchecked(&name, &bytes, page_size)
+                util.import_db_unchecked(&name, &bytes)
             };
 
             if length == 1013 {

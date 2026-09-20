@@ -3,6 +3,7 @@ wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_dedicated_worker);
 mod common;
 
 use common::Db;
+use sqlite_wasm_rs::vfs::transfer::DbTransfer;
 use sqlite_wasm_rs::*;
 use sqlite_wasm_vfs::sahpool::{install, OpfsSAHPoolCfgBuilder};
 use std::ffi::CString;
@@ -45,7 +46,7 @@ fn test_memvfs_cipher(cipher: &str) {
     let util = unsafe { vfs::memvfs::MemVfsUtil::get().unwrap() };
     let bytes = util.export_db(&original).unwrap();
     assert!(util.delete_db(&original));
-    util.import_db_unchecked(&restored, &bytes, 8192).unwrap();
+    util.import_db_unchecked(&restored, &bytes).unwrap();
 
     check_encrypted_copy(&restored, vfs, cipher);
     assert!(util.delete_db(&restored));

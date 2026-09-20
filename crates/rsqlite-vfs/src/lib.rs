@@ -14,6 +14,7 @@ mod error;
 mod filename;
 pub mod memvfs;
 mod options;
+pub mod transfer;
 pub use error::{RawVfsErrorCode, SystemErrorCode, VfsErrorCode};
 pub use filename::{OpenRequest, VfsFilename};
 pub use options::{
@@ -1474,57 +1475,6 @@ pub trait SQLiteIoMethods {
     ) -> i32 {
         SQLITE_OK
     }
-}
-
-/// Database signature, size or page-layout validation errors, not a complete
-/// integrity check. Match variants rather than the human-readable display text.
-#[derive(thiserror::Error, Debug)]
-pub enum ImportDbError {
-    #[error("invalid database size or page alignment")]
-    InvalidDbSize,
-    #[error("invalid SQLite database signature")]
-    InvalidHeader,
-    #[error("page size must be a power of two between 512 and 65536 bytes")]
-    InvalidPageSize,
-}
-
-/// Validates the database signature, page size and file alignment, returning
-/// the page size. This does not validate database contents or integrity.
-pub fn check_import_db(bytes: &[u8]) -> Result<usize, ImportDbError> {
-    let length = bytes.len();
-
-    if length < 512 || length % 512 != 0 {
-        return Err(ImportDbError::InvalidDbSize);
-    }
-
-    if !bytes.starts_with(SQLITE3_HEADER.as_bytes()) {
-        return Err(ImportDbError::InvalidHeader);
-    }
-
-    // The database page size in bytes.
-    // Must be a power of two between 512 and 32768 inclusive, or the value 1 representing a page size of 65536.
-    let page_size = u16::from_be_bytes([bytes[16], bytes[17]]);
-    let page_size = if page_size == 1 {
-        65536
-    } else {
-        usize::from(page_size)
-    };
-
-    check_db_and_page_size(length, page_size)?;
-    Ok(page_size)
-}
-
-/// Validates byte counts: the page size must be a power of two from 512 through
-/// 65536, and the database size a multiple of it. An empty database is allowed;
-/// this function does not inspect any file contents.
-pub fn check_db_and_page_size(db_size: usize, page_size: usize) -> Result<(), ImportDbError> {
-    if !(page_size.is_power_of_two() && (512..=65536).contains(&page_size)) {
-        return Err(ImportDbError::InvalidPageSize);
-    }
-    if db_size % page_size != 0 {
-        return Err(ImportDbError::InvalidDbSize);
-    }
-    Ok(())
 }
 
 /// Reusable checks for custom VFS implementations.

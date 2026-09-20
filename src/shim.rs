@@ -222,6 +222,7 @@ mod tests {
         sqlite3_finalize, sqlite3_initialize, sqlite3_open, sqlite3_prepare_v3, sqlite3_shutdown,
         sqlite3_step, SQLITE_DONE, SQLITE_OK, SQLITE_ROW, SQLITE_TEXT,
     };
+    use rsqlite_vfs::transfer::DbTransfer;
 
     use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -233,19 +234,16 @@ mod tests {
             let original_default = crate::sqlite3_vfs_find(core::ptr::null());
             for name in ["", "hidden\0suffix"] {
                 assert!(matches!(
-                    util.import_db_unchecked(name, &[42; 512], 512),
+                    util.import_db_unchecked(name, &[42; 512]),
                     Err(crate::vfs::memvfs::MemVfsError::InvalidFilename)
                 ));
             }
-            assert!(util
-                .import_db_unchecked("invalid-page-size.db", &[42; 512], 0)
-                .is_err());
             assert_eq!(util.count(), 0);
             assert_eq!(crate::sqlite3_vfs_find(core::ptr::null()), original_default);
-            util.import_db_unchecked("survives-shutdown.db", &[42; 512], 512)
+            util.import_db_unchecked("survives-shutdown.db", &[42; 512])
                 .unwrap();
             assert!(matches!(
-                util.import_db_unchecked("survives-shutdown.db", &[99; 512], 512),
+                util.import_db_unchecked("survives-shutdown.db", &[99; 512]),
                 Err(crate::vfs::memvfs::MemVfsError::AlreadyExists(_))
             ));
             assert_eq!(sqlite3_shutdown(), SQLITE_OK, "failed to shutdown");
@@ -283,8 +281,7 @@ mod tests {
                 true,
             )
             .unwrap();
-            util.import_db_unchecked("detached.db", &[42; 512], 512)
-                .unwrap();
+            util.import_db_unchecked("detached.db", &[42; 512]).unwrap();
             let original = crate::sqlite3_vfs_find(c"memvfs".as_ptr());
             assert_eq!(crate::sqlite3_vfs_unregister(original), SQLITE_OK);
             let reinstalled = memvfs::install(WasmOsCallback, true).unwrap();
