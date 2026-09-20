@@ -61,9 +61,7 @@ Multithreading is not supported, SQLite is compiled with `-DSQLITE_THREADSAFE=0`
 
 ## Use without wasm-bindgen
 
-No features are enabled by default, provide your own host functions.
-
-See [`host-js`](./examples/host-js) or [`host-c`](./examples/host-c) example.
+No features are enabled by default, provide your own host functions. See [JS Host](./examples/host-js) or [C Host](./examples/host-c) example.
 
 ## Use custom SQLite sources
 
