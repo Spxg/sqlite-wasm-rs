@@ -42,8 +42,7 @@
   nonempty journal/WAL sidecars and reports oversized/allocation failures.
 
 * **Breaking:** Reserve journal suffix space in database names: at most 499 UTF-8
-  bytes for SAH pools and 500 for memvfs. Bound memvfs paths to 512 bytes to match
-  SQLite's super-journal scratch space with minimum-sized database pages.
+  bytes for SAH pools and 1012 for memvfs.
 
 * **Breaking:** Redesign VFS backend traits around owned per-open handles and
   typed options/errors. `VfsStore` owns the `File` and `AppData` types;
