@@ -451,7 +451,7 @@ fn callbacks_delegate_typed_requests_and_preserve_backend_errors() {
                 ),
                 SQLITE_CANTOPEN
             );
-            assert!(file.io_methods.pMethods.is_null());
+            assert!((*file.sqlite3_file()).pMethods.is_null());
             assert_eq!(out_flags, -1);
         }
         assert_eq!(state.borrow().opens.len(), open_count);
@@ -622,7 +622,7 @@ fn pathname_and_access_follow_flat_namespace_contract() {
             ),
             SQLITE_CANTOPEN
         );
-        assert!(file.io_methods.pMethods.is_null());
+        assert!((*file.sqlite3_file()).pMethods.is_null());
         check_error(VfsErrorCode::CantOpen);
     }
 }
@@ -729,7 +729,7 @@ fn randomness_handles_empty_buffers_and_time_preserves_integer_precision() {
 }
 
 #[test]
-fn xread_handles_counts_and_errors() {
+fn test_xread_handles_counts_and_errors() {
     // Deliberately leaves the unread tail untouched, and can report an
     // invalid count or an error to exercise the common callback.
     struct ReadFile(Result<usize, i32>);
@@ -774,6 +774,7 @@ fn xread_handles_counts_and_errors() {
         }
     }
 
+    type ReadData = (Result<usize, i32>, RefCell<Option<VfsError>>);
     struct ReadStore;
     impl VfsStore for ReadStore {
         type File = ReadFile;
@@ -784,21 +785,27 @@ fn xread_handles_counts_and_errors() {
             _: Self::File,
             _: OpenOptions,
         ) -> VfsResult<()> {
-            unreachable!()
+            Ok(())
         }
 
-        type AppData = RefCell<Option<VfsError>>;
+        type AppData = ReadData;
 
         fn record_error(data: &Self::AppData, error: VfsError) {
-            data.replace(Some(error));
+            data.1.replace(Some(error));
         }
 
         fn last_error(data: &Self::AppData) -> Option<VfsError> {
-            data.borrow().clone()
+            data.1.borrow().clone()
         }
 
-        fn open_file(_: &Self::AppData, _: OpenRequest<'_>) -> VfsResult<OpenedFile<ReadFile>> {
-            unreachable!()
+        fn open_file(
+            data: &Self::AppData,
+            request: OpenRequest<'_>,
+        ) -> VfsResult<OpenedFile<ReadFile>> {
+            Ok(OpenedFile {
+                file: ReadFile(data.0),
+                access: request.options.access(),
+            })
         }
 
         fn access(_: &Self::AppData, _: &str, _: AccessMode) -> VfsResult<bool> {
@@ -819,24 +826,39 @@ fn xread_handles_counts_and_errors() {
         type Store = ReadStore;
     }
 
+    struct ReadVfs;
+    impl SQLiteVfs<ReadIo> for ReadVfs {
+        type Os = CallbackOs<0>;
+
+        fn os(_: &ReadData) -> &Self::Os {
+            &CallbackOs
+        }
+    }
+
     let read = |result, buf: &mut [u8], expected| {
-        let mut data = VfsAppData::new(RefCell::new((expected != SQLITE_OK).then(|| {
+        let error = RefCell::new((expected != SQLITE_OK).then(|| {
             VfsError::new(VfsErrorCode::IoRead, "previous read failure".into())
                 .with_system_error(SystemErrorCode::from_raw(13).unwrap())
-        })));
-        let mut handle = ReadFile(result);
-        let mut vfs: sqlite3_vfs = unsafe { core::mem::zeroed() };
-        vfs.pAppData = core::ptr::from_mut(&mut data).cast();
-        let mut file = SQLiteVfsFile {
-            io_methods: sqlite3_file {
-                pMethods: &ReadIo::METHODS,
-            },
-            vfs: &mut vfs,
-            flags: 0,
-            name_ptr: b"read.db".as_ptr(),
-            name_length: 7,
-            handle_ptr: core::ptr::from_mut(&mut handle).cast(),
-        };
+        }));
+        let mut data = VfsAppData::new((result, error));
+        let mut vfs = unsafe { ReadVfs::vfs(c"read".as_ptr(), &mut data) };
+        let mut file: SQLiteVfsFile = unsafe { core::mem::zeroed() };
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_TEMP_DB;
+        unsafe {
+            assert_eq!(
+                ReadVfs::xOpen(
+                    &mut vfs,
+                    c"read.db".as_ptr(),
+                    file.sqlite3_file(),
+                    flags,
+                    core::ptr::null_mut()
+                ),
+                SQLITE_OK
+            );
+            assert_eq!(file.vfs(), core::ptr::from_mut(&mut vfs));
+            assert_eq!(file.options().raw_flags(), flags);
+            assert_eq!(file.name(), Some("read.db"));
+        }
         let code = unsafe {
             ReadIo::xRead(
                 file.sqlite3_file(),
@@ -846,10 +868,11 @@ fn xread_handles_counts_and_errors() {
             )
         };
         assert_eq!(code, expected);
-        let error = data.borrow_mut().take();
+        let error = data.1.borrow_mut().take();
         if let Some(error) = &error {
             assert_eq!(error.system_error(), None);
         }
+        assert_eq!(unsafe { ReadIo::xClose(file.sqlite3_file()) }, SQLITE_OK);
         error
     };
 

@@ -3,7 +3,7 @@
 
 use alloc::vec::Vec;
 
-use crate::SQLITE3_HEADER;
+const SQLITE3_HEADER: &[u8; 16] = b"SQLite format 3\0";
 
 /// Database signature, size or page-layout errors, not a full integrity check.
 #[derive(thiserror::Error, Debug)]
@@ -37,7 +37,7 @@ pub enum TransferError {
 
 /// Whether to validate the SQLite header and reset its read/write versions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ImportMode {
+enum ImportMode {
     Checked,
     /// Preserves all bytes, including encrypted headers. Still checks length.
     Unchecked,
@@ -97,7 +97,11 @@ pub trait DbTransfer {
         size: u64,
     ) -> Result<DbImport<Self::Target<'_>>, Self::Error> {
         validate_size(size).map_err(TransferError::from)?;
-        DbImport::new(self.create_import(name, size)?, size, ImportMode::Checked)
+        Ok(DbImport::new(
+            self.create_import(name, size)?,
+            size,
+            ImportMode::Checked,
+        ))
     }
 
     /// Starts a byte-preserving import of exactly `size` bytes.
@@ -106,7 +110,11 @@ pub trait DbTransfer {
         name: &str,
         size: u64,
     ) -> Result<DbImport<Self::Target<'_>>, Self::Error> {
-        DbImport::new(self.create_import(name, size)?, size, ImportMode::Unchecked)
+        Ok(DbImport::new(
+            self.create_import(name, size)?,
+            size,
+            ImportMode::Unchecked,
+        ))
     }
 
     /// Validates layout (not integrity), imports, and resets read/write versions
@@ -153,7 +161,7 @@ fn validate_size(size: u64) -> Result<(), ImportDbError> {
 // Checks the first 18 bytes and total length, not integrity or sidecar state.
 fn check_import_header(header: &[u8], size: u64) -> Result<(), ImportDbError> {
     validate_size(size)?;
-    if header.len() < 18 || !header.starts_with(SQLITE3_HEADER.as_bytes()) {
+    if header.len() < 18 || !header.starts_with(SQLITE3_HEADER) {
         return Err(ImportDbError::InvalidHeader);
     }
 
@@ -184,21 +192,15 @@ pub struct DbImport<T: ImportTarget> {
 }
 
 impl<T: ImportTarget> DbImport<T> {
-    pub fn new(target: T, size: u64, mode: ImportMode) -> Result<Self, T::Error> {
-        if mode == ImportMode::Checked {
-            if let Err(error) = validate_size(size) {
-                return Err(target.abort_with_error(TransferError::from(error).into()));
-            }
-        }
-
-        Ok(Self {
+    fn new(target: T, size: u64, mode: ImportMode) -> Self {
+        Self {
             target,
             size,
             offset: 0,
             mode,
             header: [0; 18],
             failed: false,
-        })
+        }
     }
 
     /// Writes a complete chunk. Any error prevents subsequent writes/commit.
@@ -275,7 +277,7 @@ pub struct DbExport<S: ExportSource> {
 }
 
 impl<S: ExportSource> DbExport<S> {
-    pub fn new(source: S) -> Self {
+    fn new(source: S) -> Self {
         let size = source.size();
         Self {
             source,
