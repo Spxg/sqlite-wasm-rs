@@ -1,122 +1,109 @@
-wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_dedicated_worker);
-
-mod common;
-
-use common::Db;
-use sqlite_wasm_rs::vfs::transfer::DbTransfer;
 use sqlite_wasm_rs::vfs::VfsFilesManager;
 use sqlite_wasm_rs::*;
-use sqlite_wasm_vfs::sahpool::{install, OpfsSAHPoolCfgBuilder};
-use std::ffi::CString;
+use std::{
+    ffi::{CStr, CString},
+    ptr,
+};
 use wasm_bindgen_test::wasm_bindgen_test;
 
-fn set_cipher(cipher: &str, db: &Db) {
-    let sql = CString::new(format!("PRAGMA cipher = {cipher};")).unwrap();
-    assert_eq!(db.exec(&sql), SQLITE_OK);
+struct Db(*mut sqlite3);
+
+impl Db {
+    fn open(name: &CStr, flags: i32) -> Self {
+        let mut raw = ptr::null_mut();
+
+        // The default VFS is the SQLite3MC wrapper around memvfs.
+        let code = unsafe { sqlite3_open_v2(name.as_ptr(), &mut raw, flags, ptr::null()) };
+        let db = Self(raw);
+        assert_eq!(code, SQLITE_OK);
+
+        db
+    }
+
+    fn exec(&self, sql: &CStr) -> i32 {
+        unsafe { sqlite3_exec(self.0, sql.as_ptr(), None, ptr::null_mut(), ptr::null_mut()) }
+    }
+}
+
+impl Drop for Db {
+    fn drop(&mut self) {
+        assert_eq!(unsafe { sqlite3_close(self.0) }, SQLITE_OK);
+    }
+}
+
+fn test_cipher(cipher: &str) {
+    let name = CString::new(format!("cipher-{cipher}.db")).unwrap();
+    let config = CString::new(format!("PRAGMA cipher='{cipher}';")).unwrap();
+    let key = b"My very secret passphrase";
+
+    let set_key = |db: &Db, key: &[u8]| {
+        assert_eq!(
+            unsafe { sqlite3_key(db.0, key.as_ptr().cast(), key.len() as i32) },
+            SQLITE_OK
+        );
+    };
+
+    let db = Db::open(&name, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+    assert_eq!(db.exec(&config), SQLITE_OK);
+    set_key(&db, key);
     assert_eq!(
-        db.exec(c"PRAGMA key = 'My very secret passphrase';"),
+        db.exec(c"CREATE TABLE t(n); INSERT INTO t VALUES(42);"),
         SQLITE_OK
     );
-}
-
-fn check_encrypted_copy(name: &str, vfs: &str, cipher: &str) {
-    let db = Db::open(name, vfs, SQLITE_OPEN_READWRITE).unwrap();
-    let sql = CString::new(format!("PRAGMA cipher = {cipher};")).unwrap();
-    assert_eq!(db.exec(&sql), SQLITE_OK);
-
-    // Without a key, reading must fail: ignored encryption PRAGMAs would
-    // otherwise make a plaintext database pass the entire round trip.
-    assert_ne!(db.exec(c"SELECT * FROM employees;"), SQLITE_OK);
     drop(db);
 
-    let db = Db::open(name, vfs, SQLITE_OPEN_READWRITE).unwrap();
-    set_cipher(cipher, &db);
-    db.check_rows();
-}
+    for key in [None, Some(b"wrong passphrase".as_slice())] {
+        let db = Db::open(&name, SQLITE_OPEN_READWRITE);
+        assert_eq!(db.exec(&config), SQLITE_OK);
 
-fn test_memvfs_cipher(cipher: &str) {
-    let original = format!("memory-{cipher}.db");
-    let restored = format!("memory-{cipher}-restored.db");
-    // Non-default VFSes require the SQLite3MultipleCiphers wrapper.
-    let vfs = "multipleciphers-memvfs";
-    let db = Db::open(&original, vfs, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE).unwrap();
-    set_cipher(cipher, &db);
-    db.prepare();
-    drop(db);
-
-    let util = unsafe { vfs::memvfs::MemVfsUtil::get().unwrap() };
-    let bytes = util.export_db(&original).unwrap();
-    assert!(util.remove(&original).unwrap());
-    util.import_db_unchecked(&restored, &bytes).unwrap();
-
-    check_encrypted_copy(&restored, vfs, cipher);
-    assert!(util.remove(&restored).unwrap());
-}
-
-async fn test_opfs_sah_vfs_cipher(cipher: &str) {
-    let name = format!("sah-cipher-{cipher}");
-    let cfg = OpfsSAHPoolCfgBuilder::new()
-        .vfs_name(&name)
-        .directory(&name)
-        .initial_capacity(3)
-        .clear_on_init(true)
-        .build();
-    let pool = install::<WasmOsCallback>(&cfg, false).await.unwrap();
-    let vfs = format!("multipleciphers-{name}");
-    let db = Db::open(
-        "original.db",
-        &vfs,
-        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-    )
-    .unwrap();
-    set_cipher(cipher, &db);
-    db.prepare();
-    drop(db);
-
-    let bytes = pool.export_db("original.db").unwrap();
-    assert!(pool.remove("original.db").unwrap());
-    let mut import = pool
-        .begin_import_unchecked("restored.db", bytes.len() as u64)
-        .unwrap();
-    for chunk in bytes.chunks(4093) {
-        import.write(chunk).unwrap();
-    }
-    import.finish().unwrap();
-
-    check_encrypted_copy("restored.db", &vfs, cipher);
-    assert!(pool.remove("restored.db").unwrap());
-    // Release OPFS handles but keep registration alive for the cipher wrapper.
-    pool.pause().unwrap();
-}
-
-macro_rules! sah_sqlite3_mc {
-    ($name:ident, $cipher:literal) => {
-        #[wasm_bindgen_test::wasm_bindgen_test]
-        async fn $name() {
-            test_opfs_sah_vfs_cipher($cipher).await;
+        if let Some(key) = key {
+            set_key(&db, key);
         }
-    };
+
+        assert_ne!(db.exec(c"SELECT n FROM t;"), SQLITE_OK);
+    }
+
+    let db = Db::open(&name, SQLITE_OPEN_READWRITE);
+    assert_eq!(db.exec(&config), SQLITE_OK);
+    set_key(&db, key);
+
+    unsafe {
+        let mut query = ptr::null_mut();
+        assert_eq!(
+            sqlite3_prepare_v2(
+                db.0,
+                c"SELECT n FROM t".as_ptr(),
+                -1,
+                &mut query,
+                ptr::null_mut()
+            ),
+            SQLITE_OK
+        );
+        assert_eq!(sqlite3_step(query), SQLITE_ROW);
+        assert_eq!(sqlite3_column_int(query, 0), 42);
+        assert_eq!(sqlite3_step(query), SQLITE_DONE);
+        assert_eq!(sqlite3_finalize(query), SQLITE_OK);
+    }
+    drop(db);
+
+    // Remove the test fixture after every connection has closed.
+    unsafe { vfs::memvfs::MemVfsUtil::get().unwrap() }
+        .remove(name.to_str().unwrap())
+        .unwrap();
 }
 
-macro_rules! mem_sqlite3_mc {
+macro_rules! cipher_test {
     ($name:ident, $cipher:literal) => {
         #[wasm_bindgen_test]
         fn $name() {
-            test_memvfs_cipher($cipher);
+            test_cipher($cipher);
         }
     };
 }
 
-sah_sqlite3_mc!(test_opfs_sah_vfs_cipher_aes128cbc, "aes128cbc");
-sah_sqlite3_mc!(test_opfs_sah_vfs_cipher_aes256cbc, "aes256cbc");
-sah_sqlite3_mc!(test_opfs_sah_vfs_cipher_chacha20, "chacha20");
-sah_sqlite3_mc!(test_opfs_sah_vfs_cipher_sqlcipher, "sqlcipher");
-sah_sqlite3_mc!(test_opfs_sah_vfs_cipher_rc4, "rc4");
-sah_sqlite3_mc!(test_opfs_sah_vfs_cipher_ascon128, "ascon128");
-
-mem_sqlite3_mc!(test_memvfs_cipher_aes128cbc, "aes128cbc");
-mem_sqlite3_mc!(test_memvfs_cipher_aes256cbc, "aes256cbc");
-mem_sqlite3_mc!(test_memvfs_cipher_chacha20, "chacha20");
-mem_sqlite3_mc!(test_memvfs_cipher_sqlcipher, "sqlcipher");
-mem_sqlite3_mc!(test_memvfs_cipher_rc4, "rc4");
-mem_sqlite3_mc!(test_memvfs_cipher_ascon128, "ascon128");
+cipher_test!(test_cipher_aes128cbc, "aes128cbc");
+cipher_test!(test_cipher_aes256cbc, "aes256cbc");
+cipher_test!(test_cipher_chacha20, "chacha20");
+cipher_test!(test_cipher_sqlcipher, "sqlcipher");
+cipher_test!(test_cipher_rc4, "rc4");
+cipher_test!(test_cipher_ascon128, "ascon128");

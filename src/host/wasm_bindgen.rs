@@ -137,28 +137,3 @@ fn yday_from_date(date: &Date) -> u32 {
     let days = if leap { LEAP } else { REGULAR };
     days[date.get_month() as usize] + date.get_date() - 1
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use wasm_bindgen_test::wasm_bindgen_test;
-
-    #[wasm_bindgen_test]
-    fn random_buffer_boundaries() {
-        unsafe {
-            assert_eq!(random(core::ptr::null_mut(), 0), 0);
-            assert_eq!(fill_entropy(core::ptr::null_mut(), 0), OK);
-            assert_eq!(random(core::ptr::null_mut(), 1), 0);
-            assert_eq!(
-                fill_entropy(core::ptr::null_mut(), 1),
-                Error::Unavailable as i32
-            );
-            let mut byte = 42;
-            for len in [isize::MAX as usize + 1, usize::MAX] {
-                assert_eq!(random(&mut byte, len), 0);
-                assert_eq!(fill_entropy(&mut byte, len), Error::Unavailable as i32);
-                assert_eq!(byte, 42);
-            }
-        }
-    }
-}

@@ -32,14 +32,9 @@ bindgen = { version = "0.72.1", optional = true }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.54"
-sqlite-wasm-vfs = "0.3"
 
 [[test]]
-name = "memory"
-required-features = ["wasm-bindgen"]
-
-[[test]]
-name = "sahpool"
+name = "sqlite3"
 required-features = ["wasm-bindgen"]
 
 [[test]]

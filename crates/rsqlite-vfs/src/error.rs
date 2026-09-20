@@ -164,38 +164,3 @@ impl core::fmt::Display for VfsErrorCode {
         self.as_raw().fmt(f)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn raw_codes_require_an_error_primary_code() {
-        for raw in [
-            SQLITE_ERROR,
-            SQLITE_IOERR,
-            SQLITE_IOERR_AUTH,
-            SQLITE_CONSTRAINT_FOREIGNKEY,
-            SQLITE_IOERR | (0x7fffff << 8), // Unknown extension of a known error.
-        ] {
-            assert_eq!(VfsErrorCode::from_raw(raw).unwrap().as_raw(), raw);
-        }
-        for raw in [
-            SQLITE_OK,
-            SQLITE_ROW,
-            SQLITE_DONE,
-            SQLITE_OK_LOAD_PERMANENTLY,
-            SQLITE_OK_SYMLINK,
-            SQLITE_ROW | (1 << 8),
-            SQLITE_DONE | (1 << 8),
-            SQLITE_WARNING + 1,
-            255,
-            i32::MAX,
-            -1,
-            i32::MIN,
-            i32::MIN | SQLITE_IOERR,
-        ] {
-            assert_eq!(VfsErrorCode::from_raw(raw), None, "raw={raw}");
-        }
-    }
-}

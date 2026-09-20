@@ -1492,26 +1492,6 @@ pub trait SQLiteIoMethods {
 pub mod test_suite;
 
 #[cfg(test)]
-mod test_support {
-    use super::{OsCallback, VfsResult};
-
-    pub(crate) struct CallbackOs<const NOW: i64>;
-    impl<const NOW: i64> OsCallback for CallbackOs<NOW> {
-        fn sleep(&self, _: core::time::Duration) {}
-
-        fn random(&self, buf: &mut [u8]) -> usize {
-            assert!(!buf.is_empty());
-            buf.fill(42);
-            buf.len()
-        }
-
-        fn epoch_timestamp_in_ms(&self) -> VfsResult<i64> {
-            Ok(NOW)
-        }
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::{MemChunksFile, VfsErrorCode, VfsFile};
 

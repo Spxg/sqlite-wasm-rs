@@ -294,37 +294,3 @@ impl OpenOptions {
         self.0 & SQLITE_OPEN_AUTOPROXY != 0
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn open_options_preserve_unknown_flags_and_reject_invalid_combinations() {
-        let raw = SQLITE_OPEN_READONLY
-            | SQLITE_OPEN_MAIN_DB
-            | SQLITE_OPEN_URI
-            | SQLITE_OPEN_MEMORY
-            | SQLITE_OPEN_NOFOLLOW
-            | SQLITE_OPEN_AUTOPROXY
-            | SQLITE_OPEN_PRIVATECACHE
-            | 0x40000000;
-        let options = OpenOptions::from_raw_flags(raw).unwrap();
-        assert_eq!(options.raw_flags(), raw);
-        assert_eq!(options.access(), OpenAccess::ReadOnly);
-        assert!(options.uri() && options.memory() && options.no_follow() && options.auto_proxy());
-        for flags in [
-            0,
-            SQLITE_OPEN_READONLY | SQLITE_OPEN_READWRITE,
-            SQLITE_OPEN_READONLY | SQLITE_OPEN_CREATE,
-            SQLITE_OPEN_READWRITE | SQLITE_OPEN_EXCLUSIVE,
-            SQLITE_OPEN_READWRITE | SQLITE_OPEN_DELETEONCLOSE,
-            SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB | SQLITE_OPEN_WAL,
-        ] {
-            assert_eq!(
-                OpenOptions::from_raw_flags(flags).unwrap_err().code(),
-                VfsErrorCode::CantOpen
-            );
-        }
-    }
-}

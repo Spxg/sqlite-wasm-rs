@@ -1,7 +1,7 @@
 //! Reusable `VfsFile`/`VfsStore` checks, also available with `no_std` + `alloc`.
 //! File checks overwrite inputs. Store checks require an isolated writable
-//! namespace and reserve `___test_vfs_store*` names. Cleanup is best-effort on
-//! failure/unwinding; backend panics are not caught.
+//! namespace with room for two files and reserve `___test_vfs_store*` names.
+//! Cleanup is best-effort on failure/unwinding; backend panics are not caught.
 //!
 //! Contract failures return `VfsErrorCode::Io`; backend errors retain their codes.
 //! Both include case/operation context. These do not verify durability, locking
@@ -269,13 +269,39 @@ pub fn test_vfs_file_truncate(file: &mut impl VfsFile) -> VfsResult<()> {
     )
 }
 
+/// Checks size hints preserve existing data and never shrink a writable file.
+/// Unsupported hints are allowed; growth of the logical file is not required.
+#[doc(hidden)]
+pub fn test_vfs_file_size_hint(file: &mut impl VfsFile) -> VfsResult<()> {
+    context(
+        "size_hint",
+        (|| {
+            truncate(file, 0)?;
+            let bytes = [7; 512];
+            write(file, 0, &bytes)?;
+
+            for hint in [8192, 1] {
+                let before = context("size before hint", file.size())?;
+                context(&format!("size_hint {hint}"), file.size_hint(hint))?;
+                let after = context("size after hint", file.size())?;
+                check("size hint did not shrink file", after >= before, true)?;
+                check_read(file, 0, bytes.len(), &bytes)?;
+            }
+
+            write(file, 0, &[9])?;
+            check_read(file, 0, 3, &[9, 7, 7])
+        })(),
+    )
+}
+
 /// Runs all file checks. Overwrites a writable file and leaves it open.
 /// The caller must close it and remove any test file afterwards.
 #[doc(hidden)]
 pub fn test_vfs_file<File: VfsFile>(file: &mut File) -> VfsResult<()> {
     test_vfs_file_read_write(file)?;
     test_vfs_file_overwrite(file)?;
-    test_vfs_file_truncate(file)
+    test_vfs_file_truncate(file)?;
+    test_vfs_file_size_hint(file)
 }
 
 /// Checks missing-file, exclusive-create and read-only opens, including content
@@ -370,7 +396,74 @@ pub fn test_vfs_store_delete_on_close<S: VfsStore>(data: &S::AppData) -> VfsResu
     )
 }
 
-/// Checks anonymous temporary-file I/O and closing. The backend owns temporary
+/// Checks named files remain independent through writes, truncation and deletion.
+#[doc(hidden)]
+pub fn test_vfs_store_file_isolation<S: VfsStore>(data: &S::AppData) -> VfsResult<()> {
+    context(
+        "file_isolation",
+        (|| {
+            let first_name = "___test_vfs_store_isolation_a___";
+            let second_name = "___test_vfs_store_isolation_b___";
+            require_absent::<S>(data, first_name)?;
+            require_absent::<S>(data, second_name)?;
+            let options =
+                OpenOptions::new(OpenAccess::ReadWrite, FileKind::MainDb).with_create_new();
+            let mut first = TestFile::<S>::open(data, Some(first_name), options)?;
+            let mut second = TestFile::<S>::open(data, Some(second_name), options)?;
+
+            write(first.handle(), 0, &[1, 2, 3])?;
+            write(second.handle(), 0, &[4, 5, 6, 7])?;
+            check_read(first.handle(), 0, 8, &[1, 2, 3])?;
+            truncate(first.handle(), 1)?;
+            check_size(second.handle(), 4)?;
+            check_read(second.handle(), 0, 8, &[4, 5, 6, 7])?;
+            write(second.handle(), 1, &[9])?;
+            check_read(first.handle(), 0, 8, &[1])?;
+
+            first.finish()?;
+            require_absent::<S>(data, first_name)?;
+            check(
+                "second file still exists",
+                exists::<S>(data, second_name)?,
+                true,
+            )?;
+            check_read(second.handle(), 0, 8, &[4, 9, 6, 7])?;
+            write(second.handle(), 4, &[8])?;
+            check_read(second.handle(), 0, 8, &[4, 9, 6, 7, 8])?;
+            second.finish()
+        })(),
+    )
+}
+
+/// Checks recreating a deleted name starts empty, without exposing old bytes.
+#[doc(hidden)]
+pub fn test_vfs_store_recreate<S: VfsStore>(data: &S::AppData) -> VfsResult<()> {
+    context(
+        "recreate",
+        (|| {
+            let name = "___test_vfs_store_recreate___";
+            require_absent::<S>(data, name)?;
+            let options =
+                OpenOptions::new(OpenAccess::ReadWrite, FileKind::MainDb).with_create_new();
+            let mut file = TestFile::<S>::open(data, Some(name), options)?;
+            write(file.handle(), 0, &[7; 8192])?;
+            file.finish()?;
+            require_absent::<S>(data, name)?;
+
+            let mut file = TestFile::<S>::open(data, Some(name), options)?;
+            check_size(file.handle(), 0)?;
+            check_read(file.handle(), 0, 16, &[])?;
+            write(file.handle(), 513, &[9])?;
+            let mut expected = [0; 514];
+            expected[513] = 9;
+            check_size(file.handle(), expected.len() as u64)?;
+            check_read(file.handle(), 0, expected.len(), &expected)?;
+            file.finish()
+        })(),
+    )
+}
+
+/// Checks anonymous temporary-file I/O, isolation and closing. The backend owns
 /// resource cleanup; no assumptions are made about its naming or storage scheme.
 #[doc(hidden)]
 pub fn test_vfs_store_temporary<S: VfsStore>(data: &S::AppData) -> VfsResult<()> {
@@ -381,14 +474,27 @@ pub fn test_vfs_store_temporary<S: VfsStore>(data: &S::AppData) -> VfsResult<()>
                 OpenOptions::new(OpenAccess::ReadWrite, FileKind::TempDb).with_delete_on_close();
             let mut file = TestFile::<S>::open(data, None, options)?;
             test_vfs_file(file.handle())?;
-            file.finish()
+            truncate(file.handle(), 0)?;
+            write(file.handle(), 0, &[1, 2, 3])?;
+
+            let mut other = TestFile::<S>::open(data, None, options)?;
+            check_size(other.handle(), 0)?;
+            write(other.handle(), 0, &[4, 5, 6])?;
+            check_read(file.handle(), 0, 8, &[1, 2, 3])?;
+            file.finish()?;
+
+            check_read(other.handle(), 0, 8, &[4, 5, 6])?;
+            write(other.handle(), 1, &[9])?;
+            check_read(other.handle(), 0, 8, &[4, 9, 6])?;
+            other.finish()
         })(),
     )
 }
 
 /// Runs file checks on named main-database/temporary files, followed by the open
-/// mode, reopen, DELETEONCLOSE and anonymous-file cases. See the module's isolation
-/// and cleanup requirements. This calls the store directly, not SQLite callbacks.
+/// mode, reopen, recreate, isolation, DELETEONCLOSE and anonymous-file cases.
+/// See the module's isolation and cleanup requirements. Calls the store directly,
+/// not SQLite callbacks.
 #[doc(hidden)]
 pub fn test_vfs_store<S: VfsStore>(vfs_data: VfsAppData<S::AppData>) -> VfsResult<()> {
     for (name, kind) in [
@@ -419,5 +525,7 @@ pub fn test_vfs_store<S: VfsStore>(vfs_data: VfsAppData<S::AppData>) -> VfsResul
     test_vfs_store_open_modes::<S>(&vfs_data)?;
     test_vfs_store_reopen::<S>(&vfs_data)?;
     test_vfs_store_delete_on_close::<S>(&vfs_data)?;
+    test_vfs_store_file_isolation::<S>(&vfs_data)?;
+    test_vfs_store_recreate::<S>(&vfs_data)?;
     test_vfs_store_temporary::<S>(&vfs_data)
 }

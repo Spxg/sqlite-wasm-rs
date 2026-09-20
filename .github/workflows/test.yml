@@ -223,7 +223,7 @@ jobs:
         cd crates/sqlite-wasm-vfs
         wasm-pack test --chrome --headless ${{ matrix.features }}
 
-  test_vfs_integration:
+  test_sqlite_integration:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -232,8 +232,8 @@ jobs:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-    - name: Test VFS integration
-      run: wasm-pack test --chrome --headless --features ${{ matrix.features }}
+    - name: Test SQLite integration
+      run: wasm-pack test --node --tests --features ${{ matrix.features }}
 
   test_vfs_native:
     strategy:

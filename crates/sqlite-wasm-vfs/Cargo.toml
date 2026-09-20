@@ -47,5 +47,9 @@ web-sys = { version = "0.3.81", optional = true, features = [
 wasm-bindgen-test = "0.3.54"
 sqlite-wasm-rs = { version = "0.6", default-features = false, features = ["wasm-bindgen"] }
 
+[[test]]
+name = "sahpool"
+required-features = ["sahpool"]
+
 [package.metadata.docs.rs]
 targets = ["wasm32-unknown-unknown"]
