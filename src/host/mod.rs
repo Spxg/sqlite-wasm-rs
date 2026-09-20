@@ -1,7 +1,7 @@
 //! Link-time host services: sleep, randomness, clock, secure entropy and local time.
 //!
-//! The default `wasm-bindgen` feature supplies all five hooks. For a custom host,
-//! disable it throughout the dependency graph and implement the C ABI in
+//! The optional `wasm-bindgen` feature supplies all five hooks. For a custom host,
+//! leave it disabled throughout the dependency graph and implement the C ABI in
 //! [`sqlite-wasm-rs.h`](https://github.com/Spxg/sqlite-wasm-rs/blob/master/sqlite-wasm-rs.h).
 //! Define each symbol once: link a C/Rust adapter or provide `env` imports.
 //! See [host-c](https://github.com/Spxg/sqlite-wasm-rs/tree/master/examples/host-c)
@@ -130,8 +130,8 @@ pub(crate) fn localtime(unix_seconds: i64) -> Result<LocalTime> {
 
 /// VFS platform services supplied by the linked host adapter.
 ///
-/// Uses wasm-bindgen by default, or application-defined hooks when that feature
-/// is disabled. Does not make SQLite or the default memory VFS thread-safe.
+/// Uses wasm-bindgen when enabled, otherwise application-defined hooks.
+/// Does not make SQLite or the default memory VFS thread-safe.
 #[derive(Default)]
 pub struct WasmOsCallback;
 

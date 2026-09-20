@@ -18,7 +18,7 @@ jobs:
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - name: Test bundled
       run: |
-        wasm-pack test --node --lib
+        wasm-pack test --node --features wasm-bindgen --lib
     - name: Test use prebuild libsqlite3.a
       if: matrix.os != 'windows-latest'
       run: |
@@ -36,7 +36,7 @@ jobs:
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - name: Test bundled sqlite3mc
       run: |
-        wasm-pack test --node --features sqlite3mc --lib
+        wasm-pack test --node --features wasm-bindgen,sqlite3mc --lib
 
   test_diesel:
     runs-on: ubuntu-latest
@@ -52,7 +52,7 @@ jobs:
         printf "rsqlite-vfs = { path = \"../crates/rsqlite-vfs\" }\n" >> Cargo.toml
         printf "sqlite-wasm-vfs = { path = \"../crates/sqlite-wasm-vfs\" }\n" >> Cargo.toml
         sed -i '/^sqlite-wasm-rs = /s/version = "[^"]*"/version = "0.6"/' diesel/Cargo.toml
-        sed -i 's/^sqlite-wasm-rs = ".*"/sqlite-wasm-rs = "0.6"/' examples/sqlite/wasm/Cargo.toml diesel_tests/Cargo.toml
+        sed -i 's/^sqlite-wasm-rs = ".*"/sqlite-wasm-rs = { version = "0.6", features = ["wasm-bindgen"] }/' examples/sqlite/wasm/Cargo.toml diesel_tests/Cargo.toml
         sed -i 's/^sqlite-wasm-vfs = ".*"/sqlite-wasm-vfs = "0.3"/' examples/sqlite/wasm/Cargo.toml
         # xtask launches nested Cargo commands; enable the adapter in the dependency itself.
         sed -i '/^sqlite-wasm-rs = /s/default-features = false/default-features = false, features = ["wasm-bindgen"]/' diesel/Cargo.toml
@@ -86,8 +86,8 @@ jobs:
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - name: Test generated bindings
       run: |
-        wasm-pack test --node --features bindgen --lib
-        wasm-pack test --node --features bindgen,sqlite3mc --lib
+        wasm-pack test --node --features wasm-bindgen,bindgen --lib
+        wasm-pack test --node --features wasm-bindgen,bindgen,sqlite3mc --lib
 
   test_host_examples:
     runs-on: ubuntu-latest
@@ -152,7 +152,7 @@ jobs:
       run: |
         rustup toolchain install nightly
         rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
-        CFLAGS_wasm32_unknown_unknown='-matomics' RUSTFLAGS='-Ctarget-feature=+atomics -Clink-args=--shared-memory -Clink-args=--max-memory=1073741824 -Clink-args=--import-memory -Clink-args=--export=__wasm_init_tls -Clink-args=--export=__tls_size -Clink-args=--export=__tls_align -Clink-args=--export=__tls_base -Clink-args=--export=__heap_base' rustup run nightly wasm-pack test --chrome --headless -Z build-std=panic_abort,std
+        CFLAGS_wasm32_unknown_unknown='-matomics' RUSTFLAGS='-Ctarget-feature=+atomics -Clink-args=--shared-memory -Clink-args=--max-memory=1073741824 -Clink-args=--import-memory -Clink-args=--export=__wasm_init_tls -Clink-args=--export=__tls_size -Clink-args=--export=__tls_align -Clink-args=--export=__tls_base -Clink-args=--export=__heap_base' rustup run nightly wasm-pack test --chrome --headless --features wasm-bindgen -Z build-std=panic_abort,std
 
   test_msrv:
     strategy:
@@ -168,8 +168,8 @@ jobs:
         components: rust-src
     - name: Test MSRV
       run: |
-        cargo build --target wasm32-unknown-unknown
-        cargo build --features sqlite3mc --target wasm32-unknown-unknown
+        cargo build --features wasm-bindgen --target wasm32-unknown-unknown
+        cargo build --features wasm-bindgen,sqlite3mc --target wasm32-unknown-unknown
 
   test_nodejs:
     strategy:
@@ -227,13 +227,13 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        features: ["", "--features sqlite3mc"]
+        features: ["wasm-bindgen", "wasm-bindgen,sqlite3mc"]
     steps:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - name: Test VFS integration
-      run: wasm-pack test --chrome --headless ${{ matrix.features }}
+      run: wasm-pack test --chrome --headless --features ${{ matrix.features }}
 
   test_vfs_native:
     strategy:
