@@ -1283,7 +1283,6 @@ struct SyncAccessHandleIoMethods;
 
 impl SQLiteIoMethods for SyncAccessHandleIoMethods {
     type Store = SyncAccessHandleStore;
-    const VERSION: std::os::raw::c_int = 1;
 }
 
 struct SyncAccessHandleVfs;
@@ -1295,7 +1294,6 @@ impl SQLiteVfs<SyncAccessHandleIoMethods> for SyncAccessHandleVfs {
         &*data.os
     }
 
-    const VERSION: std::os::raw::c_int = 2;
     const MAX_PATH_SIZE: std::os::raw::c_int = (HEADER_MAX_FILENAME_SIZE - 1) as _;
 }
 
