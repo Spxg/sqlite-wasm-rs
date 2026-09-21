@@ -44,6 +44,7 @@ use rsqlite_vfs::{
     SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
 };
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::time::Duration;
 use std::{
     cell::{Cell, RefCell},
@@ -392,7 +393,7 @@ impl OpfsSAHPool {
             .map(f)
     }
 
-    fn with_new_file<E, F: Fn(&SyncAccessFile) -> Result<(), E>>(
+    fn with_new_file<E, F: FnOnce(&SyncAccessFile) -> Result<(), E>>(
         &self,
         filename: &str,
         flags: i32,
@@ -494,6 +495,26 @@ impl OpfsSAHPool {
         Ok(data)
     }
 
+    fn export_db_reader(&self, filename: &str) -> Result<DbExport> {
+        let files = self.map_filename_to_file.borrow();
+        let file = files
+            .get(filename)
+            .ok_or_else(|| OpfsSAHError::Generic(format!("File not found: {filename}")))?;
+
+        let sah = file.handle.clone();
+        let actual_size = (sah.get_size().map_err(OpfsSAHError::GetSize)?
+            - HEADER_OFFSET_DATA as f64)
+            .max(0.0) as u64;
+
+        let reader = DbExport {
+            handle: sah,
+            len: actual_size,
+            position: 0,
+        };
+
+        Ok(reader)
+    }
+
     fn import_db(&self, filename: &str, bytes: &[u8]) -> Result<()> {
         check_import_db(bytes)?;
         self.import_db_unchecked(filename, bytes, true)
@@ -527,6 +548,71 @@ impl OpfsSAHPool {
 
             Ok(())
         })?
+    }
+
+    fn import_db_from_reader(&self, filename: &str, mut reader: impl Read) -> Result<()> {
+        let mut header = [0u8; 512];
+        reader
+            .read_exact(&mut header)
+            .map_err(|_| ImportDbError::InvalidHeader)?;
+        check_import_db(&header)?;
+
+        let length =
+            self.import_db_from_reader_unchecked(filename, header.as_slice().chain(reader), true)?;
+        if length < 512 || length % 512 != 0 {
+            return Err(ImportDbError::InvalidDbSize.into());
+        }
+
+        Ok(())
+    }
+
+    fn import_db_from_reader_unchecked(
+        &self,
+        filename: &str,
+        mut reader: impl Read,
+        clear_wal: bool,
+    ) -> Result<u64> {
+        let mut offset = 0u64;
+        self.with_new_file(filename, SQLITE_OPEN_MAIN_DB, |file| {
+            let sah = &file.handle;
+            let mut buf = [0u8; 4096];
+            loop {
+                let length = reader.read(&mut buf).map_err(|_| {
+                    OpfsSAHError::Generic("An error occurred reading input db".to_string())
+                })?;
+                if length == 0 {
+                    break;
+                }
+
+                let written = sah
+                    .write_with_u8_array_and_options(
+                        &buf[..length],
+                        &read_write_options((HEADER_OFFSET_DATA as u64 + offset) as f64),
+                    )
+                    .map_err(OpfsSAHError::Write)?;
+
+                if written != length as f64 {
+                    return Err(OpfsSAHError::Generic(format!(
+                        "Expected to write {length} bytes but wrote {written}.",
+                    )));
+                }
+
+                offset += length as u64;
+            }
+
+            if clear_wal {
+                // forced to write back to legacy mode
+                sah.write_with_u8_array_and_options(
+                    &[1, 1],
+                    &read_write_options((HEADER_OFFSET_DATA + 18) as f64),
+                )
+                .map_err(OpfsSAHError::Write)?;
+            }
+
+            Ok(())
+        })??;
+
+        Ok(offset)
     }
 }
 
@@ -835,6 +921,43 @@ impl OpfsSAHError {
     }
 }
 
+/// A database file reader whose length is recorded at construction.
+pub struct DbExport {
+    handle: FileSystemSyncAccessHandle,
+    len: u64,
+    position: u64,
+}
+
+impl std::io::Read for DbExport {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() || self.position >= self.len {
+            return Ok(0);
+        }
+
+        let count = (buf.len() as u64).min(self.len - self.position) as usize;
+        let physical_offset = HEADER_OFFSET_DATA as u64 + self.position;
+        let read = self
+            .handle
+            .read_with_u8_array_and_options(
+                &mut buf[..count],
+                &read_write_options(physical_offset as f64),
+            )
+            .map_err(|err| {
+                std::io::Error::other(format!("Failed to read database export: {err:?}"))
+            })? as usize;
+
+        if read == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "Database export ended before its recorded length",
+            ));
+        }
+
+        self.position += read as u64;
+        Ok(read)
+    }
+}
+
 /// SAHPoolVfs management tool.
 pub struct OpfsSAHPoolUtil {
     pool: &'static VfsAppData<SyncAccessHandleAppData>,
@@ -866,7 +989,7 @@ impl OpfsSAHPoolUtil {
 
 impl OpfsSAHPoolUtil {
     /// Imports the contents of an SQLite database, provided as a byte array
-    /// under the given name, overwriting any existing content.
+    /// under the given name, returning an error if the filename already exists.
     ///
     /// If the database is imported with WAL mode enabled,
     /// it will be forced to write back to legacy mode, see
@@ -882,9 +1005,33 @@ impl OpfsSAHPoolUtil {
         self.pool.import_db_unchecked(filename, bytes, false)
     }
 
+    /// Imports an SQLite database from a [`std::io::Read`] under the given name.
+    ///
+    /// Consumes the reader synchronously until EOF.
+    /// Returns an error if the filename already exists.
+    ///
+    /// Sets the database header to rollback-journal mode.
+    ///
+    /// For encrypted databases, use [`Self::import_db_from_reader_unchecked`].
+    pub fn import_db_from_reader(&self, filename: &str, reader: impl Read) -> Result<()> {
+        self.pool.import_db_from_reader(filename, reader)
+    }
+
+    /// `import_db_from_reader` without checking, can be used to import encrypted database.
+    pub fn import_db_from_reader_unchecked(&self, filename: &str, reader: impl Read) -> Result<()> {
+        self.pool
+            .import_db_from_reader_unchecked(filename, reader, false)
+            .map(|_| ())
+    }
+
     /// Export the database.
     pub fn export_db(&self, filename: &str) -> Result<Vec<u8>> {
         self.pool.export_db(filename)
+    }
+
+    /// Export the database file contents as a reader.
+    pub fn export_db_reader(&self, filename: &str) -> Result<DbExport> {
+        self.pool.export_db_reader(filename)
     }
 
     /// Delete the specified database, make sure that the database is closed.

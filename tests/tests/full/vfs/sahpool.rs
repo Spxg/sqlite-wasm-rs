@@ -11,7 +11,7 @@ pub async fn install_opfs_sahpool(
     install::<sqlite_wasm_rs::WasmOsCallback>(options, default_vfs).await
 }
 
-use crate::full::{check_persistent, prepare_simple_db};
+use crate::full::{check_persistent, check_result, prepare_simple_db};
 
 #[wasm_bindgen_test]
 async fn test_opfs_sah_vfs_default() {
@@ -131,6 +131,48 @@ async fn test_opfs_sah_vfs_util() {
 
     let state = check_persistent(db);
     assert_eq!(!state, check_persistent(db));
+}
+
+#[wasm_bindgen_test]
+async fn test_opfs_sah_vfs_import_export_round_trip() {
+    let cfg = OpfsSAHPoolCfgBuilder::new()
+        .vfs_name("test-vfs-import-export")
+        .directory("custom/import-export-test")
+        .clear_on_init(true)
+        .build();
+    let util = install_opfs_sahpool(&cfg, false).await.unwrap();
+
+    let mut db = std::ptr::null_mut();
+    let ret = unsafe {
+        sqlite3_open_v2(
+            c"test_import_export.db".as_ptr().cast(),
+            &mut db as *mut _,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+            c"test-vfs-import-export".as_ptr().cast(),
+        )
+    };
+    assert_eq!(SQLITE_OK, ret);
+
+    prepare_simple_db(db);
+
+    assert_eq!(SQLITE_OK, unsafe { sqlite3_close(db) });
+
+    let reader = util.export_db_reader("test_import_export.db").unwrap();
+    util.import_db_from_reader("test1.db", reader).unwrap();
+
+    let mut imported_db = std::ptr::null_mut();
+    let ret = unsafe {
+        sqlite3_open_v2(
+            c"test1.db".as_ptr().cast(),
+            &mut imported_db as *mut _,
+            SQLITE_OPEN_READONLY,
+            c"test-vfs-import-export".as_ptr().cast(),
+        )
+    };
+    assert_eq!(SQLITE_OK, ret);
+
+    check_result(imported_db);
+    assert_eq!(SQLITE_OK, unsafe { sqlite3_close(imported_db) });
 }
 
 #[wasm_bindgen_test]
