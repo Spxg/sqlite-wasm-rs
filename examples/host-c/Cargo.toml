@@ -1,0 +1,24 @@
+[package]
+name = "host-c"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Keep other examples from enabling wasm-bindgen through feature unification.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+sqlite-wasm-rs = { path = "../..", default-features = false }
+
+[build-dependencies]
+cc = "1"
+
+[features]
+sqlite3mc = ["sqlite-wasm-rs/sqlite3mc"]
+bindgen = ["sqlite-wasm-rs/bindgen"]
+
+[patch.crates-io]
+rsqlite-vfs = { path = "../../crates/rsqlite-vfs" }

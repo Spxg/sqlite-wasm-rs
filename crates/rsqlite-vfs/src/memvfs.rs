@@ -1,153 +1,242 @@
-//! memory vfs, used as the default VFS
+//! A platform-independent, single-threaded in-memory VFS.
 //!
-//! ```ignore
-//! fn open_db() {
-//!     // open with memory vfs
-//!     let mut db = core::ptr::null_mut();
-//!     let ret = unsafe {
-//!         ffi::sqlite3_open_v2(
-//!             c"mem.db".as_ptr().cast(),
-//!             &mut db as *mut _,
-//!             ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
-//!             core::ptr::null()
-//!         )
-//!     };
-//!     assert_eq!(ffi::SQLITE_OK, ret);
-//! }
-//! ```
-//!
-//! Data is stored in memory, this is the default vfs, and reading
-//! and writing are very fast, after all, in memory.
-//!
-//! Refresh the page and data will be lost, and you also need to
-//! pay attention to the memory size limit of the browser page.
+//! Call [`install`] before use; select `memvfs` by name or install as default.
+//! Files are volatile and limited by address space and memory. Stay on the
+//! installing thread and use one connection per database: locks are no-ops,
+//! and repeated opens share data without enforcing this restriction.
 
 use crate::ffi as bindings;
+use crate::transfer::{DbTransfer, ExportSource, ImportTarget, TransferError};
 
 use crate::{
-    ImportDbError, MemChunksFile, OsCallback, SQLiteIoMethods, SQLiteVfs, SQLiteVfsFile,
-    VfsAppData, VfsError, VfsFile, VfsResult, VfsStore, check_import_db,
+    AccessMode, FileKind, LockLevel, MemChunksFile, OpenAccess, OpenOptions, OpenedFile,
+    OsCallback, RegisterVfsError, SQLiteIoMethods, SQLiteVfs, SyncOptions, VfsAppData, VfsError,
+    VfsErrorCode, VfsFile, VfsFilesManager, VfsResult, VfsStore,
 };
 
 use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::format;
+use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
-use alloc::{format, vec};
 use core::cell::RefCell;
+use core::convert::Infallible;
 use core::ffi::CStr;
-use core::marker::PhantomData;
-use core::time::Duration;
-use hashbrown::HashMap;
+use core::sync::atomic::{AtomicPtr, Ordering};
 
 const VFS_NAME: &CStr = c"memvfs";
+const MAX_PATH_SIZE: i32 = 1024;
+// SQLite may append '-' followed by up to 11 characters (e.g. super-journals).
+const MAX_DB_FILENAME_SIZE: usize = MAX_PATH_SIZE as usize - 12;
 
-type Result<T> = core::result::Result<T, MemVfsError>;
+// Records our allocation, so an unrelated VFS with the same name is never cast
+// to MemAppData or freed by uninstall. This does not make the VFS thread-safe.
+static MEM_VFS: AtomicPtr<bindings::sqlite3_vfs> = AtomicPtr::new(core::ptr::null_mut());
 
-pub enum MemFile {
-    Main(MemChunksFile),
-    Temp(MemChunksFile),
+type Result<T, E = MemVfsError> = core::result::Result<T, E>;
+
+fn validate_db_filename(name: &str) -> Result<()> {
+    if name.is_empty() || name.as_bytes().contains(&0) || name.len() > MAX_DB_FILENAME_SIZE {
+        return Err(MemVfsError::InvalidFilename);
+    }
+
+    Ok(())
 }
 
-impl MemFile {
-    fn new(flags: i32) -> Self {
-        if flags & bindings::SQLITE_OPEN_MAIN_DB == 0 {
-            Self::Temp(MemChunksFile::default())
-        } else {
-            Self::Main(MemChunksFile::waiting_for_write())
+#[derive(Clone)]
+struct MemAppData {
+    os: Rc<dyn OsCallback>,
+    files: Rc<RefCell<BTreeMap<String, Rc<RefCell<MemChunksFile>>>>>,
+    error: Rc<RefCell<Option<VfsError>>>,
+}
+
+impl MemAppData {
+    fn new(os: impl OsCallback + 'static) -> Self {
+        Self {
+            os: Rc::new(os),
+            files: Rc::default(),
+            error: Rc::default(),
         }
     }
+}
 
-    fn file(&self) -> &MemChunksFile {
-        let (MemFile::Main(file) | MemFile::Temp(file)) = self;
-        file
-    }
+impl core::ops::Deref for MemAppData {
+    type Target = RefCell<BTreeMap<String, Rc<RefCell<MemChunksFile>>>>;
 
-    fn file_mut(&mut self) -> &mut MemChunksFile {
-        let (MemFile::Main(file) | MemFile::Temp(file)) = self;
-        file
+    fn deref(&self) -> &Self::Target {
+        &self.files
     }
 }
 
-impl VfsFile for MemFile {
-    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<bool> {
-        self.file().read(buf, offset)
-    }
-
-    fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()> {
-        self.file_mut().write(buf, offset)
-    }
-
-    fn truncate(&mut self, size: usize) -> VfsResult<()> {
-        self.file_mut().truncate(size)
-    }
-
-    fn flush(&mut self) -> VfsResult<()> {
-        self.file_mut().flush()
-    }
-
-    fn size(&self) -> VfsResult<usize> {
-        self.file().size()
-    }
+/// An independent open instance sharing only the underlying file data.
+struct MemFileHandle {
+    file: Rc<RefCell<MemChunksFile>>,
+    read_only: bool,
 }
 
-type MemAppData = RefCell<HashMap<String, MemFile>>;
-
-#[derive(Copy, Clone, Default)]
-struct MemStore;
-
-impl VfsStore<MemFile, MemAppData> for MemStore {
-    fn add_file(vfs: *mut bindings::sqlite3_vfs, file: &str, flags: i32) -> VfsResult<()> {
-        let app_data = unsafe { Self::app_data(vfs) };
-        app_data
-            .borrow_mut()
-            .insert(file.into(), MemFile::new(flags));
-        Ok(())
-    }
-
-    fn contains_file(vfs: *mut bindings::sqlite3_vfs, file: &str) -> VfsResult<bool> {
-        let app_data = unsafe { Self::app_data(vfs) };
-        Ok(app_data.borrow().contains_key(file))
-    }
-
-    fn delete_file(vfs: *mut bindings::sqlite3_vfs, file: &str) -> VfsResult<()> {
-        let app_data = unsafe { Self::app_data(vfs) };
-        if app_data.borrow_mut().remove(file).is_none() {
+impl MemFileHandle {
+    fn check_writable(&self) -> VfsResult<()> {
+        if self.read_only {
             return Err(VfsError::new(
-                bindings::SQLITE_IOERR_DELETE,
-                format!("{file} not found"),
+                VfsErrorCode::ReadOnly,
+                "file is read-only".into(),
             ));
         }
         Ok(())
     }
+}
 
-    fn with_file<F: Fn(&MemFile) -> VfsResult<i32>>(
-        vfs_file: &SQLiteVfsFile,
-        f: F,
-    ) -> VfsResult<i32> {
-        let name = unsafe { vfs_file.name() };
-        let app_data = unsafe { Self::app_data(vfs_file.vfs) };
-        match app_data.borrow().get(name) {
-            Some(file) => f(file),
-            None => Err(VfsError::new(
-                bindings::SQLITE_IOERR,
-                format!("{name} not found"),
-            )),
-        }
+impl VfsFile for MemFileHandle {
+    fn read(&mut self, buf: &mut [u8], offset: u64) -> VfsResult<usize> {
+        self.file.borrow_mut().read(buf, offset)
     }
 
-    fn with_file_mut<F: Fn(&mut MemFile) -> VfsResult<i32>>(
-        vfs_file: &SQLiteVfsFile,
-        f: F,
-    ) -> VfsResult<i32> {
-        let name = unsafe { vfs_file.name() };
-        let app_data = unsafe { Self::app_data(vfs_file.vfs) };
-        match app_data.borrow_mut().get_mut(name) {
-            Some(file) => f(file),
-            None => Err(VfsError::new(
-                bindings::SQLITE_IOERR,
-                format!("{name} not found"),
-            )),
+    fn write(&mut self, buf: &[u8], offset: u64) -> VfsResult<()> {
+        self.check_writable()?;
+        self.file.borrow_mut().write(buf, offset)
+    }
+
+    fn truncate(&mut self, size: u64) -> VfsResult<()> {
+        self.check_writable()?;
+        self.file.borrow_mut().truncate(size)
+    }
+
+    fn sync(&mut self, options: SyncOptions) -> VfsResult<()> {
+        self.file.borrow_mut().sync(options)
+    }
+
+    // Multiple connections to the same database are unsupported, not rejected.
+    fn lock(&mut self, level: LockLevel) -> VfsResult<()> {
+        self.file.borrow_mut().lock(level)
+    }
+
+    fn unlock(&mut self, level: LockLevel) -> VfsResult<()> {
+        self.file.borrow_mut().unlock(level)
+    }
+
+    fn check_reserved_lock(&self) -> VfsResult<bool> {
+        self.file.borrow().check_reserved_lock()
+    }
+
+    fn size(&self) -> VfsResult<u64> {
+        self.file.borrow().size()
+    }
+}
+
+#[derive(Copy, Clone, Default)]
+struct MemStore;
+
+impl VfsStore for MemStore {
+    type File = MemFileHandle;
+    type AppData = MemAppData;
+
+    fn record_error(data: &MemAppData, error: VfsError) {
+        data.error.replace(Some(error));
+    }
+
+    fn last_error(data: &MemAppData) -> Option<VfsError> {
+        data.error.borrow().clone()
+    }
+
+    fn open_file(
+        app_data: &MemAppData,
+        request: crate::OpenRequest<'_>,
+    ) -> VfsResult<OpenedFile<MemFileHandle>> {
+        let options = request.options;
+        let Some(filename) = request.filename else {
+            return Ok(OpenedFile {
+                file: MemFileHandle {
+                    file: Rc::new(RefCell::new(MemChunksFile::default())),
+                    read_only: options.access() == OpenAccess::ReadOnly,
+                },
+                access: options.access(),
+            });
+        };
+        let name = filename.path();
+
+        if options.kind() == Some(FileKind::MainDb) {
+            validate_db_filename(name)
+                .map_err(|err| VfsError::new(VfsErrorCode::CantOpen, format!("{err}").into()))?;
         }
+
+        let mut files = app_data.borrow_mut();
+        let file = match files.get(name) {
+            Some(_) if options.exclusive() => {
+                return Err(VfsError::new(
+                    VfsErrorCode::CantOpen,
+                    format!("file already exists: {name:?}").into(),
+                ));
+            }
+            Some(file) => file.clone(),
+            None if options.create() => {
+                let file = if options.kind() == Some(FileKind::MainDb) {
+                    MemChunksFile::waiting_for_write()
+                } else {
+                    MemChunksFile::default()
+                };
+                let file = Rc::new(RefCell::new(file));
+                files.insert(name.into(), file.clone());
+                file
+            }
+            None => {
+                return Err(VfsError::new(
+                    VfsErrorCode::CantOpen,
+                    format!("file not found: {name:?}").into(),
+                ));
+            }
+        };
+        Ok(OpenedFile {
+            file: MemFileHandle {
+                file,
+                read_only: options.access() == OpenAccess::ReadOnly,
+            },
+            access: options.access(),
+        })
+    }
+
+    fn close_file(
+        app_data: &MemAppData,
+        name: Option<&str>,
+        file: MemFileHandle,
+        options: OpenOptions,
+    ) -> VfsResult<()> {
+        let Some(name) = name else {
+            return Ok(());
+        };
+        if options.delete_on_close() {
+            let mut files = app_data.borrow_mut();
+            // Do not delete a replacement created under the same name.
+            if files
+                .get(name)
+                .is_some_and(|current| Rc::ptr_eq(current, &file.file))
+            {
+                files.remove(name);
+            }
+        }
+        Ok(())
+    }
+
+    fn access(app_data: &MemAppData, file: &str, _mode: AccessMode) -> VfsResult<bool> {
+        // Every file in this flat memory namespace is readable and writable.
+        Ok(app_data.borrow().contains_key(file))
+    }
+
+    fn full_pathname(_data: &MemAppData, name: &str) -> VfsResult<String> {
+        validate_db_filename(name)
+            .map_err(|err| VfsError::new(VfsErrorCode::CantOpen, format!("{err}").into()))?;
+
+        Ok(name.into())
+    }
+
+    fn delete_file(app_data: &MemAppData, file: &str, _sync_dir: bool) -> VfsResult<()> {
+        if app_data.borrow_mut().remove(file).is_none() {
+            return Err(VfsError::new(
+                VfsErrorCode::IoDelete,
+                format!("file not found: {file:?}").into(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -155,227 +244,299 @@ impl VfsStore<MemFile, MemAppData> for MemStore {
 struct MemIoMethods;
 
 impl SQLiteIoMethods for MemIoMethods {
-    type File = MemFile;
-    type AppData = MemAppData;
     type Store = MemStore;
-
-    const VERSION: ::core::ffi::c_int = 1;
 }
 
 #[derive(Clone, Copy, Default)]
-struct MemVfs<C>(PhantomData<C>);
+struct MemVfs;
 
-impl<C> SQLiteVfs<MemIoMethods> for MemVfs<C>
-where
-    C: OsCallback,
-{
-    const VERSION: ::core::ffi::c_int = 1;
+impl SQLiteVfs<MemIoMethods> for MemVfs {
+    type Os = dyn OsCallback;
 
-    fn sleep(dur: Duration) {
-        C::sleep(dur);
+    fn os(data: &MemAppData) -> &Self::Os {
+        &*data.os
     }
 
-    fn random(buf: &mut [u8]) {
-        C::random(buf);
-    }
-
-    fn epoch_timestamp_in_ms() -> i64 {
-        C::epoch_timestamp_in_ms()
-    }
+    const MAX_PATH_SIZE: ::core::ffi::c_int = MAX_PATH_SIZE;
 }
 
+/// Memory VFS management errors. Match variants rather than display text.
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum MemVfsError {
+    #[error("memory VFS is not installed")]
+    NotInstalled,
     #[error(transparent)]
-    ImportDb(#[from] ImportDbError),
-    #[error("Generic error: {0}")]
-    Generic(String),
+    Registration(#[from] RegisterVfsError),
+    #[error("filename must be nonempty, NUL-free and at most 1012 UTF-8 bytes")]
+    InvalidFilename,
+    #[error("file already exists: {0:?}")]
+    AlreadyExists(String),
+    #[error("file not found: {0:?}")]
+    NotFound(String),
+    #[error(transparent)]
+    Io(#[from] VfsError),
+    #[error(transparent)]
+    Transfer(#[from] TransferError),
 }
 
-/// MemVfs management tool.
-pub struct MemVfsUtil<C>(&'static VfsAppData<MemAppData>, PhantomData<C>);
+/// A management handle that keeps memory files alive after VFS uninstallation.
+///
+/// After reinstallation, obtain a new handle to access the new VFS instance.
+/// Import [`VfsFilesManager`] for file management and [`DbTransfer`] for transfers.
+pub struct MemVfsUtil(MemAppData);
 
-impl<C> Default for MemVfsUtil<C>
-where
-    C: OsCallback,
-{
-    fn default() -> Self {
-        MemVfsUtil::new()
-    }
-}
-
-impl<C> MemVfsUtil<C>
-where
-    C: OsCallback,
-{
-    /// Get management tool
-    pub fn new() -> Self {
-        // Registers memvfs globally if not already present.
-        MemVfsUtil(unsafe { install::<C>() }, PhantomData)
-    }
-}
-
-impl<C> MemVfsUtil<C>
-where
-    C: OsCallback,
-{
-    fn import_db_unchecked_impl(
-        &self,
-        filename: &str,
-        bytes: &[u8],
-        page_size: usize,
-        clear_wal: bool,
-    ) -> Result<()> {
-        if self.exists(filename) {
-            return Err(MemVfsError::Generic(format!(
-                "{filename} file already exists"
-            )));
+impl MemVfsUtil {
+    /// Gets the installed memory VFS without registering it or changing the
+    /// default VFS. SQLite's own automatic initialization may still run.
+    ///
+    /// # Safety
+    ///
+    /// Call on the installing thread, with serialized access to SQLite VFS
+    /// registration. All SQLite use of memvfs must stay on that same thread.
+    pub unsafe fn get() -> Result<Self> {
+        let vfs = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
+        if vfs.is_null() {
+            return Err(MemVfsError::NotInstalled);
         }
+        check_owned(vfs)?;
+        Ok(Self(VfsAppData::<MemAppData>::get(vfs).data.clone()))
+    }
+}
 
-        self.0.borrow_mut().insert(filename.into(), {
-            let mut file = MemFile::Main(MemChunksFile::new(page_size));
-            file.write(bytes, 0).unwrap();
-            if clear_wal {
-                // Force rollback journal mode by updating the header at offset 18.
-                file.write(&[1, 1], 18).unwrap();
-            }
-            file
-        });
+impl VfsFilesManager for MemVfsUtil {
+    type Error = Infallible;
 
+    fn remove(&self, filename: &str) -> Result<bool, Self::Error> {
+        Ok(self.0.borrow_mut().remove(filename).is_some())
+    }
+
+    fn clear(&self) -> Result<(), Self::Error> {
+        core::mem::take(&mut *self.0.borrow_mut());
         Ok(())
     }
 
-    /// Import the database.
-    ///
-    /// If the database is imported with WAL mode enabled,
-    /// it will be forced to write back to legacy mode, see
-    /// <https://sqlite.org/forum/forumpost/67882c5b04>
-    ///
-    /// If the imported database is encrypted, use `import_db_unchecked` instead.
-    pub fn import_db(&self, filename: &str, bytes: &[u8]) -> Result<()> {
-        let page_size = check_import_db(bytes)?;
-        self.import_db_unchecked_impl(filename, bytes, page_size, true)
+    fn contains(&self, filename: &str) -> Result<bool, Self::Error> {
+        Ok(self.0.borrow().contains_key(filename))
     }
 
-    /// `import_db` without checking, can be used to import encrypted database.
-    pub fn import_db_unchecked(
-        &self,
-        filename: &str,
-        bytes: &[u8],
-        page_size: usize,
-    ) -> Result<()> {
-        self.import_db_unchecked_impl(filename, bytes, page_size, false)
+    fn names(&self) -> Result<Vec<String>, Self::Error> {
+        Ok(self.0.borrow().keys().cloned().collect())
     }
 
-    /// Export the database.
-    pub fn export_db(&self, filename: &str) -> Result<Vec<u8>> {
-        let name2file = self.0.borrow();
+    fn len(&self) -> Result<usize, Self::Error> {
+        Ok(self.0.borrow().len())
+    }
+}
 
-        if let Some(file) = name2file.get(filename) {
-            let file_size = file.size().unwrap();
-            let mut ret = vec![0; file_size];
-            file.read(&mut ret, 0).unwrap();
-            Ok(ret)
-        } else {
-            Err(MemVfsError::Generic(
-                "The file to be exported does not exist".into(),
-            ))
+/// Imports use 4 KiB memory chunks independently of SQLite's page size.
+/// New names must be nonempty, NUL-free and at most 1012 UTF-8 bytes.
+impl DbTransfer for MemVfsUtil {
+    type Error = MemVfsError;
+    type Target<'a> = MemImportTarget<'a>;
+    type Source<'a> = MemExportSource;
+
+    fn create_import(&self, name: &str, size: u64) -> Result<Self::Target<'_>> {
+        validate_db_filename(name)?;
+        if self.0.borrow().contains_key(name) {
+            return Err(MemVfsError::AlreadyExists(name.into()));
         }
+        usize::try_from(size).map_err(|_| {
+            VfsError::new(VfsErrorCode::Full, "file size exceeds address space".into())
+        })?;
+
+        Ok(MemImportTarget {
+            util: self,
+            filename: name.into(),
+            file: MemChunksFile::new(4096),
+        })
     }
 
-    /// Delete the specified database, make sure that the database is closed.
-    pub fn delete_db(&self, filename: &str) {
-        self.0.borrow_mut().remove(filename);
-    }
-
-    /// Delete all database, make sure that all database is closed.
-    pub fn clear_all(&self) {
-        core::mem::take(&mut *self.0.borrow_mut());
-    }
-
-    /// Does the database exists.
-    pub fn exists(&self, filename: &str) -> bool {
-        self.0.borrow().contains_key(filename)
-    }
-
-    /// List all files.
-    pub fn list(&self) -> Vec<String> {
-        self.0.borrow().keys().cloned().collect()
-    }
-
-    /// Number of files.
-    pub fn count(&self) -> usize {
-        self.0.borrow().len()
+    fn open_export(&self, name: &str) -> Result<Self::Source<'_>> {
+        let file = self
+            .0
+            .borrow()
+            .get(name)
+            .cloned()
+            .ok_or_else(|| MemVfsError::NotFound(name.into()))?;
+        let size = file.borrow().size()?;
+        Ok(MemExportSource { file, size })
     }
 }
 
-/// Install the memory VFS from the SQLite context
-///
-/// This adds the VFS implementation to SQLite
-///
-/// # Safety
-///
-/// This requires a valid SQLite global context
-pub unsafe fn install<C: OsCallback>() -> &'static VfsAppData<MemAppData> {
-    unsafe {
-        let vfs = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
+#[doc(hidden)]
+pub struct MemImportTarget<'a> {
+    util: &'a MemVfsUtil,
+    filename: String,
+    file: MemChunksFile,
+}
 
-        let vfs = if vfs.is_null() {
-            let vfs = Box::leak(Box::new(MemVfs::<C>::vfs(
-                VFS_NAME.as_ptr(),
-                VfsAppData::new(MemAppData::default()).leak(),
-            )));
-            assert_eq!(
-                bindings::sqlite3_vfs_register(vfs, 1),
-                bindings::SQLITE_OK,
-                "failed to register memvfs"
-            );
-            vfs as *mut bindings::sqlite3_vfs
-        } else {
-            vfs
-        };
+impl ImportTarget for MemImportTarget<'_> {
+    type Error = MemVfsError;
 
-        MemStore::app_data(vfs)
+    fn write_at(&mut self, offset: u64, bytes: &[u8]) -> Result<()> {
+        self.file.write(bytes, offset)?;
+        Ok(())
+    }
+
+    fn commit(self) -> Result<()> {
+        let mut files = self.util.0.borrow_mut();
+        if files.contains_key(&self.filename) {
+            return Err(MemVfsError::AlreadyExists(self.filename));
+        }
+        files.insert(self.filename, Rc::new(RefCell::new(self.file)));
+        Ok(())
+    }
+
+    fn abort(self) -> Result<()> {
+        Ok(())
+    }
+
+    fn abort_with_error(self, error: MemVfsError) -> MemVfsError {
+        error
     }
 }
 
-/// Uninstall the memory VFS from the SQLite context
+#[doc(hidden)]
+pub struct MemExportSource {
+    file: Rc<RefCell<MemChunksFile>>,
+    size: u64,
+}
+
+impl ExportSource for MemExportSource {
+    type Error = MemVfsError;
+
+    fn size(&self) -> u64 {
+        self.size
+    }
+
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<usize> {
+        Ok(self.file.borrow_mut().read(buf, offset)?)
+    }
+}
+
+/// Installs memvfs, reusing its owned registration, services and data if present.
 ///
-/// This removes the VFS implementation from SQLite
+/// Re-registers the same allocation if raw SQLite unregistration detached it.
 ///
 /// # Safety
 ///
-/// This should only be called if you previously registered the memory VFS with the SQLite context
-/// Otherwise this requires a valid SQLite global context
-pub unsafe fn uninstall() {
-    unsafe {
-        let vfs = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
+/// Use a valid SQLite context with serialized registration. Installation,
+/// management, file access and uninstallation must stay on one thread.
+/// Raw unregistration is allowed; never free or replace owned VFS/app data
+/// through raw pointers. Use [`uninstall`] for cleanup.
+pub unsafe fn install(
+    os: impl OsCallback + 'static,
+    default_vfs: bool,
+) -> Result<MemVfsUtil, RegisterVfsError> {
+    let registered = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
+    if !registered.is_null() {
+        check_owned(registered)?;
+    }
+    // Lookup may initialize SQLite and install memvfs through sqlite3_os_init.
+    // Read ownership afterwards, independently of registry membership.
+    let owned = MEM_VFS.load(Ordering::Relaxed);
 
-        if !vfs.is_null() {
-            assert_eq!(
-                bindings::sqlite3_vfs_unregister(vfs),
-                bindings::SQLITE_OK,
-                "failed to unregister memvfs"
-            );
-            drop(VfsAppData::<MemAppData>::from_raw(
-                (*vfs).pAppData as *mut _,
-            ));
+    let vfs = if owned.is_null() {
+        // SAFETY: The name is static, app data is retained until uninstall,
+        // and MemVfs/MemIoMethods use the matching default file layout.
+        // The caller guarantees serialized access to the SQLite context.
+        let data = VfsAppData::new(MemAppData::new(os)).leak();
+        let vfs = Box::into_raw(Box::new(MemVfs::vfs(VFS_NAME.as_ptr(), data)));
+        let code = bindings::sqlite3_vfs_register(vfs, i32::from(default_vfs));
+        if code != bindings::SQLITE_OK {
             drop(Box::from_raw(vfs));
+            drop(VfsAppData::from_raw(data));
+            return Err(RegisterVfsError::RegisterVfs(
+                VfsErrorCode::from_raw(code).expect("SQLite must return a valid error code"),
+            ));
         }
+        MEM_VFS.store(vfs, Ordering::Relaxed);
+        vfs
+    } else {
+        if registered.is_null() || default_vfs {
+            let code = bindings::sqlite3_vfs_register(owned, i32::from(default_vfs));
+            if code != bindings::SQLITE_OK {
+                return Err(RegisterVfsError::RegisterVfs(
+                    VfsErrorCode::from_raw(code).expect("SQLite must return a valid error code"),
+                ));
+            }
+        }
+        owned
+    };
+
+    Ok(MemVfsUtil(VfsAppData::<MemAppData>::get(vfs).data.clone()))
+}
+
+fn check_owned(vfs: *mut bindings::sqlite3_vfs) -> Result<(), RegisterVfsError> {
+    if vfs != MEM_VFS.load(Ordering::Relaxed) {
+        return Err(RegisterVfsError::NameConflict("memvfs".into()));
     }
+    Ok(())
+}
+
+/// Frees the owned registration, even if already unregistered through SQLite.
+///
+/// Leaves any same-name replacement alone. [`MemVfsUtil`] handles retain their file data.
+///
+/// # Safety
+///
+/// Use a valid SQLite context on the installing thread; serialize with VFS
+/// installation/uninstallation. Close all files and retire VFS/app-data
+/// references (`MemVfsUtil` may outlive uninstall). Owned allocations must
+/// not have been freed or replaced through raw pointers.
+pub unsafe fn uninstall() -> Result<(), RegisterVfsError> {
+    let registered = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
+    let vfs = MEM_VFS.load(Ordering::Relaxed);
+
+    if vfs.is_null() {
+        // A same-name VFS belongs to someone else.
+        if !registered.is_null() {
+            check_owned(registered)?;
+        }
+        return Ok(());
+    }
+
+    let code = bindings::sqlite3_vfs_unregister(vfs);
+    if code != bindings::SQLITE_OK {
+        return Err(RegisterVfsError::UnregisterVfs(
+            VfsErrorCode::from_raw(code).expect("SQLite must return a valid error code"),
+        ));
+    }
+
+    MEM_VFS.store(core::ptr::null_mut(), Ordering::Relaxed);
+    // Reconstitute both owners before running backend destructors.
+    let vfs = Box::from_raw(vfs);
+    let data = Box::from_raw(vfs.pAppData.cast::<VfsAppData<MemAppData>>());
+    drop(data);
+    drop(vfs);
+
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        VfsAppData,
-        memvfs::{MemAppData, MemFile, MemStore},
-        test_suite::test_vfs_store,
-    };
+    use super::{MemAppData, MemStore};
+    use crate::{test_suite::test_vfs_store, OsCallback, VfsAppData, VfsResult};
 
     #[test]
     fn test_memory_vfs_store() {
-        test_vfs_store::<MemAppData, MemFile, MemStore>(VfsAppData::new(MemAppData::default()))
-            .unwrap();
+        struct CallbackOs;
+
+        impl OsCallback for CallbackOs {
+            fn sleep(&self, _: core::time::Duration) {}
+
+            fn random(&self, buf: &mut [u8]) -> usize {
+                assert!(!buf.is_empty());
+                buf.fill(42);
+                buf.len()
+            }
+
+            fn epoch_timestamp_in_ms(&self) -> VfsResult<i64> {
+                Ok(0)
+            }
+        }
+
+        test_vfs_store::<MemStore>(VfsAppData::new(MemAppData::new(CallbackOs))).unwrap();
     }
 }

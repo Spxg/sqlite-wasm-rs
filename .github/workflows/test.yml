@@ -1,57 +1,63 @@
 name: Test
+
 on:
   push:
-    branches: [ "master" ]
+    branches: [master]
   pull_request:
-    branches: [ "master" ]
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
-jobs:
-  test_bundled:
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-    - uses: actions/checkout@v4
-    - name: Install wasm-pack
-      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-    - name: Test bundled
-      run: |
-        wasm-pack test --node
-    - name: Test use prebuild libsqlite3.a
-      if: matrix.os != 'windows-latest'
-      run: |
-        cd examples/use-prebuild-lib
-        RUSTFLAGS="-L $(pwd)" wasm-pack test --node
 
-  test_bundled_sqlite3mc:
+jobs:
+  test_sqlite:
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+        features:
+          - wasm-bindgen
+          - wasm-bindgen,sqlite3mc
+          - wasm-bindgen,bindgen
+          - wasm-bindgen,bindgen,sqlite3mc
     steps:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-    - name: Test bundled sqlite3mc
-      run: |
-        wasm-pack test --node --features sqlite3mc
+    - name: Test unit and integration tests
+      run: wasm-pack test --node --features ${{ matrix.features }}
+    - name: Test prebuilt libsqlite3.a
+      if: matrix.features == 'wasm-bindgen'
+      working-directory: examples/use-prebuild-lib
+      run: RUSTFLAGS="-L $(pwd)" wasm-pack test --node
 
   test_diesel:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - uses: taiki-e/install-action@60581cd7025e0e855cebd745379013e286d9c787 # v2.64.2
-      with:
-        tool: wasm-bindgen@0.2.108
     - name: Run diesel tests
       run: |
-        git clone https://github.com/diesel-rs/diesel.git
+        git clone --depth 1 https://github.com/diesel-rs/diesel.git
         cd diesel
         rustup target add wasm32-unknown-unknown
         printf "[patch.crates-io]\n" >> Cargo.toml
         printf "sqlite-wasm-rs = { path = \"..\" }\n" >> Cargo.toml
+        printf "rsqlite-vfs = { path = \"../crates/rsqlite-vfs\" }\n" >> Cargo.toml
+        printf "sqlite-wasm-vfs = { path = \"../crates/sqlite-wasm-vfs\" }\n" >> Cargo.toml
+        sed -i '/^sqlite-wasm-rs = /s/version = "[^"]*"/version = "0.6"/' diesel/Cargo.toml
+        sed -i 's/^sqlite-wasm-rs = ".*"/sqlite-wasm-rs = { version = "0.6", features = ["wasm-bindgen"] }/' examples/sqlite/wasm/Cargo.toml diesel_tests/Cargo.toml
+        sed -i 's/^sqlite-wasm-vfs = ".*"/sqlite-wasm-vfs = { version = "0.3", features = ["sahpool"] }/' examples/sqlite/wasm/Cargo.toml
+        # xtask launches nested Cargo commands; enable the adapter in the dependency itself.
+        sed -i '/^sqlite-wasm-rs = /s/default-features = false/default-features = false, features = ["wasm-bindgen"]/' diesel/Cargo.toml
+        grep -E '^sqlite-wasm-rs = .*features = \["wasm-bindgen"\]' diesel/Cargo.toml
+        wasm_bindgen_version=$(cargo metadata --format-version 1 --filter-platform wasm32-unknown-unknown --no-default-features --features diesel/sqlite | jq -er '[.packages[] | select(.name == "wasm-bindgen") | .version] | unique | if length == 1 then .[0] else error("expected one wasm-bindgen version") end')
+        cargo install wasm-bindgen-cli --version "$wasm_bindgen_version" --locked
         DATABASE_URL=":memory:" cargo xtask run-tests --wasm sqlite --no-example-schema-check -- --no-fail-fast
 
   test_rusqlite:
@@ -62,137 +68,122 @@ jobs:
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - name: Run rusqlite tests
       run: |
-        git clone https://github.com/rusqlite/rusqlite.git
+        git clone --depth 1 https://github.com/rusqlite/rusqlite.git
         cd rusqlite
+        sed -i '/^sqlite-wasm-rs = /s/version = "[^"]*"/version = "0.6"/' Cargo.toml
         printf "[patch.crates-io]\n" >> Cargo.toml
         printf "sqlite-wasm-rs = { path = \"..\" }\n" >> Cargo.toml
-        WASM_BINDGEN_TEST_TIMEOUT=60 wasm-pack test --node --features modern-full
+        printf "rsqlite-vfs = { path = \"../crates/rsqlite-vfs\" }\n" >> Cargo.toml
+        printf "sqlite-wasm-vfs = { path = \"../crates/sqlite-wasm-vfs\" }\n" >> Cargo.toml
+        WASM_BINDGEN_TEST_TIMEOUT=60 wasm-pack test --node --features modern-full,sqlite-wasm-rs/wasm-bindgen
 
-  test_clippy:
+  test_host_examples:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        example: [host-js, host-c]
+    steps:
+    - uses: actions/checkout@v4
+    - name: Test without wasm-bindgen
+      working-directory: examples/${{ matrix.example }}
+      run: |
+        rustup target add wasm32-unknown-unknown
+        for features in "" sqlite3mc bindgen bindgen,sqlite3mc; do
+          cargo build --target wasm32-unknown-unknown --features "$features"
+          node run.mjs
+          cargo tree --target wasm32-unknown-unknown --edges normal --features "$features" > dependencies.txt
+          if grep -E 'wasm-bindgen|js-sys' dependencies.txt; then
+            exit 1
+          fi
+        done
+
+  test_style:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - name: Check formatting
+      run: |
+        cargo fmt --all --check
+        cargo fmt --manifest-path examples/host-js/Cargo.toml --check
+        cargo fmt --manifest-path examples/host-c/Cargo.toml --check
     - name: Check clippy
       run: |
         rustup target add wasm32-unknown-unknown
         cargo clippy --no-default-features --target wasm32-unknown-unknown -- -D warnings
-
-  test_implement_a_vfs:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Install wasm-pack
-      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-    - name: Test implement-a-vfs example
-      run: |
-        cd examples/implement-a-vfs
-        wasm-pack test --node -- -- --nocapture
-
-  test_fmt:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Test rustfmt
-      run: cargo fmt --check
+        cargo clippy --all-features --target wasm32-unknown-unknown -- -D warnings
 
   test_atomics:
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@nightly
+      with:
+        components: rust-src
     - name: Install wasm-pack
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-    - name: Test
-      run: |
-        rustup toolchain install nightly
-        rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
-        cd tests
-        CFLAGS_wasm32_unknown_unknown='-matomics' RUSTFLAGS='-Ctarget-feature=+atomics -Clink-args=--shared-memory -Clink-args=--max-memory=1073741824 -Clink-args=--import-memory -Clink-args=--export=__wasm_init_tls -Clink-args=--export=__tls_size -Clink-args=--export=__tls_align -Clink-args=--export=__tls_base -Clink-args=--export=__heap_base' rustup run nightly wasm-pack test --chrome --headless -Z build-std=panic_abort,std
+    - name: Test shared-memory host adapter
+      env:
+        CFLAGS_wasm32_unknown_unknown: -matomics
+        RUSTFLAGS: >-
+          -Ctarget-feature=+atomics
+          -Clink-args=--shared-memory
+          -Clink-args=--max-memory=1073741824
+          -Clink-args=--import-memory
+          -Clink-args=--export=__wasm_init_tls
+          -Clink-args=--export=__tls_size
+          -Clink-args=--export=__tls_align
+          -Clink-args=--export=__tls_base
+          -Clink-args=--export=__heap_base
+      run: wasm-pack test --chrome --headless --features wasm-bindgen -Z build-std=panic_abort,std
 
   test_msrv:
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@1.85.0
+    # Keep Rust 1.81 compile compatibility; run CI validation on 1.82.
+    - uses: dtolnay/rust-toolchain@1.82.0
       with:
         targets: wasm32-unknown-unknown
-        components: rust-src
     - name: Test MSRV
       run: |
-        cargo build --target wasm32-unknown-unknown
-        cargo build --features sqlite3mc --target wasm32-unknown-unknown
+        cargo build --features wasm-bindgen --target wasm32-unknown-unknown
+        cargo build --features wasm-bindgen,sqlite3mc --target wasm32-unknown-unknown
 
-  test_nodejs:
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+  test_examples:
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-    - name: Test
+    - name: Test Node.js example
+      working-directory: examples/nodejs
       run: |
-        cd examples/nodejs
         wasm-pack build --target nodejs
         node pkg/nodejs.js
-
-  test_sqlite_wasm_vec:
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-    - uses: actions/checkout@v4
-    - name: Install wasm-pack
-      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-    - name: Test
-      run: |
-        cd extensions/sqlite-vec
-        wasm-pack test --node
+    - name: Test sqlite-vec extension
+      working-directory: extensions/sqlite-vec
+      run: wasm-pack test --node
 
   test_sqlite_wasm_vfs:
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-    - name: Test
+    - name: Check library feature configurations without dev-dependencies
       run: |
-        cd crates/sqlite-wasm-vfs
-        wasm-pack test --node
+        rustup target add wasm32-unknown-unknown
+        cargo check -p sqlite-wasm-vfs --lib --target wasm32-unknown-unknown --no-default-features
+        cargo check -p sqlite-wasm-vfs --lib --target wasm32-unknown-unknown --features sahpool
+    - name: Test SAH pool in a dedicated worker
+      working-directory: crates/sqlite-wasm-vfs
+      run: wasm-pack test --chrome --headless --features sahpool
 
-  test_sqlite_wasm_tests:
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+  test_vfs_native:
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Install wasm-pack
-      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-    - name: Test
-      run: |
-        cd tests
-        wasm-pack test --chrome --headless
-        wasm-pack test --chrome --headless --features sqlite3mc
-        
-  test_vfs_native:
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Test
-        run: |
-          cd crates/rsqlite-vfs
-          cargo test
+    - name: Test rsqlite-vfs
+      run: cargo test -p rsqlite-vfs
+    - name: Test implement-a-vfs example
+      run: cargo run -p rsqlite-vfs --example implement-a-vfs

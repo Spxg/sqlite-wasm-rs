@@ -1,39 +1,53 @@
 [package]
 name = "sqlite-wasm-vfs"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
-authors = ["Spxg <unsafe@outlook.es>"]
+rust-version.workspace = true
 readme = "README.md"
+authors = ["Spxg <noz@live.com>"]
 license = "MIT"
 repository = "https://github.com/Spxg/sqlite-wasm-rs"
-description = "some experimental VFS implementations."
+description = "SQLite VFS implementations for wasm32-unknown-unknown."
 categories = ["development-tools::ffi", "wasm", "database"]
 keywords = ["sqlite", "sqlite-wasm", "wasm", "webassembly", "javascript"]
 
-[dependencies]
-rsqlite-vfs = "0.1"
+[features]
+sahpool = [
+  "dep:rsqlite-vfs",
+  "dep:wasm-bindgen",
+  "dep:js-sys",
+  "dep:futures-util",
+  "dep:thiserror",
+  "dep:web-sys",
+]
 
-wasm-bindgen = "0.2.104"
-js-sys = "0.3.81"
-wasm-bindgen-futures = "0.4.54"
-tokio = { version = "1.45.1", features = ["sync"] }
-thiserror = "2.0.12"
-web-sys = { version = "0.3.81", features = [
+[dependencies]
+rsqlite-vfs = { version = "0.2", optional = true }
+
+wasm-bindgen = { version = "0.2.128", default-features = false, optional = true }
+js-sys = { version = "0.3.105", default-features = false, features = ["std"], optional = true }
+futures-util = { version = "0.3.34", default-features = false, features = ["std"], optional = true }
+thiserror = { version = "2.0.20", default-features = false, optional = true }
+web-sys = { version = "0.3.105", default-features = false, optional = true, features = [
   "StorageManager",
   "FileSystemSyncAccessHandle",
   "FileSystemDirectoryHandle",
   "FileSystemGetDirectoryOptions",
   "FileSystemReadWriteOptions",
-  "WorkerGlobalScope",
+  "DedicatedWorkerGlobalScope",
   "WorkerNavigator",
   "FileSystemGetFileOptions",
   "FileSystemFileHandle",
 ]}
-indexed_db_futures = "0.6.4"
 
 [dev-dependencies]
-wasm-bindgen-test = "0.3.54"
-sqlite-wasm-rs = { version = "0.5.1", default-features = false }
+wasm-bindgen-test = "0.3.78"
+sqlite-wasm-rs = { version = "0.6", default-features = false, features = ["wasm-bindgen"] }
+
+[[test]]
+name = "sahpool"
+required-features = ["sahpool"]
 
 [package.metadata.docs.rs]
+all-features = true
 targets = ["wasm32-unknown-unknown"]

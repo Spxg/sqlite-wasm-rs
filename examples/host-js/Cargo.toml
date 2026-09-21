@@ -1,0 +1,21 @@
+[package]
+name = "host-js"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# A separate workspace keeps other examples from enabling the wasm-bindgen adapter.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+sqlite-wasm-rs = { path = "../..", default-features = false }
+
+[features]
+sqlite3mc = ["sqlite-wasm-rs/sqlite3mc"]
+bindgen = ["sqlite-wasm-rs/bindgen"]
+
+[patch.crates-io]
+rsqlite-vfs = { path = "../../crates/rsqlite-vfs" }

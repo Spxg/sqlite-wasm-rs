@@ -1,19 +1,19 @@
 [![Crates.io](https://img.shields.io/crates/v/sqlite-wasm-rs.svg)](https://crates.io/crates/sqlite-wasm-rs)
 
-`wasm32-unknown-unknown` bindings to the libsqlite3 library. 
+`wasm32-unknown-unknown` bindings to the libsqlite3 library.
 
-## Usage 
+## Usage
 
 ```toml
 [dependencies]
-sqlite-wasm-rs = "0.5"
+sqlite-wasm-rs = { version = "0.6", features = ["wasm-bindgen"] }
 ```
 
 ```toml
 [dependencies]
 # Encryption is supported by SQLite3MultipleCiphers
 # See <https://utelle.github.io/SQLite3MultipleCiphers>
-sqlite-wasm-rs = { version = "0.5", features = ["sqlite3mc"] }
+sqlite-wasm-rs = { version = "0.6", features = ["wasm-bindgen", "sqlite3mc"] }
 ```
 
 ```rust
@@ -31,6 +31,7 @@ fn open_db() {
         )
     };
     assert_eq!(ffi::SQLITE_OK, ret);
+    assert_eq!(unsafe { ffi::sqlite3_close(db) }, ffi::SQLITE_OK);
 }
 ```
 
@@ -38,49 +39,41 @@ fn open_db() {
 
 ```toml
 [dependencies]
-# It requires sqlite-wasm-rs 0.5.2 or higher to be used,
-# for version 0.5.1, use version 0.1 instead.
-sqlite-wasm-vfs = "0.2"
+sqlite-wasm-vfs = { version = "0.3", features = ["sahpool"] }
 ```
 
 The following vfs have been implemented:
 
 * [`memory`](./crates/rsqlite-vfs/src/memvfs.rs): as the default vfs, no additional conditions are required, store the database in memory.
 * [`sahpool`](./crates/sqlite-wasm-vfs/src/sahpool.rs): ported from sqlite-wasm, store the database in opfs.
-* [`relaxed-idb`](./crates/sqlite-wasm-vfs/src/relaxed_idb.rs): store the database in blocks in indexed db.
-
-### VFS Comparison
-
-||MemoryVFS|SyncAccessHandlePoolVFS|RelaxedIdbVFS|
-|-|-|-|-|
-|Storage|RAM|OPFS|IndexedDB|
-|Contexts|All|Dedicated Worker|All|
-|Multiple connections|:x:|:x:|:x:|
-|Full durability|✅|✅|:x:|
-|Relaxed durability|:x:|:x:|✅|
-|Multi-database transactions|✅|✅|✅|
-|No COOP/COEP requirements|✅|✅|✅|
 
 ### How to implement a VFS
 
-Here is an example showing how to use `sqlite-wasm-rs` to implement a simple in-memory VFS, see [`implement-a-vfs`](./examples/implement-a-vfs) example.
+Here is an example showing how to implement a simple in-memory VFS, see [`implement-a-vfs`](./crates/rsqlite-vfs/examples/implement-a-vfs.rs) example.
+
+```sh
+cargo run -p rsqlite-vfs --example implement-a-vfs
+```
 
 ## About multithreading
 
-This library is not thread-safe:
+Multithreading is not supported, SQLite is compiled with `-DSQLITE_THREADSAFE=0`.
 
-* `JsValue` is not cross-threaded, see <https://github.com/rustwasm/wasm-bindgen/pull/955> for details.
-* sqlite is compiled with `-DSQLITE_THREADSAFE=0`.
+## Use without wasm-bindgen
 
-## Use prebuild libsqlite3.a
+No features are enabled by default, provide your own host functions. See [JS Host](./examples/host-js) or [C Host](./examples/host-c) example.
 
-We provide the ability to use prebuild `libsqlite3.a`, cargo provides a [`links`](https://doc.rust-lang.org/cargo/reference/manifest.html#the-links-field) field that can be used to specify which library to link to. With the help of [overriding build scripts](https://doc.rust-lang.org/cargo/reference/build-scripts.html#overriding-build-scripts), you can overriding its configuration in your crate and link sqlite to your prebuild `libsqlite3.a`.
+## Use custom SQLite sources
 
-More see [`use-prebuild-lib`](./examples/use-prebuild-lib) example.
+Point `SQLITE_WASM_RS_SOURCE_DIR` to your `sqlite3.c/.h` files (`sqlite3mc_amalgamation.c/.h` for `sqlite3mc`):
+
+```sh
+SQLITE_WASM_RS_SOURCE_DIR=/path/to/sqlite cargo build --target wasm32-unknown-unknown --features bindgen
+```
 
 ## Minimum supported Rust version (MSRV)
 
-The minimal officially supported rustc version is 1.85.0.
+The minimal officially supported rustc version is 1.81.0.
 
 ## Extensions
 

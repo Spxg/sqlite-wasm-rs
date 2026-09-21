@@ -1,8 +1,8 @@
 [package]
 name = "sqlite-wasm-rs"
 links = "wsqlite3"
-version = "0.5.5"
-authors = ["Spxg <unsafe@outlook.es>"]
+version = "0.6.1"
+authors = ["Spxg <noz@live.com>"]
 repository = "https://github.com/Spxg/sqlite-wasm-rs"
 description = "`wasm32-unknown-unknown` bindings to the libsqlite3 library."
 categories = ["development-tools::ffi", "wasm", "database"]
@@ -14,11 +14,13 @@ rust-version.workspace = true
 include.workspace = true
 
 [dependencies]
-rsqlite-vfs = "0.1.0"
-wasm-bindgen = { version = "0.2.104", default-features = false }
-js-sys = { version = "0.3.81", default-features = false }
+rsqlite-vfs = "0.2"
+wasm-bindgen = { version = "0.2.128", default-features = false, optional = true }
+js-sys = { version = "0.3.105", default-features = false, optional = true }
 
 [features]
+# Optional JavaScript host adapter. Otherwise supply link-time host hooks.
+wasm-bindgen = ["dep:wasm-bindgen", "dep:js-sys"]
 # SQLite3MultipleCiphers
 # <https://github.com/utelle/SQLite3MultipleCiphers>
 # <https://utelle.github.io/SQLite3MultipleCiphers>
@@ -26,34 +28,42 @@ sqlite3mc = []
 
 [build-dependencies]
 cc = "1"
-bindgen = { version = "0.72.1", optional = true }
+bindgen = { version = "0.73", default-features = false, features = ["runtime", "prettyplease"], optional = true }
 
 [dev-dependencies]
-wasm-bindgen-test = "0.3.54"
+wasm-bindgen-test = "0.3.78"
+
+[[test]]
+name = "sqlite3"
+required-features = ["wasm-bindgen"]
+
+[[test]]
+name = "sqlite3mc"
+required-features = ["wasm-bindgen", "sqlite3mc"]
 
 [package.metadata.docs.rs]
 targets = ["wasm32-unknown-unknown"]
 
 [workspace]
 resolver = "2"
+exclude = ["examples/host-js", "examples/host-c"]
 members = [
-  "tests",
   "crates/rsqlite-vfs",
   "crates/sqlite-wasm-libc",
   "crates/sqlite-wasm-vfs",
   "extensions/sqlite-vec",
-  "examples/implement-a-vfs",
   "examples/nodejs",
   "examples/use-prebuild-lib",
 ]
 
 [workspace.package]
 readme = "README.md"
-edition = "2024"
+edition = "2021"
 license = "MIT"
-rust-version = "1.85.0"
+rust-version = "1.81.0"
 include = [
     'src/**/*.rs',
+    'examples/*.rs',
     'build.rs',
     'sqlite3/**/*.c',
     'sqlite3/**/*.h',

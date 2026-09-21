@@ -269,7 +269,8 @@ pub const SQLITE_DBCONFIG_REVERSE_SCANORDER: i32 = 1019;
 pub const SQLITE_DBCONFIG_ENABLE_ATTACH_CREATE: i32 = 1020;
 pub const SQLITE_DBCONFIG_ENABLE_ATTACH_WRITE: i32 = 1021;
 pub const SQLITE_DBCONFIG_ENABLE_COMMENTS: i32 = 1022;
-pub const SQLITE_DBCONFIG_MAX: i32 = 1022;
+pub const SQLITE_DBCONFIG_FP_DIGITS: i32 = 1023;
+pub const SQLITE_DBCONFIG_MAX: i32 = 1023;
 pub const SQLITE_SETLK_BLOCK_ON_CONNECT: i32 = 1;
 pub const SQLITE_DENY: i32 = 1;
 pub const SQLITE_IGNORE: i32 = 2;
@@ -689,13 +690,7 @@ pub struct sqlite3_vfs {
             arg1: *mut sqlite3_vfs,
             arg2: *mut ::core::ffi::c_void,
             zSymbol: *const ::core::ffi::c_char,
-        ) -> ::core::option::Option<
-            unsafe extern "C" fn(
-                arg1: *mut sqlite3_vfs,
-                arg2: *mut ::core::ffi::c_void,
-                zSymbol: *const ::core::ffi::c_char,
-            ),
-        >,
+        ) -> ::core::option::Option<unsafe extern "C" fn()>,
     >,
     pub xDlClose: ::core::option::Option<
         unsafe extern "C" fn(arg1: *mut sqlite3_vfs, arg2: *mut ::core::ffi::c_void),
@@ -750,17 +745,23 @@ pub struct sqlite3_vfs {
     >,
 }
 
-unsafe extern "C" {
+extern "C" {
     pub fn sqlite3_vfs_find(zVfsName: *const ::core::ffi::c_char) -> *mut sqlite3_vfs;
 }
 
-unsafe extern "C" {
+extern "C" {
     pub fn sqlite3_vfs_register(
         arg1: *mut sqlite3_vfs,
         makeDflt: ::core::ffi::c_int,
     ) -> ::core::ffi::c_int;
 }
 
-unsafe extern "C" {
+extern "C" {
     pub fn sqlite3_vfs_unregister(arg1: *mut sqlite3_vfs) -> ::core::ffi::c_int;
+
+    pub fn sqlite3_uri_parameter(filename: *const ::core::ffi::c_char, key: *const ::core::ffi::c_char) -> *const ::core::ffi::c_char;
+
+    pub fn sqlite3_uri_boolean(filename: *const ::core::ffi::c_char, key: *const ::core::ffi::c_char, default: ::core::ffi::c_int) -> ::core::ffi::c_int;
+
+    pub fn sqlite3_uri_int64(filename: *const ::core::ffi::c_char, key: *const ::core::ffi::c_char, default: i64) -> i64;
 }

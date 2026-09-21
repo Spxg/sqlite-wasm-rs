@@ -2,6 +2,11 @@
 
 This example shows how to link sqlite3 with prebuild libsqlite3.a
 
+Do not enable the `sqlite-wasm-rs/bindgen` feature with this configuration.
+Overriding the build script also skips binding generation, so this example uses
+the checked-in bindings. The static library must match the selected SQLite or
+SQLite3MC configuration.
+
 ## Usage
 
 ```sh

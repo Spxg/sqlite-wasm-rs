@@ -1,76 +1,112 @@
-//! opfs-sahpool vfs implementation, ported from sqlite-wasm.
+//! OPFS sync access handle pool VFS, ported from sqlite-wasm.
 //!
 //! See [`opfs-sahpool`](https://sqlite.org/wasm/doc/trunk/persistence.md#vfs-opfs-sahpool) for details.
 //!
-//! ```rust
+//! Requires a secure context and a dedicated worker. Use one SQLite connection
+//! per database at a time: repeated opens share storage but do not coordinate
+//! locks between connections. Shared-memory WAL is not supported.
+//!
+//! # Examples
+//!
+//! ```no_run
 //! use sqlite_wasm_rs as ffi;
-//! use sqlite_wasm_vfs::sahpool::{install as install_opfs_sahpool, OpfsSAHPoolCfg};
+//! use sqlite_wasm_vfs::sahpool::{install, OpfsSAHPoolCfg};
 //!
 //! async fn open_db() {
-//!     // install opfs-sahpool persistent vfs and set as default vfs
-//!     install_opfs_sahpool::<ffi::WasmOsCallback>(&OpfsSAHPoolCfg::default(), true)
+//!     install::<ffi::WasmOsCallback>(&OpfsSAHPoolCfg::default(), true)
 //!         .await
 //!         .unwrap();
 //!
-//!     // open with opfs-sahpool vfs
+//!     // The pool is now SQLite's default VFS.
 //!     let mut db = std::ptr::null_mut();
-//!     let ret = unsafe {
-//!         ffi::sqlite3_open_v2(
-//!             c"opfs-sahpool.db".as_ptr().cast(),
-//!             &mut db as *mut _,
-//!             ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
-//!             std::ptr::null()
-//!         )
-//!     };
-//!     assert_eq!(ffi::SQLITE_OK, ret);
+//!     unsafe {
+//!         assert_eq!(ffi::sqlite3_open(c"app.db".as_ptr(), &mut db), ffi::SQLITE_OK);
+//!         assert_eq!(ffi::sqlite3_close(db), ffi::SQLITE_OK);
+//!     }
 //! }
 //! ```
-//!
-//! The VFS is based on
-//! [`FileSystemSyncAccessHandle`](https://developer.mozilla.org/en-US/docs/Web/API/FileSystemSyncAccessHandle)
-//! read and write, and you can install the
-//! [`opfs-explorer`](https://chromewebstore.google.com/detail/opfs-explorer/acndjpgkpaclldomagafnognkcgjignd)
-//! plugin to browse files.
 
+use rsqlite_vfs::transfer::{
+    check_import_header, DbTransfer, ExportSource, ImportTarget, TransferError,
+};
 use rsqlite_vfs::{
-    check_import_db,
     ffi::{
-        sqlite3_file, sqlite3_filename, sqlite3_vfs, sqlite3_vfs_register, sqlite3_vfs_unregister,
-        SQLITE_CANTOPEN, SQLITE_ERROR, SQLITE_IOCAP_UNDELETABLE_WHEN_OPEN, SQLITE_IOERR,
-        SQLITE_IOERR_DELETE, SQLITE_OK, SQLITE_OPEN_DELETEONCLOSE, SQLITE_OPEN_MAIN_DB,
-        SQLITE_OPEN_MAIN_JOURNAL, SQLITE_OPEN_SUPER_JOURNAL, SQLITE_OPEN_WAL,
+        sqlite3_vfs_register, sqlite3_vfs_unregister, SQLITE_OK, SQLITE_OPEN_DELETEONCLOSE,
+        SQLITE_OPEN_MAIN_DB, SQLITE_OPEN_MAIN_JOURNAL, SQLITE_OPEN_SUBJOURNAL,
+        SQLITE_OPEN_SUPER_JOURNAL, SQLITE_OPEN_TEMP_DB, SQLITE_OPEN_TEMP_JOURNAL,
+        SQLITE_OPEN_TRANSIENT_DB, SQLITE_OPEN_WAL,
     },
-    register_vfs, registered_vfs, ImportDbError, OsCallback, RegisterVfsError, SQLiteIoMethods,
-    SQLiteVfs, SQLiteVfsFile, VfsAppData, VfsError, VfsFile, VfsResult, VfsStore,
+    register_vfs, registered_vfs, AccessMode, DeviceCharacteristics, FileKind, LockLevel,
+    OpenAccess, OpenOptions, OpenedFile, OsCallback, RegisterVfsError, SQLiteIoMethods, SQLiteVfs,
+    SectorSize, SyncOptions, VfsError, VfsErrorCode, VfsFile, VfsFilesManager, VfsRegistration,
+    VfsResult, VfsStore,
 };
-use std::collections::{HashMap, HashSet};
-use std::io::Read;
-use std::time::Duration;
 use std::{
+    any::TypeId,
     cell::{Cell, RefCell},
-    marker::PhantomData,
+    collections::HashMap,
+    future::poll_fn,
+    io::{self, Read},
+    ops::Deref,
+    rc::Rc,
+    task::{Poll, Waker},
 };
 
-use js_sys::{Array, DataView, IteratorNext, Reflect, Uint8Array};
+use js_sys::{
+    futures::{spawn_local, JsFuture},
+    Array, IteratorNext, Reflect,
+};
 use wasm_bindgen::{JsCast, JsValue};
-use wasm_bindgen_futures::JsFuture;
 use web_sys::{
-    FileSystemDirectoryHandle, FileSystemFileHandle, FileSystemGetDirectoryOptions,
-    FileSystemGetFileOptions, FileSystemReadWriteOptions, FileSystemSyncAccessHandle,
-    WorkerGlobalScope,
+    DedicatedWorkerGlobalScope, FileSystemDirectoryHandle, FileSystemFileHandle,
+    FileSystemGetDirectoryOptions, FileSystemGetFileOptions, FileSystemReadWriteOptions,
+    FileSystemSyncAccessHandle,
 };
 
 const SECTOR_SIZE: usize = 4096;
 const HEADER_MAX_FILENAME_SIZE: usize = 512;
-const HEADER_FLAGS_SIZE: usize = 4;
-const HEADER_CORPUS_SIZE: usize = HEADER_MAX_FILENAME_SIZE + HEADER_FLAGS_SIZE;
-const HEADER_OFFSET_FLAGS: usize = HEADER_MAX_FILENAME_SIZE;
+// SQLite may append '-' followed by up to 11 characters to a database name.
+const MAX_DB_FILENAME_SIZE: usize = HEADER_MAX_FILENAME_SIZE - 1 - 12;
+// Each physical slot begins with a NUL-padded UTF-8 name and big-endian open
+// flags. SQLite file offsets start after the reserved 4096-byte header region.
+const HEADER_CORPUS_SIZE: usize = HEADER_MAX_FILENAME_SIZE + 4;
 const HEADER_OFFSET_DATA: usize = SECTOR_SIZE;
+const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
+
+// Collisions are negligible with a good random source. Cap retries so a faulty
+// callback cannot loop forever; 16 is a local policy, not a SQLite/OPFS requirement.
+const MAX_FILENAME_ATTEMPTS: usize = 16;
 
 const PERSISTENT_FILE_TYPES: i32 =
     SQLITE_OPEN_MAIN_DB | SQLITE_OPEN_MAIN_JOURNAL | SQLITE_OPEN_SUPER_JOURNAL | SQLITE_OPEN_WAL;
+const TEMPORARY_FILE_TYPES: i32 = SQLITE_OPEN_TEMP_DB
+    | SQLITE_OPEN_TEMP_JOURNAL
+    | SQLITE_OPEN_TRANSIENT_DB
+    | SQLITE_OPEN_SUBJOURNAL;
 
 type Result<T, E = OpfsSAHError> = std::result::Result<T, E>;
+
+// Generates a temporary filename, rejecting unavailable or incomplete randomness.
+fn random_name(randomness: impl FnOnce(&mut [u8]) -> usize) -> VfsResult<String> {
+    const GEN_ASCII_STR_CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ\
+                abcdefghijklmnopqrstuvwxyz\
+                0123456789";
+    const GEN_LEN: u8 = GEN_ASCII_STR_CHARSET.len() as u8;
+    let mut random_buffer = [0; 32];
+    if randomness(&mut random_buffer) != random_buffer.len() {
+        return Err(VfsError::new(
+            VfsErrorCode::CantOpen,
+            "insufficient randomness for a temporary filename".into(),
+        ));
+    }
+    Ok(random_buffer
+        .into_iter()
+        .map(|e| {
+            let idx = e.saturating_sub(GEN_LEN * (e / GEN_LEN));
+            GEN_ASCII_STR_CHARSET[idx as usize] as char
+        })
+        .collect())
+}
 
 fn read_write_options(at: f64) -> FileSystemReadWriteOptions {
     let options = FileSystemReadWriteOptions::new();
@@ -78,769 +114,1242 @@ fn read_write_options(at: f64) -> FileSystemReadWriteOptions {
     options
 }
 
-struct SyncAccessFile {
+fn validate_filename(filename: &str) -> Result<()> {
+    if filename.is_empty() {
+        Err(OpfsSAHError::InvalidFilename("filename is empty"))
+    } else if filename.as_bytes().contains(&0) {
+        Err(OpfsSAHError::InvalidFilename(
+            "filename contains a NUL byte",
+        ))
+    } else if filename.len() > MAX_DB_FILENAME_SIZE {
+        // Reserve 12 bytes for SQLite journal suffixes within the 511-byte name field.
+        Err(OpfsSAHError::InvalidFilename(
+            "filename exceeds 499 UTF-8 bytes",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn normalize_directory(directory: &str) -> Result<String> {
+    let parts: Vec<_> = directory
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect();
+
+    if parts.is_empty()
+        || parts
+            .iter()
+            .any(|part| matches!(*part, "." | "..") || part.contains('\0'))
+    {
+        return Err(OpfsSAHError::InvalidDirectory);
+    }
+
+    Ok(parts.join("/"))
+}
+
+fn physical_offset(offset: u64, length: usize, code: VfsErrorCode) -> VfsResult<f64> {
+    let start = offset.checked_add(HEADER_OFFSET_DATA as u64);
+    let end = start.and_then(|start| start.checked_add(length as u64));
+
+    if end.unwrap_or(u64::MAX) > MAX_SAFE_INTEGER {
+        return Err(VfsError::new(
+            code,
+            "file offset or size exceeds JavaScript's safe integer range".into(),
+        ));
+    }
+
+    Ok(start.unwrap() as f64)
+}
+
+/// One owner for the browser resource, even when the pool and SQLite share it.
+struct SyncAccessFileInner {
     handle: FileSystemSyncAccessHandle,
+    // Physical filename, independent of the logical SQLite name.
     opaque: String,
+    open_count: Cell<usize>,
+}
+
+impl Drop for SyncAccessFileInner {
+    fn drop(&mut self) {
+        self.handle.close();
+    }
+}
+
+#[derive(Clone)]
+struct SyncAccessFile(Rc<SyncAccessFileInner>);
+
+impl Deref for SyncAccessFile {
+    type Target = SyncAccessFileInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl SyncAccessFile {
+    // Keep awaiting after caller cancellation so the acquired handle is closed.
+    async fn acquire(handle: FileSystemFileHandle, opaque: String) -> Result<Self> {
+        #[derive(Default)]
+        struct Pending {
+            result: Option<Result<SyncAccessFile>>,
+            waker: Option<Waker>,
+        }
+
+        let pending = Rc::new(RefCell::new(Pending::default()));
+        let completion = pending.clone();
+
+        spawn_local(async move {
+            let result = JsFuture::from(handle.create_sync_access_handle())
+                .await
+                .map(|value| {
+                    Self(Rc::new(SyncAccessFileInner {
+                        handle: value.into(),
+                        opaque,
+                        open_count: Cell::new(0),
+                    }))
+                })
+                .map_err(|err| OpfsSAHError::js("acquire sync access handle", err));
+
+            let waker = {
+                let mut completion = completion.borrow_mut();
+                completion.result = Some(result);
+                completion.waker.take()
+            };
+
+            if let Some(waker) = waker {
+                waker.wake();
+            }
+        });
+
+        poll_fn(|cx| {
+            let mut pending = pending.borrow_mut();
+
+            if let Some(result) = pending.result.take() {
+                Poll::Ready(result)
+            } else {
+                pending.waker = Some(cx.waker().clone());
+                Poll::Pending
+            }
+        })
+        .await
+    }
+
+    fn physical_size(&self) -> Result<u64> {
+        let size = self
+            .handle
+            .get_size()
+            .map_err(|err| OpfsSAHError::js("get file size", err))?;
+
+        if !size.is_finite() || size < 0.0 || size.fract() != 0.0 || size > MAX_SAFE_INTEGER as f64
+        {
+            return Err(OpfsSAHError::InvalidHeader {
+                opaque: self.opaque.clone(),
+                reason: "invalid physical file size",
+            });
+        }
+
+        Ok(size as u64)
+    }
+
+    fn size(&self) -> VfsResult<u64> {
+        self.physical_size()
+            .and_then(|size| {
+                size.checked_sub(HEADER_OFFSET_DATA as u64).ok_or_else(|| {
+                    OpfsSAHError::InvalidHeader {
+                        opaque: self.opaque.clone(),
+                        reason: "file is shorter than its header",
+                    }
+                })
+            })
+            .map_err(|err| err.vfs_err(VfsErrorCode::IoStat))
+    }
+
+    fn read_at(&self, buf: &mut [u8], at: f64) -> Result<usize> {
+        let count = self
+            .handle
+            .read_with_u8_array_and_options(buf, &read_write_options(at))
+            .map_err(|err| OpfsSAHError::js("read file", err))?;
+
+        if !count.is_finite() || count < 0.0 || count.fract() != 0.0 || count > buf.len() as f64 {
+            return Err(OpfsSAHError::ShortIo {
+                operation: "read file",
+                expected: buf.len(),
+                actual: count,
+            });
+        }
+
+        Ok(count as usize)
+    }
+
+    fn write_at(&self, bytes: &[u8], at: f64) -> Result<()> {
+        let count = self
+            .handle
+            .write_with_u8_array_and_options(bytes, &read_write_options(at))
+            .map_err(|err| OpfsSAHError::js("write file", err))?;
+
+        if count != bytes.len() as f64 {
+            return Err(OpfsSAHError::ShortIo {
+                operation: "write file",
+                expected: bytes.len(),
+                actual: count,
+            });
+        }
+
+        Ok(())
+    }
+
+    fn flush(&self) -> Result<()> {
+        self.handle
+            .flush()
+            .map_err(|err| OpfsSAHError::js("flush file", err))
+    }
+
+    fn associated_filename(&self) -> Result<Option<String>> {
+        let size = self.physical_size()?;
+
+        // A cancelled allocation can leave a newly created, empty slot.
+        if size == 0 {
+            return Ok(None);
+        }
+
+        let invalid = |reason| OpfsSAHError::InvalidHeader {
+            opaque: self.opaque.clone(),
+            reason,
+        };
+
+        if size < HEADER_OFFSET_DATA as u64 {
+            // An interrupted initialization can leave a zero-filled prefix.
+            // It cannot contain database bytes, which begin at offset 4096.
+            let mut bytes = [0; HEADER_OFFSET_DATA];
+            let bytes = &mut bytes[..size as usize];
+            if self.read_at(bytes, 0.0)? != bytes.len() || bytes.iter().any(|&byte| byte != 0) {
+                return Err(invalid("file is shorter than its header"));
+            }
+
+            return Ok(None);
+        }
+
+        let mut header = [0; HEADER_CORPUS_SIZE];
+        if self.read_at(&mut header, 0.0)? != header.len() {
+            return Err(invalid("incomplete header"));
+        }
+
+        let flags = u32::from_be_bytes(header[HEADER_MAX_FILENAME_SIZE..].try_into().unwrap());
+        let name = &header[..HEADER_MAX_FILENAME_SIZE];
+
+        let end = name
+            .iter()
+            .position(|&byte| byte == 0)
+            .ok_or_else(|| invalid("filename is not NUL-terminated"))?;
+        if name[end..].iter().any(|&byte| byte != 0) {
+            return Err(invalid("nonzero bytes after filename terminator"));
+        }
+
+        if end == 0 {
+            if flags != 0 {
+                return Err(invalid("unnamed slot has nonzero flags"));
+            }
+
+            return Ok(None);
+        }
+
+        let name = std::str::from_utf8(&name[..end])
+            .map_err(|_| invalid("filename is not valid UTF-8"))?;
+        // Older imports stored only MAIN_DB, without access-mode bits. Validate
+        // the persisted file kind rather than treating this as a new xOpen call.
+        let kind = flags & (PERSISTENT_FILE_TYPES | TEMPORARY_FILE_TYPES) as u32;
+        if kind.count_ones() != 1 {
+            return Err(invalid("missing or conflicting file types"));
+        }
+
+        if flags & SQLITE_OPEN_DELETEONCLOSE as u32 != 0 {
+            return Ok(None);
+        }
+
+        if kind & TEMPORARY_FILE_TYPES as u32 != 0 {
+            return Err(invalid("temporary file is missing DELETEONCLOSE"));
+        }
+
+        Ok(Some(name.to_owned()))
+    }
+
+    // Only for new or verified zero-filled, incomplete slots. OPFS pads an
+    // extension with zeros, so the complete empty header is initialized at once.
+    fn initialize(&self) -> Result<()> {
+        self.handle
+            .truncate_with_u32(HEADER_OFFSET_DATA as u32)
+            .map_err(|err| OpfsSAHError::js("initialize pool slot", err))?;
+        self.flush()
+    }
+
+    fn associate(&self, filename: Option<&str>, flags: i32) -> Result<()> {
+        let mut header = [0; HEADER_CORPUS_SIZE];
+        if let Some(filename) = filename {
+            // Internal names include SQLite's suffixes; leave room for the NUL.
+            if filename.is_empty()
+                || filename.as_bytes().contains(&0)
+                || filename.len() >= HEADER_MAX_FILENAME_SIZE
+            {
+                return Err(OpfsSAHError::InvalidFilename(
+                    "filename cannot be stored in the pool header",
+                ));
+            }
+            header[..filename.len()].copy_from_slice(filename.as_bytes());
+        }
+        header[HEADER_MAX_FILENAME_SIZE..].copy_from_slice(&(flags as u32).to_be_bytes());
+        self.write_at(&header, 0.0)?;
+
+        // The header is the persistent namespace. In particular, journal
+        // deletion must reach storage before that slot can be reused.
+        self.flush()?;
+
+        if filename.is_none() {
+            self.handle
+                .truncate_with_u32(HEADER_OFFSET_DATA as u32)
+                .map_err(|err| OpfsSAHError::js("truncate unused slot", err))?;
+            self.flush()?;
+        }
+
+        Ok(())
+    }
+}
+
+struct SyncAccessFileHandle {
+    temporary_name: Option<String>,
+    file: SyncAccessFile,
+    read_only: bool,
+    lock_level: LockLevel,
+}
+
+impl Drop for SyncAccessFileHandle {
+    fn drop(&mut self) {
+        self.file.open_count.set(self.file.open_count.get() - 1);
+    }
+}
+
+impl SyncAccessFileHandle {
+    fn check_writable(&self) -> VfsResult<()> {
+        if self.read_only {
+            Err(VfsError::new(
+                VfsErrorCode::ReadOnly,
+                "file is read-only".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl VfsFile for SyncAccessFileHandle {
+    fn size_hint(&mut self, size: u64) -> VfsResult<bool> {
+        if size > self.size()? {
+            self.truncate(size)?;
+        }
+
+        Ok(true)
+    }
+
+    fn sector_size(&self) -> SectorSize {
+        SectorSize::new(SECTOR_SIZE as u32).unwrap()
+    }
+
+    fn device_characteristics(&self) -> DeviceCharacteristics {
+        DeviceCharacteristics::UNDELETABLE_WHEN_OPEN
+    }
+
+    fn read(&mut self, buf: &mut [u8], offset: u64) -> VfsResult<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        let at = physical_offset(offset, buf.len(), VfsErrorCode::IoRead)?;
+        self.file
+            .read_at(buf, at)
+            .map_err(|err| err.vfs_err(VfsErrorCode::IoRead))
+    }
+
+    fn write(&mut self, buf: &[u8], offset: u64) -> VfsResult<()> {
+        self.check_writable()?;
+
+        if buf.is_empty() {
+            return Ok(());
+        }
+
+        let at = physical_offset(offset, buf.len(), VfsErrorCode::IoWrite)?;
+        self.file
+            .write_at(buf, at)
+            .map_err(|err| err.vfs_err(VfsErrorCode::IoWrite))
+    }
+
+    fn truncate(&mut self, size: u64) -> VfsResult<()> {
+        self.check_writable()?;
+
+        let size = physical_offset(size, 0, VfsErrorCode::IoTruncate)?;
+        self.file
+            .handle
+            .truncate_with_f64(size)
+            .map_err(|err| OpfsSAHError::js("truncate file", err).vfs_err(VfsErrorCode::IoTruncate))
+    }
+
+    fn sync(&mut self, _options: SyncOptions) -> VfsResult<()> {
+        // OPFS has one flush primitive, used for both sync strengths and metadata.
+        self.file
+            .flush()
+            .map_err(|err| err.vfs_err(VfsErrorCode::IoSync))
+    }
+
+    fn size(&self) -> VfsResult<u64> {
+        self.file.size()
+    }
+
+    fn lock(&mut self, level: LockLevel) -> VfsResult<()> {
+        self.lock_level = self.lock_level.max(level);
+
+        Ok(())
+    }
+
+    fn unlock(&mut self, level: LockLevel) -> VfsResult<()> {
+        self.lock_level = self.lock_level.min(level);
+
+        Ok(())
+    }
+
+    fn check_reserved_lock(&self) -> VfsResult<bool> {
+        // OPFS excludes other workers. Multiple connections to the same DB
+        // are unsupported; this is not a shared lock manager. A fresh
+        // connection must report no RESERVED lock for hot-journal recovery.
+        Ok(self.lock_level >= LockLevel::Reserved)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PoolState {
+    Active,
+    Paused,
+    Removed,
+}
+
+struct Operation<'a>(&'a Cell<bool>);
+
+impl Drop for Operation<'_> {
+    fn drop(&mut self) {
+        self.0.set(false);
+    }
 }
 
 struct OpfsSAHPool {
-    /// Directory handle to the `.opaque` subdirectory within the VFS root.
-    /// This directory holds the actual files, which have randomly-generated names.
+    last_error: RefCell<Option<VfsError>>,
     dh_opaque: FileSystemDirectoryHandle,
-    /// A reusable buffer for reading and writing file headers.
-    header_buffer: Uint8Array,
-    /// A `DataView` for accessing the binary data in `header_buffer`.
-    header_buffer_view: DataView,
-    /// A pool of available `SyncAccessHandle`s that are not currently associated with a database file.
+    lock_file: FileSystemFileHandle,
+    lease: RefCell<Option<SyncAccessFile>>,
     available_files: RefCell<Vec<SyncAccessFile>>,
-    /// Maps the user-facing database filenames to their underlying `SyncAccessFile`.
     map_filename_to_file: RefCell<HashMap<String, SyncAccessFile>>,
-    /// A flag to indicate whether the VFS is currently paused.
-    is_paused: Cell<bool>,
-    /// A set of filenames for all currently open database connections.
-    open_files: RefCell<HashSet<String>>,
-    /// A tuple holding the raw pointer to the `sqlite3_vfs` struct and whether it was registered as the default.
-    vfs: Cell<(*mut sqlite3_vfs, bool)>,
-    random: fn(&mut [u8]),
+    // Failed cleanup leaves the on-disk name uncertain. Retain ownership until
+    // clear or pause/resume reconciles it; never reuse these slots directly.
+    quarantined_files: RefCell<Vec<SyncAccessFile>>,
+    state: Cell<PoolState>,
+    busy: Cell<bool>,
+    // Reader exports block management and SQLite opens, but permit an import
+    // into a different file so streams can be copied within this pool.
+    readers: Cell<usize>,
+    needs_recovery: Cell<bool>,
+    name: String,
+    directory: String,
+    callback_type: TypeId,
+    make_default: Cell<bool>,
+    // Registration owns an Rc back to this pool. Keep it alive even while
+    // paused; explicit unsafe uninstall breaks the cycle and frees the VFS.
+    registration: RefCell<Option<VfsRegistration<Rc<OpfsSAHPool>>>>,
+    os: Box<dyn OsCallback>,
 }
 
 impl OpfsSAHPool {
-    async fn new<C: OsCallback>(options: &OpfsSAHPoolCfg) -> Result<OpfsSAHPool> {
-        const OPAQUE_DIR_NAME: &str = ".opaque";
+    async fn new<C: OsCallback + Default + 'static>(options: &OpfsSAHPoolCfg) -> Result<Rc<Self>> {
+        let directory = normalize_directory(&options.directory)?;
+        let create = FileSystemGetDirectoryOptions::new();
+        create.set_create(true);
 
-        let vfs_dir = &options.directory;
-        let capacity = options.initial_capacity;
-        let clear_files = options.clear_on_init;
-
-        let create_option = FileSystemGetDirectoryOptions::new();
-        create_option.set_create(true);
-
-        let mut handle: FileSystemDirectoryHandle = JsFuture::from(
-            js_sys::global()
-                .dyn_into::<WorkerGlobalScope>()
-                .map_err(|_| OpfsSAHError::NotSupported)?
-                .navigator()
-                .storage()
-                .get_directory(),
-        )
-        .await
-        .map_err(OpfsSAHError::GetDirHandle)?
-        .into();
-
-        for dir in vfs_dir.split('/').filter(|x| !x.is_empty()) {
-            let next =
-                JsFuture::from(handle.get_directory_handle_with_options(dir, &create_option))
-                    .await
-                    .map_err(OpfsSAHError::GetDirHandle)?
-                    .into();
-            handle = next;
+        let worker = js_sys::global()
+            .dyn_into::<DedicatedWorkerGlobalScope>()
+            .map_err(|_| OpfsSAHError::NotSupported)?;
+        for property in ["FileSystemSyncAccessHandle", "FileSystemFileHandle"] {
+            if Reflect::get(&js_sys::global(), &property.into())
+                .map_err(|err| OpfsSAHError::js("check OPFS support", err))?
+                .is_undefined()
+            {
+                return Err(OpfsSAHError::NotSupported);
+            }
         }
 
-        let dh_opaque = JsFuture::from(
-            handle.get_directory_handle_with_options(OPAQUE_DIR_NAME, &create_option),
-        )
-        .await
-        .map_err(OpfsSAHError::GetDirHandle)?
-        .into();
+        let storage = worker.navigator().storage();
+        if storage.is_undefined()
+            || !Reflect::get(storage.as_ref(), &"getDirectory".into())
+                .map_err(|err| OpfsSAHError::js("check OPFS support", err))?
+                .is_function()
+        {
+            return Err(OpfsSAHError::NotSupported);
+        }
 
-        let ap_body = Uint8Array::new_with_length(HEADER_CORPUS_SIZE as _);
-        let dv_body = DataView::new(
-            &ap_body.buffer(),
-            ap_body.byte_offset() as usize,
-            (ap_body.byte_length() - ap_body.byte_offset()) as usize,
-        );
+        let mut handle: FileSystemDirectoryHandle = JsFuture::from(storage.get_directory())
+            .await
+            .map_err(|err| OpfsSAHError::js("get OPFS root", err))?
+            .into();
+        for part in directory.split('/') {
+            handle = JsFuture::from(handle.get_directory_handle_with_options(part, &create))
+                .await
+                .map_err(|err| OpfsSAHError::js("get pool directory", err))?
+                .into();
+        }
 
-        let pool = Self {
+        // Lock the namespace even when it has no slots yet. Otherwise two
+        // workers can initialize an empty directory into disjoint pools.
+        let options_lock = FileSystemGetFileOptions::new();
+        options_lock.set_create(true);
+        let lock_file: FileSystemFileHandle =
+            JsFuture::from(handle.get_file_handle_with_options(".lock", &options_lock))
+                .await
+                .map_err(|err| OpfsSAHError::js("get pool lock file", err))?
+                .into();
+        let lease = SyncAccessFile::acquire(lock_file.clone(), ".lock".into()).await?;
+
+        let dh_opaque =
+            JsFuture::from(handle.get_directory_handle_with_options(".opaque", &create))
+                .await
+                .map_err(|err| OpfsSAHError::js("get opaque directory", err))?
+                .into();
+
+        let pool = Rc::new(Self {
+            last_error: RefCell::new(None),
             dh_opaque,
-            header_buffer: ap_body,
-            header_buffer_view: dv_body,
-            map_filename_to_file: RefCell::new(HashMap::new()),
+            lock_file,
+            lease: RefCell::new(Some(lease)),
             available_files: RefCell::new(Vec::new()),
-            is_paused: Cell::new(false),
-            open_files: RefCell::new(HashSet::new()),
-            vfs: Cell::new((std::ptr::null_mut(), false)),
-            random: C::random,
-        };
-
-        pool.acquire_access_handles(clear_files).await?;
-        pool.reserve_minimum_capacity(capacity).await?;
+            map_filename_to_file: RefCell::new(HashMap::new()),
+            quarantined_files: RefCell::new(Vec::new()),
+            state: Cell::new(PoolState::Active),
+            busy: Cell::new(false),
+            readers: Cell::new(0),
+            needs_recovery: Cell::new(false),
+            name: options.vfs_name.clone(),
+            directory,
+            callback_type: TypeId::of::<C>(),
+            make_default: Cell::new(false),
+            registration: RefCell::new(None),
+            os: Box::new(C::default()),
+        });
+        pool.acquire_access_handles(options.clear_on_init).await?;
+        pool.ensure_capacity(options.initial_capacity).await?;
 
         Ok(pool)
     }
 
-    async fn add_capacity(&self, n: u32) -> Result<u32> {
-        for _ in 0..n {
-            let opaque = rsqlite_vfs::random_name(self.random);
-            let handle: FileSystemFileHandle =
-                JsFuture::from(self.dh_opaque.get_file_handle_with_options(&opaque, &{
-                    let options = FileSystemGetFileOptions::new();
-                    options.set_create(true);
-                    options
-                }))
-                .await
-                .map_err(OpfsSAHError::GetFileHandle)?
-                .into();
-            let sah: FileSystemSyncAccessHandle =
-                JsFuture::from(handle.create_sync_access_handle())
-                    .await
-                    .map_err(OpfsSAHError::CreateSyncAccessHandle)?
-                    .into();
-            let file = SyncAccessFile {
-                handle: sah,
-                opaque,
-            };
-            self.set_associated_filename(&file.handle, None, 0)?;
-            self.available_files.borrow_mut().push(file);
+    fn check_state(&self) -> Result<()> {
+        match self.state.get() {
+            PoolState::Active => Ok(()),
+            PoolState::Paused => Err(OpfsSAHError::Paused),
+            PoolState::Removed => Err(OpfsSAHError::Uninstalled),
         }
-        Ok(self.get_capacity())
     }
 
-    async fn reserve_minimum_capacity(&self, min: u32) -> Result<()> {
-        self.add_capacity(min.saturating_sub(self.get_capacity()))
-            .await?;
+    fn check_active(&self) -> Result<()> {
+        self.check_import_ready()?;
+        if self.readers.get() != 0 {
+            return Err(OpfsSAHError::Busy);
+        }
         Ok(())
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
-    async fn reduce_capacity(&self, n: u32) -> Result<u32> {
-        let mut available_files = self.available_files.borrow_mut();
-        let available_length = available_files.len();
-        let max_reduce = available_length.min(n as usize);
-        let files = available_files.split_off(available_length - max_reduce);
-        // The `RefMut` from `name2file` is explicitly dropped here to avoid holding the borrow across an `.await` point.
-        drop(available_files);
-
-        for file in files {
-            file.handle.close();
-            JsFuture::from(self.dh_opaque.remove_entry(&file.opaque))
-                .await
-                .map_err(OpfsSAHError::RemoveEntity)?;
+    fn check_import_ready(&self) -> Result<()> {
+        self.check_state()?;
+        if self.busy.get() {
+            return Err(OpfsSAHError::Busy);
         }
 
-        Ok(max_reduce as u32)
+        if self.needs_recovery.get() {
+            return Err(OpfsSAHError::NeedsRecovery);
+        }
+
+        Ok(())
     }
 
-    fn get_capacity(&self) -> u32 {
-        (self.map_filename_to_file.borrow().len() + self.available_files.borrow().len()) as u32
+    fn begin_operation(&self) -> Result<Operation<'_>> {
+        if self.readers.get() != 0 {
+            return Err(OpfsSAHError::Busy);
+        }
+        self.begin_import_operation()
     }
 
-    fn get_file_count(&self) -> u32 {
-        self.map_filename_to_file.borrow().len() as u32
+    fn begin_import_operation(&self) -> Result<Operation<'_>> {
+        if self.state.get() == PoolState::Removed {
+            return Err(OpfsSAHError::Uninstalled);
+        }
+
+        if self.busy.replace(true) {
+            return Err(OpfsSAHError::Busy);
+        }
+
+        Ok(Operation(&self.busy))
+    }
+
+    fn check_closed(&self) -> Result<()> {
+        if self
+            .map_filename_to_file
+            .borrow()
+            .values()
+            .any(|file| file.open_count.get() != 0)
+        {
+            Err(OpfsSAHError::FilesInUse)
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn add_capacity(&self, n: usize) -> Result<usize> {
+        self.check_active()?;
+        let _operation = self.begin_operation()?;
+
+        let mut added = Vec::new();
+        added
+            .try_reserve(n)
+            .map_err(|_| OpfsSAHError::OutOfMemory)?;
+        self.available_files
+            .borrow_mut()
+            .try_reserve(n)
+            .map_err(|_| OpfsSAHError::OutOfMemory)?;
+
+        for _ in 0..n {
+            let mut slot = None;
+            for _ in 0..MAX_FILENAME_ATTEMPTS {
+                let opaque = random_name(|buf| self.os.random(buf))?;
+                if self
+                    .available_files
+                    .borrow()
+                    .iter()
+                    .chain(self.map_filename_to_file.borrow().values())
+                    .chain(added.iter())
+                    .any(|file: &SyncAccessFile| file.opaque == opaque)
+                {
+                    continue;
+                }
+
+                let options = FileSystemGetFileOptions::new();
+                options.set_create(true);
+                let handle = JsFuture::from(
+                    self.dh_opaque
+                        .get_file_handle_with_options(&opaque, &options),
+                )
+                .await
+                .map_err(|err| OpfsSAHError::js("create pool file", err))?
+                .into();
+                let file = SyncAccessFile::acquire(handle, opaque).await?;
+
+                // Never overwrite a file reached by a random-name collision.
+                if file.physical_size()? != 0 {
+                    continue;
+                }
+
+                if let Err(error) = file.initialize() {
+                    let opaque = file.opaque.clone();
+                    drop(file);
+
+                    if let Err(err) = JsFuture::from(self.dh_opaque.remove_entry(&opaque)).await {
+                        return Err(OpfsSAHError::Cleanup {
+                            error: Box::new(error),
+                            cleanup: Box::new(OpfsSAHError::js("remove incomplete slot", err)),
+                        });
+                    }
+
+                    return Err(error);
+                }
+
+                slot = Some(file);
+                break;
+            }
+            added.push(slot.ok_or(OpfsSAHError::NameCollision)?);
+        }
+
+        self.available_files.borrow_mut().extend(added);
+
+        Ok(self.capacity())
+    }
+
+    async fn ensure_capacity(&self, min: usize) -> Result<()> {
+        self.add_capacity(min.saturating_sub(self.capacity()))
+            .await?;
+
+        Ok(())
+    }
+
+    async fn reduce_capacity(&self, n: usize) -> Result<usize> {
+        self.check_active()?;
+        let _operation = self.begin_operation()?;
+
+        let count = n.min(self.available_files.borrow().len());
+        for _ in 0..count {
+            let file = self.available_files.borrow_mut().pop().unwrap();
+            let opaque = file.opaque.clone();
+            drop(file);
+
+            // Process one slot at a time: failure/cancellation cannot lose
+            // ownership of the rest. An undeleted file is rediscovered on resume.
+            JsFuture::from(self.dh_opaque.remove_entry(&opaque))
+                .await
+                .map_err(|err| OpfsSAHError::js("remove unused slot", err))?;
+        }
+
+        Ok(count)
+    }
+
+    fn capacity(&self) -> usize {
+        self.map_filename_to_file.borrow().len()
+            + self.available_files.borrow().len()
+            + self.quarantined_files.borrow().len()
+    }
+
+    fn get_file_count(&self) -> usize {
+        self.map_filename_to_file.borrow().len()
     }
 
     fn get_filenames(&self) -> Vec<String> {
         self.map_filename_to_file.borrow().keys().cloned().collect()
     }
 
-    fn get_associated_filename(&self, sah: &FileSystemSyncAccessHandle) -> Result<Option<String>> {
-        sah.read_with_buffer_source_and_options(&self.header_buffer, &read_write_options(0.0))
-            .map_err(OpfsSAHError::Read)?;
-        let flags = self.header_buffer_view.get_uint32(HEADER_OFFSET_FLAGS);
-        if self.header_buffer.get_index(0) != 0
-            && ((flags & SQLITE_OPEN_DELETEONCLOSE as u32 != 0)
-                || (flags & PERSISTENT_FILE_TYPES as u32) == 0)
-        {
-            return Ok(None);
-        }
-
-        let name_length = self
-            .header_buffer
-            .to_vec()
-            .iter()
-            .position(|&x| x == 0)
-            .unwrap_or_default();
-        if name_length == 0 {
-            sah.truncate_with_u32(HEADER_OFFSET_DATA as u32)
-                .map_err(OpfsSAHError::Truncate)?;
-            return Ok(None);
-        }
-        // set_associated_filename ensures that it is utf8
-        let filename =
-            String::from_utf8(self.header_buffer.subarray(0, name_length as u32).to_vec()).unwrap();
-        Ok(Some(filename))
+    fn has_filename(&self, name: &str) -> bool {
+        self.map_filename_to_file.borrow().contains_key(name)
     }
 
-    fn set_associated_filename(
-        &self,
-        sah: &FileSystemSyncAccessHandle,
-        filename: Option<&str>,
-        flags: i32,
-    ) -> Result<()> {
-        self.header_buffer_view
-            .set_uint32(HEADER_OFFSET_FLAGS, flags as u32);
-
-        if let Some(filename) = filename {
-            if filename.is_empty() {
-                return Err(OpfsSAHError::Generic("Filename is empty".into()));
-            }
-            if HEADER_MAX_FILENAME_SIZE <= filename.len() + 1 {
-                return Err(OpfsSAHError::Generic(format!(
-                    "Filename too long: {filename}"
-                )));
-            }
-            self.header_buffer
-                .subarray(0, filename.len() as u32)
-                .copy_from(filename.as_bytes());
-            self.header_buffer
-                .fill(0, filename.len() as u32, HEADER_MAX_FILENAME_SIZE as u32);
-        } else {
-            self.header_buffer
-                .fill(0, 0, HEADER_MAX_FILENAME_SIZE as u32);
-            sah.truncate_with_u32(HEADER_OFFSET_DATA as u32)
-                .map_err(OpfsSAHError::Truncate)?;
-        }
-
-        sah.write_with_js_u8_array_and_options(&self.header_buffer, &read_write_options(0.0))
-            .map_err(OpfsSAHError::Write)?;
-
-        Ok(())
-    }
-
-    async fn acquire_access_handles(&self, clear_files: bool) -> Result<()> {
+    async fn acquire_access_handles(&self, clear: bool) -> Result<()> {
+        let mut acquired = Vec::new();
         let iter = self.dh_opaque.entries();
-        while let Ok(future) = iter.next() {
-            let next: IteratorNext = JsFuture::from(future)
-                .await
-                .map_err(OpfsSAHError::IterHandle)?
-                .into();
+        loop {
+            let next: IteratorNext = JsFuture::from(
+                iter.next()
+                    .map_err(|err| OpfsSAHError::js("iterate pool directory", err))?,
+            )
+            .await
+            .map_err(|err| OpfsSAHError::js("iterate pool directory", err))?
+            .into();
             if next.done() {
                 break;
             }
+
             let array: Array = next.value().into();
             let opaque = array
                 .get(0)
                 .as_string()
-                .ok_or_else(|| OpfsSAHError::Generic("Failed to get file's opaque name".into()))?;
+                .ok_or(OpfsSAHError::InvalidDirectoryEntry)?;
             let value = array.get(1);
-            let kind = Reflect::get(&value, &JsValue::from("kind"))
-                .map_err(OpfsSAHError::Reflect)?
-                .as_string();
-            if kind.as_deref() == Some("file") {
-                let handle = FileSystemFileHandle::from(value);
-                let sah = JsFuture::from(handle.create_sync_access_handle())
-                    .await
-                    .map_err(OpfsSAHError::CreateSyncAccessHandle)?;
-                let sah = FileSystemSyncAccessHandle::from(sah);
-                let file = SyncAccessFile {
-                    handle: sah,
-                    opaque,
-                };
-                let clear_file = |file: SyncAccessFile| -> Result<()> {
-                    self.set_associated_filename(&file.handle, None, 0)?;
-                    self.available_files.borrow_mut().push(file);
-                    Ok(())
-                };
-                if clear_files {
-                    clear_file(file)?;
-                } else if let Some(filename) = self.get_associated_filename(&file.handle)? {
-                    self.map_filename_to_file
-                        .borrow_mut()
-                        .insert(filename, file);
-                } else {
-                    clear_file(file)?;
-                }
+            let kind = Reflect::get(&value, &"kind".into())
+                .map_err(|err| OpfsSAHError::js("get directory entry kind", err))?;
+            if kind.as_string().as_deref() == Some("file") {
+                acquired
+                    .try_reserve(1)
+                    .map_err(|_| OpfsSAHError::OutOfMemory)?;
+                acquired.push(SyncAccessFile::acquire(value.into(), opaque).await?);
             }
         }
+
+        // Acquire every handle before clearing any data or publishing the pool.
+        let mut assigned = HashMap::new();
+        let mut available = Vec::new();
+        assigned
+            .try_reserve(acquired.len())
+            .map_err(|_| OpfsSAHError::OutOfMemory)?;
+        available
+            .try_reserve(acquired.len())
+            .map_err(|_| OpfsSAHError::OutOfMemory)?;
+
+        for file in acquired {
+            let filename = if clear {
+                None
+            } else {
+                file.associated_filename()?
+            };
+
+            if let Some(filename) = filename {
+                if assigned.contains_key(&filename) {
+                    return Err(OpfsSAHError::DuplicateFilename(filename));
+                }
+                assigned.insert(filename, file);
+            } else {
+                available.push(file);
+            }
+        }
+
+        for file in &available {
+            if !clear && file.physical_size()? < HEADER_OFFSET_DATA as u64 {
+                file.initialize()?;
+            } else {
+                file.associate(None, 0)?;
+            }
+        }
+
+        *self.map_filename_to_file.borrow_mut() = assigned;
+        *self.available_files.borrow_mut() = available;
+        self.needs_recovery.set(false);
 
         Ok(())
     }
 
-    fn release_access_handles(&self) {
-        for file in std::mem::take(&mut *self.available_files.borrow_mut())
-            .into_iter()
-            .chain(std::mem::take(&mut *self.map_filename_to_file.borrow_mut()).into_values())
-        {
-            file.handle.close();
-        }
+    fn release_access_handles(&self) -> Result<()> {
+        self.check_closed()?;
+
+        self.available_files.borrow_mut().clear();
+        self.map_filename_to_file.borrow_mut().clear();
+        self.quarantined_files.borrow_mut().clear();
+        self.lease.borrow_mut().take();
+
+        Ok(())
     }
 
     fn delete_file(&self, filename: &str) -> Result<bool> {
-        let mut map_filename_to_file = self.map_filename_to_file.borrow_mut();
-        let mut available_files = self.available_files.borrow_mut();
+        self.check_active()?;
 
-        if let Some(file) = map_filename_to_file.remove(filename) {
-            available_files.push(file);
-            let Some(file) = available_files.last() else {
-                unreachable!();
-            };
-            self.set_associated_filename(&file.handle, None, 0)?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-
-    fn has_filename(&self, filename: &str) -> bool {
-        self.map_filename_to_file.borrow().contains_key(filename)
-    }
-
-    fn with_file<E, R, F: Fn(&SyncAccessFile) -> Result<R, E>>(
-        &self,
-        filename: &str,
-        f: F,
-    ) -> Option<Result<R, E>> {
-        self.map_filename_to_file.borrow().get(filename).map(f)
-    }
-
-    fn with_file_mut<E, R, F: Fn(&mut SyncAccessFile) -> Result<R, E>>(
-        &self,
-        filename: &str,
-        f: F,
-    ) -> Option<Result<R, E>> {
-        self.map_filename_to_file
-            .borrow_mut()
-            .get_mut(filename)
-            .map(f)
-    }
-
-    fn with_new_file<E, F: FnOnce(&SyncAccessFile) -> Result<(), E>>(
-        &self,
-        filename: &str,
-        flags: i32,
-        f: F,
-    ) -> Result<Result<(), E>> {
-        let mut map_filename_to_file = self.map_filename_to_file.borrow_mut();
-        let mut available_files = self.available_files.borrow_mut();
-        if map_filename_to_file.contains_key(filename) {
-            return Err(OpfsSAHError::Generic(format!(
-                "{filename} file already exists"
-            )));
-        }
-        let file = available_files
-            .pop()
-            .ok_or_else(|| OpfsSAHError::Generic("No files available in the pool".into()))?;
-        map_filename_to_file.insert(filename.into(), file);
-
-        let Some(file) = map_filename_to_file.get(filename) else {
-            unreachable!();
-        };
-        self.set_associated_filename(&file.handle, Some(filename), flags)?;
-        Ok(f(file))
-    }
-
-    fn pause_vfs(&self) -> Result<()> {
-        if self.is_paused.get() {
-            return Ok(());
-        }
-
-        if !self.open_files.borrow().is_empty() {
-            return Err(OpfsSAHError::Generic(
-                "Cannot pause: files may be in use".to_string(),
-            ));
-        }
-
-        let (vfs, _) = self.vfs.get();
-        if !vfs.is_null() {
-            unsafe {
-                sqlite3_vfs_unregister(vfs);
-            }
-        }
-        self.release_access_handles();
-
-        self.is_paused.set(true);
-
-        Ok(())
-    }
-
-    async fn unpause_vfs(&self) -> Result<()> {
-        if !self.is_paused.get() {
-            return Ok(());
-        }
-
-        self.acquire_access_handles(false).await?;
-
-        let (vfs, make_default) = self.vfs.get();
-        if vfs.is_null() {
-            return Err(OpfsSAHError::Generic(
-                "VFS pointer is null. Did you forget to install?".to_string(),
-            ));
-        }
-
-        match unsafe { sqlite3_vfs_register(vfs, i32::from(make_default)) } {
-            SQLITE_OK => {
-                self.is_paused.set(false);
-                Ok(())
-            }
-            error_code => Err(OpfsSAHError::Generic(format!(
-                "Failed to register VFS (SQLite error code: {error_code})"
-            ))),
-        }
-    }
-
-    fn export_db(&self, filename: &str) -> Result<Vec<u8>> {
-        let files = self.map_filename_to_file.borrow();
-        let file = files
-            .get(filename)
-            .ok_or_else(|| OpfsSAHError::Generic(format!("File not found: {filename}")))?;
-
-        let sah = &file.handle;
-        let actual_size = (sah.get_size().map_err(OpfsSAHError::GetSize)?
-            - HEADER_OFFSET_DATA as f64)
-            .max(0.0) as usize;
-
-        let mut data = vec![0; actual_size];
-        if actual_size > 0 {
-            let read = sah
-                .read_with_u8_array_and_options(
-                    &mut data,
-                    &read_write_options(HEADER_OFFSET_DATA as f64),
-                )
-                .map_err(OpfsSAHError::Read)?;
-            if read != actual_size as f64 {
-                return Err(OpfsSAHError::Generic(format!(
-                    "Expected to read {actual_size} bytes but read {read}.",
-                )));
-            }
-        }
-        Ok(data)
-    }
-
-    fn export_db_reader(&self, filename: &str) -> Result<DbExport> {
-        let files = self.map_filename_to_file.borrow();
-        let file = files
-            .get(filename)
-            .ok_or_else(|| OpfsSAHError::Generic(format!("File not found: {filename}")))?;
-
-        let sah = file.handle.clone();
-        let actual_size = (sah.get_size().map_err(OpfsSAHError::GetSize)?
-            - HEADER_OFFSET_DATA as f64)
-            .max(0.0) as u64;
-
-        let reader = DbExport {
-            handle: sah,
-            len: actual_size,
-            position: 0,
-        };
-
-        Ok(reader)
-    }
-
-    fn import_db(&self, filename: &str, bytes: &[u8]) -> Result<()> {
-        check_import_db(bytes)?;
-        self.import_db_unchecked(filename, bytes, true)
-    }
-
-    fn import_db_unchecked(&self, filename: &str, bytes: &[u8], clear_wal: bool) -> Result<()> {
-        self.with_new_file(filename, SQLITE_OPEN_MAIN_DB, |file| {
-            let sah = &file.handle;
-            let length = bytes.len() as f64;
-            let written = sah
-                .write_with_u8_array_and_options(
-                    bytes,
-                    &read_write_options(HEADER_OFFSET_DATA as f64),
-                )
-                .map_err(OpfsSAHError::Write)?;
-
-            if written != length {
-                return Err(OpfsSAHError::Generic(format!(
-                    "Expected to write {length} bytes but wrote {written}.",
-                )));
-            }
-
-            if clear_wal {
-                // forced to write back to legacy mode
-                sah.write_with_u8_array_and_options(
-                    &[1, 1],
-                    &read_write_options((HEADER_OFFSET_DATA + 18) as f64),
-                )
-                .map_err(OpfsSAHError::Write)?;
-            }
-
-            Ok(())
-        })?
-    }
-
-    fn import_db_from_reader(&self, filename: &str, mut reader: impl Read) -> Result<()> {
-        let mut header = [0u8; 512];
-        reader
-            .read_exact(&mut header)
-            .map_err(|_| ImportDbError::InvalidHeader)?;
-        check_import_db(&header)?;
-
-        let length =
-            self.import_db_from_reader_unchecked(filename, header.as_slice().chain(reader), true)?;
-        if length < 512 || length % 512 != 0 {
-            return Err(ImportDbError::InvalidDbSize.into());
-        }
-
-        Ok(())
-    }
-
-    fn import_db_from_reader_unchecked(
-        &self,
-        filename: &str,
-        mut reader: impl Read,
-        clear_wal: bool,
-    ) -> Result<u64> {
-        let mut offset = 0u64;
-        self.with_new_file(filename, SQLITE_OPEN_MAIN_DB, |file| {
-            let sah = &file.handle;
-            let mut buf = [0u8; 4096];
-            loop {
-                let length = reader.read(&mut buf).map_err(|_| {
-                    OpfsSAHError::Generic("An error occurred reading input db".to_string())
-                })?;
-                if length == 0 {
-                    break;
-                }
-
-                let written = sah
-                    .write_with_u8_array_and_options(
-                        &buf[..length],
-                        &read_write_options((HEADER_OFFSET_DATA as u64 + offset) as f64),
-                    )
-                    .map_err(OpfsSAHError::Write)?;
-
-                if written != length as f64 {
-                    return Err(OpfsSAHError::Generic(format!(
-                        "Expected to write {length} bytes but wrote {written}.",
-                    )));
-                }
-
-                offset += length as u64;
-            }
-
-            if clear_wal {
-                // forced to write back to legacy mode
-                sah.write_with_u8_array_and_options(
-                    &[1, 1],
-                    &read_write_options((HEADER_OFFSET_DATA + 18) as f64),
-                )
-                .map_err(OpfsSAHError::Write)?;
-            }
-
-            Ok(())
-        })??;
-
-        Ok(offset)
-    }
-}
-
-impl VfsFile for SyncAccessFile {
-    fn read(&self, buf: &mut [u8], offset: usize) -> VfsResult<bool> {
-        let n_read = self
-            .handle
-            .read_with_u8_array_and_options(
-                buf,
-                &read_write_options((HEADER_OFFSET_DATA + offset) as f64),
-            )
-            .map_err(OpfsSAHError::Read)
-            .map_err(|err| err.vfs_err(SQLITE_IOERR))?;
-
-        if (n_read as usize) < buf.len() {
-            buf[n_read as usize..].fill(0);
+        let mut files = self.map_filename_to_file.borrow_mut();
+        let Some(file) = files.get(filename) else {
             return Ok(false);
+        };
+
+        if file.open_count.get() != 0 {
+            return Err(OpfsSAHError::FileInUse(filename.into()));
         }
+
+        if let Err(err) = file.associate(None, 0) {
+            // The durable name may now differ from our map. Fail closed until
+            // an explicit pause/resume or clear reconciles the namespace.
+            self.needs_recovery.set(true);
+            return Err(err);
+        }
+
+        self.available_files
+            .borrow_mut()
+            .push(files.remove(filename).unwrap());
 
         Ok(true)
     }
 
-    fn write(&mut self, buf: &[u8], offset: usize) -> VfsResult<()> {
-        let n_write = self
-            .handle
-            .write_with_u8_array_and_options(
-                buf,
-                &read_write_options((HEADER_OFFSET_DATA + offset) as f64),
-            )
-            .map_err(OpfsSAHError::Write)
-            .map_err(|err| err.vfs_err(SQLITE_IOERR))?;
-
-        if buf.len() != n_write as usize {
-            return Err(VfsError::new(SQLITE_ERROR, "failed to write file".into()));
+    fn with_new_file(
+        &self,
+        filename: &str,
+        flags: i32,
+        write: impl FnOnce(&SyncAccessFile) -> Result<()>,
+    ) -> Result<()> {
+        self.check_active()?;
+        if self.has_filename(filename) {
+            return Err(OpfsSAHError::FileExists(filename.into()));
         }
+
+        self.map_filename_to_file
+            .borrow_mut()
+            .try_reserve(1)
+            .map_err(|_| OpfsSAHError::OutOfMemory)?;
+        let file = self
+            .available_files
+            .borrow_mut()
+            .pop()
+            .ok_or(OpfsSAHError::NoCapacity)?;
+
+        // Write contents before publishing their name. associate flushes both.
+        let result = write(&file).and_then(|()| file.associate(Some(filename), flags));
+        if let Err(error) = result {
+            if let Err(cleanup) = file.associate(None, 0) {
+                self.quarantined_files.borrow_mut().push(file);
+                self.needs_recovery.set(true);
+                return Err(OpfsSAHError::Cleanup {
+                    error: Box::new(error),
+                    cleanup: Box::new(cleanup),
+                });
+            }
+
+            self.available_files.borrow_mut().push(file);
+            return Err(error);
+        }
+
+        self.map_filename_to_file
+            .borrow_mut()
+            .insert(filename.into(), file);
 
         Ok(())
     }
 
-    fn truncate(&mut self, size: usize) -> VfsResult<()> {
-        self.handle
-            .truncate_with_f64((HEADER_OFFSET_DATA + size) as f64)
-            .map_err(OpfsSAHError::Truncate)
-            .map_err(|err| err.vfs_err(SQLITE_IOERR))
+    fn pause(&self) -> Result<()> {
+        let _operation = self.begin_operation()?;
+        if self.state.get() == PoolState::Paused {
+            return Ok(());
+        }
+
+        self.check_closed()?;
+        if let Some(registration) = self.registration.borrow().as_ref() {
+            let code = unsafe { sqlite3_vfs_unregister(registration.as_ptr()) };
+            if code != SQLITE_OK {
+                return Err(OpfsSAHError::sqlite("unregister VFS", code));
+            }
+        }
+
+        self.release_access_handles()?;
+        self.state.set(PoolState::Paused);
+
+        Ok(())
     }
 
-    fn flush(&mut self) -> VfsResult<()> {
-        FileSystemSyncAccessHandle::flush(&self.handle)
-            .map_err(OpfsSAHError::Flush)
-            .map_err(|err| err.vfs_err(SQLITE_IOERR))
+    async fn resume(&self) -> Result<()> {
+        let _operation = self.begin_operation()?;
+        if self.state.get() == PoolState::Active {
+            return if self.needs_recovery.get() {
+                Err(OpfsSAHError::NeedsRecovery)
+            } else {
+                Ok(())
+            };
+        }
+
+        let vfs = self
+            .registration
+            .borrow()
+            .as_ref()
+            .ok_or(OpfsSAHError::Uninstalled)?
+            .as_ptr();
+        if let Some(existing) = unsafe { registered_vfs(&self.name)? } {
+            if existing != vfs {
+                return Err(RegisterVfsError::NameConflict(self.name.clone()).into());
+            }
+        }
+
+        let lease = SyncAccessFile::acquire(self.lock_file.clone(), ".lock".into()).await?;
+        self.acquire_access_handles(false).await?;
+
+        // Check again after yielding: foreign code may have registered the name.
+        let registered = unsafe { registered_vfs(&self.name)? };
+        let result = if registered.is_some_and(|existing| existing != vfs) {
+            Err(RegisterVfsError::NameConflict(self.name.clone()).into())
+        } else {
+            let code = unsafe { sqlite3_vfs_register(vfs, i32::from(self.make_default.get())) };
+            if code == SQLITE_OK {
+                Ok(())
+            } else {
+                Err(OpfsSAHError::sqlite("register VFS", code))
+            }
+        };
+
+        if let Err(err) = result {
+            self.release_access_handles()?;
+            return Err(err);
+        }
+        *self.lease.borrow_mut() = Some(lease);
+        self.state.set(PoolState::Active);
+
+        Ok(())
     }
 
-    fn size(&self) -> VfsResult<usize> {
-        Ok(self
-            .handle
-            .get_size()
-            .map_err(OpfsSAHError::GetSize)
-            .map_err(|err| err.vfs_err(SQLITE_IOERR))? as usize
-            - HEADER_OFFSET_DATA)
+    fn clear(&self) -> Result<()> {
+        self.check_state()?;
+        let _operation = self.begin_operation()?;
+        self.check_closed()?;
+
+        // No await and no relinquishing ownership to other workers.
+        self.needs_recovery.set(true);
+        let names = self.get_filenames();
+        for name in names {
+            let mut files = self.map_filename_to_file.borrow_mut();
+            let file = files.get(&name).unwrap();
+            file.associate(None, 0)?;
+            self.available_files
+                .borrow_mut()
+                .push(files.remove(&name).unwrap());
+        }
+
+        loop {
+            let file = self.quarantined_files.borrow_mut().pop();
+            let Some(file) = file else {
+                break;
+            };
+
+            if let Err(err) = file.associate(None, 0) {
+                self.quarantined_files.borrow_mut().push(file);
+                return Err(err);
+            }
+
+            self.available_files.borrow_mut().push(file);
+        }
+
+        self.needs_recovery.set(false);
+
+        Ok(())
     }
 }
 
-type SyncAccessHandleAppData = OpfsSAHPool;
+impl DbTransfer for OpfsSAHPool {
+    type Error = OpfsSAHError;
+    type Target<'a> = OpfsSAHImportTarget<'a>;
+    type Source<'a> = OpfsSAHExportSource<'a>;
+
+    fn open_export(&self, filename: &str) -> Result<Self::Source<'_>> {
+        self.check_active()?;
+        validate_filename(filename)?;
+
+        let files = self.map_filename_to_file.borrow();
+        let file = files
+            .get(filename)
+            .ok_or_else(|| OpfsSAHError::FileNotFound(filename.into()))?;
+        if file.open_count.get() != 0 {
+            return Err(OpfsSAHError::FileInUse(filename.into()));
+        }
+
+        // Conservative: even a retained PERSIST journal must be removed by the
+        // caller after SQLite has recovered/closed the database.
+        for suffix in ["-journal", "-wal"] {
+            if let Some(sidecar) = files.get(&format!("{filename}{suffix}")) {
+                if sidecar.size()? != 0 {
+                    return Err(OpfsSAHError::RecoveryRequired(filename.into()));
+                }
+            }
+        }
+
+        let size = file.size()?;
+        Ok(OpfsSAHExportSource {
+            file: file.clone(),
+            size,
+            _operation: self.begin_operation()?,
+        })
+    }
+
+    fn create_import(&self, filename: &str, size: u64) -> Result<Self::Target<'_>> {
+        self.check_import_ready()?;
+        validate_filename(filename)?;
+        physical_offset(size, 0, VfsErrorCode::IoWrite)?;
+
+        if self.has_filename(filename) {
+            return Err(OpfsSAHError::FileExists(filename.into()));
+        }
+
+        for suffix in ["-journal", "-wal"] {
+            if self.has_filename(&format!("{filename}{suffix}")) {
+                return Err(OpfsSAHError::RecoveryRequired(filename.into()));
+            }
+        }
+
+        self.map_filename_to_file
+            .borrow_mut()
+            .try_reserve(1)
+            .map_err(|_| OpfsSAHError::OutOfMemory)?;
+        let file = self
+            .available_files
+            .borrow()
+            .last()
+            .cloned()
+            .ok_or(OpfsSAHError::NoCapacity)?;
+
+        // Keep the reserved slot counted in capacity. The operation guard
+        // prevents reuse until finish/abort removes or clears it.
+        Ok(OpfsSAHImportTarget {
+            pool: self,
+            file,
+            filename: filename.into(),
+            done: false,
+            _operation: self.begin_import_operation()?,
+        })
+    }
+}
+
+type SyncAccessHandleAppData = Rc<OpfsSAHPool>;
+
+thread_local! {
+    // Keep paused pools discoverable independently of SQLite's registry.
+    static REGISTERED_POOLS: RefCell<HashMap<String, Rc<OpfsSAHPool>>> = RefCell::new(HashMap::new());
+}
 
 struct SyncAccessHandleStore;
 
-impl VfsStore<SyncAccessFile, SyncAccessHandleAppData> for SyncAccessHandleStore {
-    fn add_file(vfs: *mut sqlite3_vfs, filename: &str, flags: i32) -> VfsResult<()> {
-        let pool = unsafe { Self::app_data(vfs) };
+impl VfsStore for SyncAccessHandleStore {
+    type File = SyncAccessFileHandle;
+    type AppData = SyncAccessHandleAppData;
 
-        pool.with_new_file(filename, flags, |_| Ok(()))
-            .map_err(|err| err.vfs_err(SQLITE_CANTOPEN))?
+    fn close_file(
+        data: &Self::AppData,
+        name: Option<&str>,
+        mut file: Self::File,
+        options: OpenOptions,
+    ) -> VfsResult<()> {
+        let temporary_name = file.temporary_name.take();
+        let name = name
+            .or(temporary_name.as_deref())
+            .expect("opened SAH file has a name");
+
+        let flushed = file
+            .file
+            .flush()
+            .map_err(|err| err.vfs_err(VfsErrorCode::IoSync));
+        drop(file);
+
+        let deleted = if options.delete_on_close() {
+            Self::delete_file(data, name, false)
+        } else {
+            Ok(())
+        };
+
+        flushed.and(deleted)
     }
 
-    fn contains_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<bool> {
-        let pool = unsafe { Self::app_data(vfs) };
-        Ok(pool.has_filename(file))
+    fn record_error(data: &Self::AppData, error: VfsError) {
+        data.last_error.replace(Some(error));
     }
 
-    fn delete_file(vfs: *mut sqlite3_vfs, file: &str) -> VfsResult<()> {
-        let pool = unsafe { Self::app_data(vfs) };
-        pool.delete_file(file)
-            .map_err(|err| err.vfs_err(SQLITE_IOERR_DELETE))?;
+    fn last_error(data: &Self::AppData) -> Option<VfsError> {
+        data.last_error.borrow().clone()
+    }
+
+    fn open_file(
+        pool: &Self::AppData,
+        request: rsqlite_vfs::OpenRequest<'_>,
+    ) -> VfsResult<OpenedFile<Self::File>> {
+        let open = || -> Result<OpenedFile<Self::File>> {
+            pool.check_active()?;
+
+            let options = request.options;
+            let temporary_name = if request.filename.is_none() {
+                let mut name = None;
+                for _ in 0..MAX_FILENAME_ATTEMPTS {
+                    let candidate = random_name(|buf| pool.os.random(buf))?;
+                    if !pool.has_filename(&candidate) {
+                        name = Some(candidate);
+                        break;
+                    }
+                }
+                Some(name.ok_or(OpfsSAHError::NameCollision)?)
+            } else {
+                None
+            };
+
+            let filename = request
+                .filename
+                .map(|name| name.path())
+                .or(temporary_name.as_deref())
+                .unwrap();
+            if options.kind() == Some(FileKind::MainDb) {
+                validate_filename(filename)?;
+            }
+
+            if pool.has_filename(filename) {
+                if options.exclusive() {
+                    return Err(OpfsSAHError::FileExists(filename.into()));
+                }
+            } else {
+                if !options.create() {
+                    return Err(OpfsSAHError::FileNotFound(filename.into()));
+                }
+
+                pool.with_new_file(filename, options.raw_flags(), |_| Ok(()))?;
+            }
+
+            let file = pool
+                .map_filename_to_file
+                .borrow()
+                .get(filename)
+                .unwrap()
+                .clone();
+
+            // Like upstream SAH pools, repeated opens share the underlying
+            // handle. This is needed for SQLite's internal journal inspection,
+            // but does not provide coordination between database connections.
+            file.open_count.set(file.open_count.get() + 1);
+
+            Ok(OpenedFile {
+                file: SyncAccessFileHandle {
+                    file,
+                    temporary_name,
+                    read_only: options.access() == OpenAccess::ReadOnly,
+                    lock_level: LockLevel::None,
+                },
+                access: options.access(),
+            })
+        };
+
+        open().map_err(|err| err.vfs_err(VfsErrorCode::CantOpen))
+    }
+
+    fn access(pool: &Self::AppData, name: &str, _mode: AccessMode) -> VfsResult<bool> {
+        pool.check_active()
+            .map_err(|err| err.vfs_err(VfsErrorCode::IoAccess))?;
+
+        Ok(pool.has_filename(name))
+    }
+
+    fn full_pathname(_pool: &Self::AppData, name: &str) -> VfsResult<String> {
+        validate_filename(name).map_err(|err| err.vfs_err(VfsErrorCode::CantOpen))?;
+
+        Ok(name.into())
+    }
+
+    fn delete_file(pool: &Self::AppData, name: &str, _sync_dir: bool) -> VfsResult<()> {
+        // Always flush the slot header, including when sync_dir is false.
+        pool.delete_file(name)
+            .map_err(|err| err.vfs_err(VfsErrorCode::IoDelete))?;
+
         Ok(())
-    }
-
-    fn with_file<F: Fn(&SyncAccessFile) -> VfsResult<i32>>(
-        vfs_file: &SQLiteVfsFile,
-        f: F,
-    ) -> VfsResult<i32> {
-        let name = unsafe { vfs_file.name() };
-        let pool = unsafe { Self::app_data(vfs_file.vfs) };
-        pool.with_file(name, f)
-            .ok_or_else(|| VfsError::new(SQLITE_IOERR, format!("{name} not found")))?
-    }
-
-    fn with_file_mut<F: Fn(&mut SyncAccessFile) -> VfsResult<i32>>(
-        vfs_file: &SQLiteVfsFile,
-        f: F,
-    ) -> VfsResult<i32> {
-        let name = unsafe { vfs_file.name() };
-        let pool = unsafe { Self::app_data(vfs_file.vfs) };
-        pool.with_file_mut(name, f)
-            .ok_or_else(|| VfsError::new(SQLITE_IOERR, format!("{name} not found")))?
     }
 }
 
 struct SyncAccessHandleIoMethods;
 
 impl SQLiteIoMethods for SyncAccessHandleIoMethods {
-    type File = SyncAccessFile;
-    type AppData = SyncAccessHandleAppData;
     type Store = SyncAccessHandleStore;
-
-    const VERSION: ::std::os::raw::c_int = 1;
-
-    unsafe extern "C" fn xSectorSize(_pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
-        SECTOR_SIZE as i32
-    }
-
-    unsafe extern "C" fn xCheckReservedLock(
-        _pFile: *mut sqlite3_file,
-        pResOut: *mut ::std::os::raw::c_int,
-    ) -> ::std::os::raw::c_int {
-        *pResOut = 1;
-        SQLITE_OK
-    }
-
-    unsafe extern "C" fn xDeviceCharacteristics(
-        _pFile: *mut sqlite3_file,
-    ) -> ::std::os::raw::c_int {
-        SQLITE_IOCAP_UNDELETABLE_WHEN_OPEN
-    }
-
-    unsafe extern "C" fn xClose(pFile: *mut sqlite3_file) -> ::std::os::raw::c_int {
-        let vfs_file = SQLiteVfsFile::from_file(pFile);
-        // The VFS file handle will be dropped, so we must clone the filename to use it after the drop.
-        let file = vfs_file.name().to_string();
-        let app_data = SyncAccessHandleStore::app_data(vfs_file.vfs);
-        let ret = Self::xCloseImpl(pFile);
-        if ret == SQLITE_OK {
-            let exist = app_data.open_files.borrow_mut().remove(&file);
-            debug_assert!(exist, "DB closed without open");
-        }
-        ret
-    }
 }
 
-struct SyncAccessHandleVfs<C>(PhantomData<C>);
+struct SyncAccessHandleVfs;
 
-impl<C> SQLiteVfs<SyncAccessHandleIoMethods> for SyncAccessHandleVfs<C>
-where
-    C: OsCallback,
-{
-    const VERSION: ::std::os::raw::c_int = 2;
-    const MAX_PATH_SIZE: ::std::os::raw::c_int = HEADER_MAX_FILENAME_SIZE as _;
+impl SQLiteVfs<SyncAccessHandleIoMethods> for SyncAccessHandleVfs {
+    type Os = dyn OsCallback;
 
-    unsafe extern "C" fn xOpen(
-        pVfs: *mut sqlite3_vfs,
-        zName: sqlite3_filename,
-        pFile: *mut sqlite3_file,
-        flags: ::std::os::raw::c_int,
-        pOutFlags: *mut ::std::os::raw::c_int,
-    ) -> ::std::os::raw::c_int {
-        let ret = Self::xOpenImpl(pVfs, zName, pFile, flags, pOutFlags);
-        if ret == SQLITE_OK {
-            let app_data = SyncAccessHandleStore::app_data(pVfs);
-
-            // At this point, SQLite has allocated the pFile structure for us.
-            let vfs_file = SQLiteVfsFile::from_file(pFile);
-            app_data
-                .open_files
-                .borrow_mut()
-                .insert(vfs_file.name().into());
-        }
-        ret
+    fn os(data: &SyncAccessHandleAppData) -> &Self::Os {
+        &*data.os
     }
 
-    fn sleep(dur: Duration) {
-        C::sleep(dur);
-    }
-
-    fn random(buf: &mut [u8]) {
-        C::random(buf);
-    }
-
-    fn epoch_timestamp_in_ms() -> i64 {
-        C::epoch_timestamp_in_ms()
-    }
+    const MAX_PATH_SIZE: std::os::raw::c_int = (HEADER_MAX_FILENAME_SIZE - 1) as _;
 }
 
-/// Build `OpfsSAHPoolCfg`
+/// Builds an [`OpfsSAHPoolCfg`]. Validation occurs during [`install`].
 pub struct OpfsSAHPoolCfgBuilder(OpfsSAHPoolCfg);
 
 impl OpfsSAHPoolCfgBuilder {
+    /// Starts with the default pool configuration.
     pub fn new() -> Self {
         Self(OpfsSAHPoolCfg::default())
     }
 
-    /// The SQLite VFS name under which this pool's VFS is registered.
+    /// Sets the SQLite VFS name; defaults to `opfs-sahpool`.
+    ///
+    /// Must be nonempty and NUL-free.
     pub fn vfs_name(mut self, name: &str) -> Self {
         self.0.vfs_name = name.into();
         self
     }
 
-    /// Specifies the OPFS directory name in which to store metadata for the `vfs_name`
+    /// Sets the OPFS-root-relative directory; defaults to `.opfs-sahpool`.
+    ///
+    /// Empty slash-separated components are ignored; NUL, `.`, `..` and
+    /// entirely empty paths are rejected.
     pub fn directory(mut self, directory: &str) -> Self {
         self.0.directory = directory.into();
         self
     }
 
-    /// If truthy, contents and filename mapping are removed from each SAH
-    /// as it is acquired during initalization of the VFS, leaving the VFS's
-    /// storage in a pristine state. Use this only for databases which need not
-    /// survive a page reload.
+    /// Clears existing files after acquiring every slot on first install.
+    ///
+    /// Destructive and not atomic; ignored when reusing a pool. Defaults to `false`.
     pub fn clear_on_init(mut self, set: bool) -> Self {
         self.0.clear_on_init = set;
         self
     }
 
-    /// Specifies the default capacity of the VFS, i.e. the number of files
-    /// it may contain.
-    pub fn initial_capacity(mut self, cap: u32) -> Self {
+    /// Sets the minimum initial slot count, including journals; defaults to six.
+    ///
+    /// Does not shrink an existing larger pool.
+    pub fn initial_capacity(mut self, cap: usize) -> Self {
         self.0.initial_capacity = cap;
         self
     }
 
-    /// Build `OpfsSAHPoolCfg`.
+    /// Returns the configuration without accessing storage or validating it.
     pub fn build(self) -> OpfsSAHPoolCfg {
         self.0
     }
@@ -852,20 +1361,14 @@ impl Default for OpfsSAHPoolCfgBuilder {
     }
 }
 
-/// `OpfsSAHPool` options
+/// Pool configuration, created with [`OpfsSAHPoolCfgBuilder`] or [`Self::default`].
+///
+/// Validated by [`install`].
 pub struct OpfsSAHPoolCfg {
-    /// The SQLite VFS name under which this pool's VFS is registered.
-    pub vfs_name: String,
-    /// Specifies the OPFS directory name in which to store metadata for the `vfs_name`.
-    pub directory: String,
-    /// If truthy, contents and filename mapping are removed from each SAH
-    /// as it is acquired during initalization of the VFS, leaving the VFS's
-    /// storage in a pristine state. Use this only for databases which need not
-    /// survive a page reload.
-    pub clear_on_init: bool,
-    /// Specifies the default capacity of the VFS, i.e. the number of files
-    /// it may contain.
-    pub initial_capacity: u32,
+    vfs_name: String,
+    directory: String,
+    clear_on_init: bool,
+    initial_capacity: usize,
 }
 
 impl Default for OpfsSAHPoolCfg {
@@ -879,272 +1382,647 @@ impl Default for OpfsSAHPoolCfg {
     }
 }
 
+/// Pool and OPFS errors. Match variants, not the human-readable display text.
 #[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
 pub enum OpfsSAHError {
     #[error(transparent)]
-    Vfs(#[from] RegisterVfsError),
+    Backend(#[from] VfsError),
     #[error(transparent)]
-    ImportDb(#[from] ImportDbError),
-    #[error("This vfs is only available in dedicated worker")]
+    Vfs(#[from] RegisterVfsError),
+    #[error("OPFS sync access handles require a supported dedicated worker in a secure context")]
     NotSupported,
-    #[error("An error occurred while getting the directory handle")]
-    GetDirHandle(JsValue),
-    #[error("An error occurred while getting the file handle")]
-    GetFileHandle(JsValue),
-    #[error("An error occurred while creating sync access handle")]
-    CreateSyncAccessHandle(JsValue),
-    #[error("An error occurred while iterating")]
-    IterHandle(JsValue),
-    #[error("An error occurred while getting filename")]
-    GetPath(JsValue),
-    #[error("An error occurred while removing entity")]
-    RemoveEntity(JsValue),
-    #[error("An error occurred while getting size")]
-    GetSize(JsValue),
-    #[error("An error occurred while reading data")]
-    Read(JsValue),
-    #[error("An error occurred while writing data")]
-    Write(JsValue),
-    #[error("An error occurred while flushing data")]
-    Flush(JsValue),
-    #[error("An error occurred while truncating data")]
-    Truncate(JsValue),
-    #[error("An error occurred while getting data using reflect")]
-    Reflect(JsValue),
-    #[error("Generic error: {0}")]
-    Generic(String),
+    #[error("{operation}: {message}")]
+    Opfs {
+        /// Operation that failed, without including the browser's error text.
+        operation: &'static str,
+        /// Browser error name and message, or a fallback representation.
+        message: String,
+        /// Original JavaScript exception, retained for structured inspection.
+        value: JsValue,
+    },
+    #[error("{0}")]
+    InvalidFilename(&'static str),
+    #[error("pool directory must contain normal path components, without NUL, '.' or '..'")]
+    InvalidDirectory,
+    #[error("invalid OPFS directory entry")]
+    InvalidDirectoryEntry,
+    #[error("file already exists: {0:?}")]
+    FileExists(String),
+    #[error("file not found: {0:?}")]
+    FileNotFound(String),
+    #[error("file is in use: {0:?}")]
+    FileInUse(String),
+    #[error("pool has open files; close all files before changing its lifecycle")]
+    FilesInUse,
+    #[error("another pool management operation is in progress")]
+    Busy,
+    #[error("pool is paused")]
+    Paused,
+    #[error("pool has been uninstalled")]
+    Uninstalled,
+    /// An interrupted namespace update requires reconciliation, not necessarily
+    /// SQLite transaction recovery. [`VfsFilesManager::clear`] discards all contents.
+    #[error("pool namespace needs recovery; close databases, then pause/resume or call clear to discard all data")]
+    NeedsRecovery,
+    #[error("existing pool uses a different directory or OS callback type")]
+    ConfigurationMismatch,
+    #[error("directory is already owned by another pool: {0:?}")]
+    DirectoryInUse(String),
+    #[error("no unused file slots; increase the pool capacity")]
+    NoCapacity,
+    #[error("could not generate a unique filename")]
+    NameCollision,
+    #[error("invalid header in OPFS file {opaque:?}: {reason}")]
+    InvalidHeader {
+        /// Physical OPFS filename, not the virtual database name.
+        opaque: String,
+        reason: &'static str,
+    },
+    #[error("duplicate filename in pool headers: {0:?}")]
+    DuplicateFilename(String),
+    #[error("{operation}: expected {expected} bytes, got {actual}")]
+    ShortIo {
+        operation: &'static str,
+        expected: usize,
+        actual: f64,
+    },
+    /// Journal/WAL files prevent a standalone transfer. Their presence does not
+    /// prove a hot journal; retained `PERSIST` journals can also trigger this.
+    #[error("database has journal or WAL sidecars: {0:?}")]
+    RecoveryRequired(String),
+    #[error(transparent)]
+    Transfer(#[from] TransferError),
+    #[error("failed to read database import: {0}")]
+    Reader(#[from] io::Error),
+    #[error("unable to allocate memory for file data or pool capacity")]
+    OutOfMemory,
+    #[error("{error}; slot cleanup also failed: {cleanup}")]
+    Cleanup {
+        /// Original operation failure.
+        error: Box<OpfsSAHError>,
+        /// Subsequent failure while trying to reclaim the slot.
+        cleanup: Box<OpfsSAHError>,
+    },
 }
 
 impl OpfsSAHError {
-    fn vfs_err(&self, code: i32) -> VfsError {
-        VfsError::new(code, format!("{self}"))
+    fn js(operation: &'static str, value: JsValue) -> Self {
+        let property = |name: &str| {
+            Reflect::get(&value, &name.into())
+                .ok()
+                .and_then(|value| value.as_string())
+        };
+
+        let message = match (property("name"), property("message")) {
+            (Some(name), Some(message)) => format!("{name}: {message}"),
+            (_, Some(message)) => message,
+            _ => value.as_string().unwrap_or_else(|| format!("{value:?}")),
+        };
+
+        Self::Opfs {
+            operation,
+            message,
+            value,
+        }
+    }
+
+    fn sqlite(operation: &'static str, code: i32) -> Self {
+        Self::Backend(VfsError::new(
+            VfsErrorCode::from_raw(code).expect("SQLite returned an error code"),
+            format!("failed to {operation}").into(),
+        ))
+    }
+
+    fn vfs_err(&self, fallback: VfsErrorCode) -> VfsError {
+        if let Self::Backend(error) = self {
+            return error.clone();
+        }
+
+        let code = match self {
+            Self::OutOfMemory => VfsErrorCode::NoMemory,
+            Self::Opfs { value, .. }
+                if Reflect::get(value, &"name".into())
+                    .ok()
+                    .and_then(|name| name.as_string())
+                    .as_deref()
+                    == Some("QuotaExceededError") =>
+            {
+                VfsErrorCode::Full
+            }
+            _ => fallback,
+        };
+
+        VfsError::new(code, self.to_string().into())
     }
 }
 
-/// A database file reader whose length is recorded at construction.
+#[doc(hidden)]
+pub struct OpfsSAHImportTarget<'a> {
+    pool: &'a OpfsSAHPool,
+    file: SyncAccessFile,
+    filename: String,
+    done: bool,
+    _operation: Operation<'a>,
+}
+
+impl ImportTarget for OpfsSAHImportTarget<'_> {
+    type Error = OpfsSAHError;
+
+    fn write_at(&mut self, offset: u64, bytes: &[u8]) -> Result<()> {
+        let at = physical_offset(offset, bytes.len(), VfsErrorCode::IoWrite)?;
+        self.file.write_at(bytes, at)
+    }
+
+    fn commit(mut self) -> Result<()> {
+        let result = (|| {
+            self.file.flush()?;
+            self.file
+                .associate(Some(&self.filename), SQLITE_OPEN_MAIN_DB)
+        })();
+
+        if let Err(error) = result {
+            return Err(self.abort_with_error(error));
+        }
+
+        let file = self.pool.available_files.borrow_mut().pop().unwrap();
+        self.pool
+            .map_filename_to_file
+            .borrow_mut()
+            .insert(self.filename.clone(), file);
+        self.done = true;
+        Ok(())
+    }
+
+    fn abort(mut self) -> Result<()> {
+        self.cleanup()
+    }
+
+    fn abort_with_error(mut self, error: OpfsSAHError) -> OpfsSAHError {
+        match self.cleanup() {
+            Ok(()) => error,
+            Err(cleanup) => OpfsSAHError::Cleanup {
+                error: Box::new(error),
+                cleanup: Box::new(cleanup),
+            },
+        }
+    }
+}
+
+impl OpfsSAHImportTarget<'_> {
+    fn cleanup(&mut self) -> Result<()> {
+        self.done = true;
+        if let Err(err) = self.file.associate(None, 0) {
+            let file = self.pool.available_files.borrow_mut().pop().unwrap();
+            self.pool.quarantined_files.borrow_mut().push(file);
+            self.pool.needs_recovery.set(true);
+            return Err(err);
+        }
+
+        Ok(())
+    }
+}
+
+impl Drop for OpfsSAHImportTarget<'_> {
+    fn drop(&mut self) {
+        if !self.done {
+            let _ = self.cleanup();
+        }
+    }
+}
+
+#[doc(hidden)]
+pub struct OpfsSAHExportSource<'a> {
+    file: SyncAccessFile,
+    size: u64,
+    _operation: Operation<'a>,
+}
+
+impl ExportSource for OpfsSAHExportSource<'_> {
+    type Error = OpfsSAHError;
+
+    fn size(&self) -> u64 {
+        self.size
+    }
+
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<usize> {
+        let at = physical_offset(offset, buf.len(), VfsErrorCode::IoRead)?;
+        self.file.read_at(buf, at)
+    }
+}
+
+/// A database file reader.
 pub struct DbExport {
-    handle: FileSystemSyncAccessHandle,
+    pool: Rc<OpfsSAHPool>,
+    file: SyncAccessFile,
     len: u64,
     position: u64,
 }
 
-impl std::io::Read for DbExport {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if buf.is_empty() || self.position >= self.len {
+impl Read for DbExport {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if buf.is_empty() || self.position == self.len {
             return Ok(0);
         }
 
         let count = (buf.len() as u64).min(self.len - self.position) as usize;
-        let physical_offset = HEADER_OFFSET_DATA as u64 + self.position;
-        let read = self
-            .handle
-            .read_with_u8_array_and_options(
-                &mut buf[..count],
-                &read_write_options(physical_offset as f64),
-            )
-            .map_err(|err| {
-                std::io::Error::other(format!("Failed to read database export: {err:?}"))
-            })? as usize;
-
-        if read == 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "Database export ended before its recorded length",
+        let at = physical_offset(self.position, count, VfsErrorCode::IoRead)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        let count = self
+            .file
+            .read_at(&mut buf[..count], at)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        if count == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "database export ended before its recorded length",
             ));
         }
 
-        self.position += read as u64;
-        Ok(read)
+        self.position += count as u64;
+        Ok(count)
     }
 }
 
-/// SAHPoolVfs management tool.
+impl Drop for DbExport {
+    fn drop(&mut self) {
+        self.pool.readers.set(self.pool.readers.get() - 1);
+    }
+}
+
+/// Management handle for one pool, confined to its dedicated worker.
+///
+/// Dropping this handle leaves the VFS installed. [`Self::pause`] releases OPFS locks;
+/// [`Self::uninstall`] also frees registration and disables old handles.
+/// Import [`VfsFilesManager`] for file management and [`DbTransfer`] for transfers.
+#[derive(Clone)]
 pub struct OpfsSAHPoolUtil {
-    pool: &'static VfsAppData<SyncAccessHandleAppData>,
+    pool: Rc<OpfsSAHPool>,
+}
+
+/// Queries require an active pool without a management operation or transfer.
+/// Paused, uninstalled or unreconciled pools return errors, not an empty view.
+///
+/// Removal flushes the namespace and keeps slots for reuse. Clearing requires
+/// an active pool with no open files or management operations; it also permits
+/// discarding data when the namespace needs recovery.
+impl VfsFilesManager for OpfsSAHPoolUtil {
+    type Error = OpfsSAHError;
+
+    fn remove(&self, filename: &str) -> Result<bool> {
+        self.pool.delete_file(filename)
+    }
+
+    fn clear(&self) -> Result<()> {
+        self.pool.clear()
+    }
+
+    fn contains(&self, filename: &str) -> Result<bool> {
+        self.pool.check_active()?;
+        Ok(self.pool.has_filename(filename))
+    }
+
+    fn names(&self) -> Result<Vec<String>> {
+        self.pool.check_active()?;
+        Ok(self.pool.get_filenames())
+    }
+
+    fn len(&self) -> Result<usize> {
+        self.pool.check_active()?;
+        Ok(self.pool.get_file_count())
+    }
+}
+
+/// Transfers block pool management and new opens; keep existing connections idle.
+///
+/// Exports retain this restriction until dropped, including at EOF. Dropping an
+/// import aborts it; cleanup failure quarantines the slot and requires recovery.
+/// Imports may coexist with an [`OpfsSAHPoolUtil::export_db_reader`] from this pool.
+///
+/// Imports require new names of at most 499 UTF-8 bytes and no same-name sidecars.
+/// Exports reject open files and nonempty journal/WAL files, including `PERSIST`
+/// journals: recover/checkpoint and close first, then remove retained journals.
+impl DbTransfer for OpfsSAHPoolUtil {
+    type Error = OpfsSAHError;
+    type Target<'a> = OpfsSAHImportTarget<'a>;
+    type Source<'a> = OpfsSAHExportSource<'a>;
+
+    fn create_import(&self, name: &str, size: u64) -> Result<Self::Target<'_>> {
+        self.pool.create_import(name, size)
+    }
+
+    fn open_export(&self, name: &str) -> Result<Self::Source<'_>> {
+        self.pool.open_export(name)
+    }
 }
 
 impl OpfsSAHPoolUtil {
-    /// Returns the number of files currently contained in the SAH pool.
-    pub fn get_capacity(&self) -> u32 {
-        self.pool.get_capacity()
-    }
-
-    /// Adds n entries to the current pool.
-    pub async fn add_capacity(&self, n: u32) -> Result<u32> {
-        self.pool.add_capacity(n).await
-    }
-
-    /// Removes up to n entries from the pool, with the caveat that
-    /// it can only remove currently-unused entries.
-    pub async fn reduce_capacity(&self, n: u32) -> Result<u32> {
-        self.pool.reduce_capacity(n).await
-    }
-
-    /// Removes up to n entries from the pool, with the caveat that it can only
-    /// remove currently-unused entries.
-    pub async fn reserve_minimum_capacity(&self, min: u32) -> Result<()> {
-        self.pool.reserve_minimum_capacity(min).await
-    }
-}
-
-impl OpfsSAHPoolUtil {
-    /// Imports the contents of an SQLite database, provided as a byte array
+    /// Imports the contents of an SQLite database, provided as a [`std::io::Read`]
     /// under the given name, returning an error if the filename already exists.
     ///
     /// If the database is imported with WAL mode enabled,
     /// it will be forced to write back to legacy mode, see
     /// <https://sqlite.org/forum/forumpost/67882c5b04>.
     ///
-    /// If the imported database is encrypted, use `import_db_unchecked` instead.
-    pub fn import_db(&self, filename: &str, bytes: &[u8]) -> Result<()> {
-        self.pool.import_db(filename, bytes)
-    }
-
-    /// `import_db` without checking, can be used to import encrypted database.
-    pub fn import_db_unchecked(&self, filename: &str, bytes: &[u8]) -> Result<()> {
-        self.pool.import_db_unchecked(filename, bytes, false)
-    }
-
-    /// Imports an SQLite database from a [`std::io::Read`] under the given name.
-    ///
-    /// Consumes the reader synchronously until EOF.
-    /// Returns an error if the filename already exists.
-    ///
-    /// Sets the database header to rollback-journal mode.
-    ///
-    /// For encrypted databases, use [`Self::import_db_from_reader_unchecked`].
+    /// If the imported database is encrypted, use `import_db_from_reader_unchecked` instead.
     pub fn import_db_from_reader(&self, filename: &str, reader: impl Read) -> Result<()> {
-        self.pool.import_db_from_reader(filename, reader)
+        self.import_reader(filename, reader, true)
     }
 
     /// `import_db_from_reader` without checking, can be used to import encrypted database.
     pub fn import_db_from_reader_unchecked(&self, filename: &str, reader: impl Read) -> Result<()> {
-        self.pool
-            .import_db_from_reader_unchecked(filename, reader, false)
-            .map(|_| ())
+        self.import_reader(filename, reader, false)
     }
 
-    /// Export the database.
-    pub fn export_db(&self, filename: &str) -> Result<Vec<u8>> {
-        self.pool.export_db(filename)
+    fn import_reader(&self, filename: &str, mut reader: impl Read, checked: bool) -> Result<()> {
+        let mut target = self.pool.create_import(filename, 0)?;
+        let result = (|| -> Result<()> {
+            let mut buffer = [0; 4096];
+            let mut header = [0; 18];
+            let mut offset = 0u64;
+            loop {
+                let count = match reader.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(count) => count,
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(error.into()),
+                };
+                let end = offset
+                    .checked_add(count as u64)
+                    .ok_or(TransferError::OffsetOverflow)?;
+                if offset < header.len() as u64 {
+                    let start = offset as usize;
+                    let prefix = count.min(header.len() - start);
+                    header[start..start + prefix].copy_from_slice(&buffer[..prefix]);
+                }
+                target.write_at(offset, &buffer[..count])?;
+                offset = end;
+            }
+            if checked {
+                check_import_header(&header, offset).map_err(TransferError::from)?;
+                target.write_at(18, &[1, 1])?;
+            }
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => target.commit(),
+            Err(error) => Err(target.abort_with_error(error)),
+        }
     }
 
     /// Export the database file contents as a reader.
     pub fn export_db_reader(&self, filename: &str) -> Result<DbExport> {
-        self.pool.export_db_reader(filename)
+        let source = self.pool.open_export(filename)?;
+        self.pool.readers.set(self.pool.readers.get() + 1);
+        Ok(DbExport {
+            pool: self.pool.clone(),
+            file: source.file.clone(),
+            len: source.size,
+            position: 0,
+        })
     }
 
-    /// Delete the specified database, make sure that the database is closed.
-    pub fn delete_db(&self, filename: &str) -> Result<bool> {
-        self.pool.delete_file(filename)
-    }
-
-    /// Delete all database, make sure that all database is closed.
-    pub async fn clear_all(&self) -> Result<()> {
-        self.pool.release_access_handles();
-        self.pool.acquire_access_handles(true).await?;
-        Ok(())
-    }
-
-    /// Does the database exists.
-    pub fn exists(&self, filename: &str) -> Result<bool> {
-        Ok(self.pool.has_filename(filename))
-    }
-
-    /// List all files.
-    pub fn list(&self) -> Vec<String> {
-        self.pool.get_filenames()
-    }
-
-    /// Number of files.
-    pub fn count(&self) -> u32 {
-        self.pool.get_file_count()
-    }
-
-    /// "Pauses" this VFS by unregistering it from SQLite and
-    /// relinquishing all open SAHs, leaving the associated files
-    /// intact. If this instance is already paused, this is a
-    /// no-op. Returns a Result.
+    /// Returns the held slot count, including assigned and quarantined slots.
     ///
-    /// This method returns an error if SQLite has any opened file handles
-    /// hosted by this VFS, as the alternative would be to invoke
-    /// Undefined Behavior by closing file handles out from under the
-    /// library. Similarly, automatically closing any database handles
-    /// opened by this VFS would invoke Undefined Behavior in
-    /// downstream code which is holding those pointers.
-    ///
-    /// If this method returns and error due to open file handles then it has
-    /// no side effects. If the OPFS API returns an error while closing handles
-    /// then the VFS is left in an undefined state.
-    pub fn pause_vfs(&self) -> Result<()> {
-        self.pool.pause_vfs()
+    /// Returns zero while paused or after uninstall.
+    pub fn capacity(&self) -> usize {
+        self.pool.capacity()
     }
 
-    /// "Unpauses" this VFS, reacquiring all SAH's and (if successful)
-    /// re-registering it with SQLite. This is a no-op if the VFS is
-    /// not currently paused.
+    /// Adds slots and returns the total capacity.
     ///
-    /// The returned a Result. See acquire_access_handles() for how it
-    /// behaves if it returns an error due to SAH acquisition failure.
-    pub async fn unpause_vfs(&self) -> Result<()> {
-        self.pool.unpause_vfs().await
+    /// Requires an active pool with no other management operation or transfer.
+    ///
+    /// # Errors and cancellation
+    ///
+    /// Failure or cancellation releases newly acquired handles. Unused physical
+    /// files may remain and are rediscovered by [`Self::resume`].
+    pub async fn add_capacity(&self, n: usize) -> Result<usize> {
+        self.pool.add_capacity(n).await
     }
 
-    /// Check if VFS is paused.
+    /// Removes up to `n` unused slots and returns the number removed.
+    ///
+    /// Assigned files are retained.
+    ///
+    /// # Errors and cancellation
+    ///
+    /// Failure or cancellation may partially reduce capacity. An undeleted,
+    /// closed slot is rediscovered by [`Self::resume`].
+    pub async fn reduce_capacity(&self, n: usize) -> Result<usize> {
+        self.pool.reduce_capacity(n).await
+    }
+
+    /// Ensures at least `min` held slots, without shrinking an existing pool.
+    pub async fn ensure_capacity(&self, min: usize) -> Result<()> {
+        self.pool.ensure_capacity(min).await
+    }
+
+    /// Unregisters the VFS and releases OPFS handles until [`Self::resume`].
+    ///
+    /// Retains data and registration memory. Close all databases first.
+    /// Does nothing if already paused.
+    ///
+    /// # Errors
+    ///
+    /// Open files or active management cause failure without side effects.
+    pub fn pause(&self) -> Result<()> {
+        self.pool.pause()
+    }
+
+    /// Reacquires slots and restores registration and default-VFS status.
+    ///
+    /// Does nothing for an active, healthy pool.
+    /// Reclaims abandoned temporary files and verified empty incomplete slots,
+    /// but reports invalid persistent headers. Restores the namespace only;
+    /// SQLite recovers transactions when opening a database.
+    ///
+    /// # Errors and cancellation
+    ///
+    /// Acquisition failure or cancellation leaves the pool paused for retry.
+    /// Pending acquisitions close unused handles in the background.
+    pub async fn resume(&self) -> Result<()> {
+        self.pool.resume().await
+    }
+
+    /// Returns whether the pool is paused, but not uninstalled.
     pub fn is_paused(&self) -> bool {
-        self.pool.is_paused.get()
+        self.pool.state.get() == PoolState::Paused
+    }
+
+    /// Returns whether this pool's SQLite registration has been permanently removed.
+    pub fn is_uninstalled(&self) -> bool {
+        self.pool.state.get() == PoolState::Removed
+    }
+
+    /// Unregisters and frees the VFS, releases handles, and permits reinstall.
+    ///
+    /// Persistent files are not deleted. Already uninstalled is a no-op.
+    ///
+    /// # Safety
+    ///
+    /// All SQLite connections using this VFS must be closed, including in-memory
+    /// connections that do not open files. No saved VFS pointers, delegated
+    /// wrappers or callbacks may remain in use. Serialize with all SQLite use.
+    pub unsafe fn uninstall(&self) -> Result<()> {
+        if self.is_uninstalled() {
+            return Ok(());
+        }
+
+        let _operation = self.pool.begin_operation()?;
+        self.pool.check_closed()?;
+
+        let registration = self
+            .pool
+            .registration
+            .borrow_mut()
+            .take()
+            .ok_or(OpfsSAHError::Uninstalled)?;
+
+        // SAFETY: The caller guarantees no SQLite users or retained pointers.
+        if let Err((registration, error)) = registration.unregister() {
+            *self.pool.registration.borrow_mut() = Some(registration);
+            return Err(error.into());
+        }
+
+        self.pool.release_access_handles()?;
+        self.pool.state.set(PoolState::Removed);
+        REGISTERED_POOLS.with(|pools| {
+            pools.borrow_mut().remove(&self.pool.name);
+        });
+
+        Ok(())
     }
 }
 
-/// Register `opfs-sahpool` vfs and return a management tool which can be used
-/// to perform basic administration of the file pool.
+/// Installs or reuses a pool, validating [`OpfsSAHPoolCfg`].
 ///
-/// If the vfs corresponding to `options.vfs_name` has been registered,
-/// only return a management tool without register.
-pub async fn install<C: OsCallback>(
+/// Reuse requires the same directory and callback type; it neither resumes a
+/// paused pool nor reapplies initial capacity/clearing. Each directory has one
+/// owner per worker; uninstall that owner before using a different VFS name.
+///
+/// `default_vfs = true` promotes the VFS now or on resume; `false` never demotes.
+/// Concurrent installs wait; overlapping management returns [`OpfsSAHError::Busy`].
+pub async fn install<C: OsCallback + Default + 'static>(
     options: &OpfsSAHPoolCfg,
     default_vfs: bool,
 ) -> Result<OpfsSAHPoolUtil> {
-    static REGISTER_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    if options.vfs_name.is_empty() {
+        return Err(RegisterVfsError::EmptyName.into());
+    }
+
+    if options.vfs_name.contains('\0') {
+        return Err(RegisterVfsError::ToCStr.into());
+    }
+
+    let directory = normalize_directory(&options.directory)?;
+
+    static REGISTER_GUARD: futures_util::lock::Mutex<()> = futures_util::lock::Mutex::new(());
     let _guard = REGISTER_GUARD.lock().await;
 
-    let vfs = match registered_vfs(&options.vfs_name)? {
-        Some(vfs) => vfs,
-        None => register_vfs::<SyncAccessHandleIoMethods, SyncAccessHandleVfs<C>>(
+    let existing = REGISTERED_POOLS.with(|pools| pools.borrow().get(&options.vfs_name).cloned());
+    let registered = unsafe { registered_vfs(&options.vfs_name)? };
+    if let Some(pool) = existing {
+        if pool.directory != directory || pool.callback_type != TypeId::of::<C>() {
+            return Err(OpfsSAHError::ConfigurationMismatch);
+        }
+
+        let _operation = pool.begin_operation()?;
+        let vfs = pool
+            .registration
+            .borrow()
+            .as_ref()
+            .ok_or(OpfsSAHError::Uninstalled)?
+            .as_ptr();
+        if registered.is_some_and(|registered| registered != vfs) {
+            return Err(RegisterVfsError::NameConflict(options.vfs_name.clone()).into());
+        }
+
+        if default_vfs {
+            if pool.state.get() == PoolState::Active {
+                let code = unsafe { sqlite3_vfs_register(vfs, 1) };
+                if code != SQLITE_OK {
+                    return Err(OpfsSAHError::sqlite("set default VFS", code));
+                }
+            }
+
+            pool.make_default.set(true);
+        }
+
+        drop(_operation);
+        return Ok(OpfsSAHPoolUtil { pool });
+    }
+
+    if registered.is_some() {
+        return Err(RegisterVfsError::NameConflict(options.vfs_name.clone()).into());
+    }
+
+    if REGISTERED_POOLS.with(|pools| {
+        pools
+            .borrow()
+            .values()
+            .any(|pool| pool.directory == directory)
+    }) {
+        return Err(OpfsSAHError::DirectoryInUse(directory));
+    }
+
+    let pool = OpfsSAHPool::new::<C>(options).await?;
+
+    // SAFETY: Matching layout/store types on this SQLite worker. The module's
+    // installation guard serializes its registrations. There is no yield
+    // between the registry check inside register_vfs and registration.
+    let registration = unsafe {
+        register_vfs::<SyncAccessHandleIoMethods, SyncAccessHandleVfs>(
             &options.vfs_name,
-            OpfsSAHPool::new::<C>(options).await?,
+            pool.clone(),
             default_vfs,
-        )?,
+        )?
     };
 
-    let pool = unsafe { SyncAccessHandleStore::app_data(vfs) };
-    pool.vfs.set((vfs, default_vfs));
+    pool.make_default.set(default_vfs);
+    *pool.registration.borrow_mut() = Some(registration);
+    REGISTERED_POOLS.with(|pools| {
+        pools
+            .borrow_mut()
+            .insert(options.vfs_name.clone(), pool.clone())
+    });
 
     Ok(OpfsSAHPoolUtil { pool })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        OpfsSAHPool, OpfsSAHPoolCfgBuilder, SyncAccessFile, SyncAccessHandleAppData,
-        SyncAccessHandleStore,
-    };
+    use super::{random_name, OpfsSAHPool, OpfsSAHPoolCfgBuilder, SyncAccessHandleStore};
     use rsqlite_vfs::{test_suite::test_vfs_store, VfsAppData};
+    use sqlite_wasm_rs::WasmOsCallback;
     use wasm_bindgen_test::wasm_bindgen_test;
 
     #[wasm_bindgen_test]
-    async fn test_opfs_vfs_store() {
-        let data = OpfsSAHPool::new::<sqlite_wasm_rs::WasmOsCallback>(
-            &OpfsSAHPoolCfgBuilder::new()
-                .directory("test_opfs_suite")
-                .build(),
-        )
-        .await
+    fn test_random_name_is_valid() {
+        let name = random_name(|buf| {
+            for (index, byte) in buf.iter_mut().enumerate() {
+                *byte = u8::MAX - index as u8;
+            }
+            buf.len()
+        })
         .unwrap();
+        assert_eq!(name.len(), 32);
+        assert!(name.bytes().all(|byte| byte.is_ascii_alphanumeric()));
+        assert!(random_name(|_| 0).is_err());
+        assert!(random_name(|buf| buf.len() - 1).is_err());
+        assert!(random_name(|buf| buf.len() + 1).is_err());
+    }
 
-        test_vfs_store::<SyncAccessHandleAppData, SyncAccessFile, SyncAccessHandleStore>(
-            VfsAppData::new(data),
-        )
-        .unwrap();
+    #[wasm_bindgen_test]
+    async fn test_sahpool_vfs_store() {
+        let config = OpfsSAHPoolCfgBuilder::new()
+            .vfs_name("test-opfs-suite")
+            .directory("test-opfs-suite")
+            .clear_on_init(true)
+            .build();
+        let data = OpfsSAHPool::new::<WasmOsCallback>(&config).await.unwrap();
+
+        test_vfs_store::<SyncAccessHandleStore>(VfsAppData::new(data)).unwrap();
     }
 }

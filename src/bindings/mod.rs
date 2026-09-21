@@ -1,4 +1,4 @@
-//! This module is codegen from build.rs. Avoid manual edits.
+//! Generated SQLite bindings and handwritten Rust compatibility helpers.
 
 #[cfg(all(not(feature = "bindgen"), feature = "sqlite3mc"))]
 mod sqlite3mc_bindgen;
@@ -24,11 +24,17 @@ pub use error::*;
 
 use core::mem;
 
+/// Tells SQLite to borrow the supplied buffer without freeing it.
+///
+/// The caller must keep the buffer valid for as long as the receiving API requires.
 #[must_use]
 pub fn SQLITE_STATIC() -> sqlite3_destructor_type {
     None
 }
 
+/// Tells SQLite to copy the supplied buffer before the receiving call returns.
+///
+/// This is a SQLite sentinel, not a callable destructor.
 #[must_use]
 pub fn SQLITE_TRANSIENT() -> sqlite3_destructor_type {
     // SQLite uses -1 as a sentinel for "make your own copy".
@@ -39,14 +45,14 @@ pub fn SQLITE_TRANSIENT() -> sqlite3_destructor_type {
 
 impl Default for sqlite3_vtab {
     fn default() -> Self {
-        // C expects zero-initialized vtab structs.
+        // SAFETY: All fields are integers or raw pointers, valid when zeroed.
         unsafe { mem::zeroed() }
     }
 }
 
 impl Default for sqlite3_vtab_cursor {
     fn default() -> Self {
-        // C expects zero-initialized vtab cursor structs.
+        // SAFETY: The only field is a raw pointer, valid when zeroed.
         unsafe { mem::zeroed() }
     }
 }

@@ -1,12 +1,13 @@
-#![doc = include_str!("../README.md")]
+//! SQLite VFS implementations for `wasm32-unknown-unknown`.
+//!
+//! Enable the `sahpool` feature for the OPFS sync access handle pool VFS.
+
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
-/// IndexedDB VFS implementation with relaxed durability guarantees.
-pub mod relaxed_idb;
-
 /// Origin Private File System (OPFS) VFS implementation using `SyncAccessHandle`.
+#[cfg(feature = "sahpool")]
 pub mod sahpool;
 
 #[cfg(test)]
