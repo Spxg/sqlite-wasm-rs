@@ -50,12 +50,6 @@ jobs:
         printf "sqlite-wasm-rs = { path = \"..\" }\n" >> Cargo.toml
         printf "rsqlite-vfs = { path = \"../crates/rsqlite-vfs\" }\n" >> Cargo.toml
         printf "sqlite-wasm-vfs = { path = \"../crates/sqlite-wasm-vfs\" }\n" >> Cargo.toml
-        sed -i '/^sqlite-wasm-rs = /s/version = "[^"]*"/version = "0.6"/' diesel/Cargo.toml
-        sed -i 's/^sqlite-wasm-rs = ".*"/sqlite-wasm-rs = { version = "0.6", features = ["wasm-bindgen"] }/' examples/sqlite/wasm/Cargo.toml diesel_tests/Cargo.toml
-        sed -i 's/^sqlite-wasm-vfs = ".*"/sqlite-wasm-vfs = { version = "0.3", features = ["sahpool"] }/' examples/sqlite/wasm/Cargo.toml
-        # xtask launches nested Cargo commands; enable the adapter in the dependency itself.
-        sed -i '/^sqlite-wasm-rs = /s/default-features = false/default-features = false, features = ["wasm-bindgen"]/' diesel/Cargo.toml
-        grep -E '^sqlite-wasm-rs = .*features = \["wasm-bindgen"\]' diesel/Cargo.toml
         wasm_bindgen_version=$(cargo metadata --format-version 1 --filter-platform wasm32-unknown-unknown --no-default-features --features diesel/sqlite | jq -er '[.packages[] | select(.name == "wasm-bindgen") | .version] | unique | if length == 1 then .[0] else error("expected one wasm-bindgen version") end')
         cargo install wasm-bindgen-cli --version "$wasm_bindgen_version" --locked
         DATABASE_URL=":memory:" cargo xtask run-tests --wasm sqlite --no-example-schema-check -- --no-fail-fast
@@ -70,11 +64,9 @@ jobs:
       run: |
         git clone --depth 1 https://github.com/rusqlite/rusqlite.git
         cd rusqlite
-        sed -i '/^sqlite-wasm-rs = /s/version = "[^"]*"/version = "0.6"/' Cargo.toml
         printf "[patch.crates-io]\n" >> Cargo.toml
         printf "sqlite-wasm-rs = { path = \"..\" }\n" >> Cargo.toml
         printf "rsqlite-vfs = { path = \"../crates/rsqlite-vfs\" }\n" >> Cargo.toml
-        printf "sqlite-wasm-vfs = { path = \"../crates/sqlite-wasm-vfs\" }\n" >> Cargo.toml
         WASM_BINDGEN_TEST_TIMEOUT=60 wasm-pack test --node --features modern-full,sqlite-wasm-rs/wasm-bindgen
 
   test_host_examples:
