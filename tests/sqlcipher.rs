@@ -5,7 +5,10 @@ use sqlite_wasm_rs::*;
 use std::{ffi::CStr, mem::ManuallyDrop, ptr};
 use wasm_bindgen_test::wasm_bindgen_test;
 
-const KEY: &[u8] = b"My very secret passphrase";
+// Raw keys skip the PBKDF2 derivation, which takes seconds per key in unoptimized builds.
+const KEY: &[u8] = b"x'000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f'";
+const WRONG_KEY: &[u8] = b"x'ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100'";
+const NEW_KEY: &[u8] = b"x'202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f'";
 
 struct Db(*mut sqlite3);
 
@@ -98,7 +101,7 @@ fn test_encrypt_decrypt() {
     assert!(!bytes.windows(16).any(|w| w == b"SQLite format 3\0"));
     assert!(!bytes.windows(15).any(|w| w == b"hello sqlcipher"));
 
-    for key in [None, Some(b"wrong passphrase".as_slice())] {
+    for key in [None, Some(WRONG_KEY)] {
         let db = Db::open(c"encrypted.db", SQLITE_OPEN_READWRITE);
         if let Some(key) = key {
             db.key(key);
@@ -120,7 +123,7 @@ fn test_rekey() {
 
     let db = Db::open(c"rekey.db", SQLITE_OPEN_READWRITE);
     db.key(KEY);
-    db.rekey(b"new passphrase");
+    db.rekey(NEW_KEY);
     db.close();
 
     let db = Db::open(c"rekey.db", SQLITE_OPEN_READWRITE);
@@ -129,7 +132,7 @@ fn test_rekey() {
     db.close();
 
     let db = Db::open(c"rekey.db", SQLITE_OPEN_READWRITE);
-    db.key(b"new passphrase");
+    db.key(NEW_KEY);
     assert_eq!(db.query(c"SELECT s FROM t"), b"hello sqlcipher");
     db.close();
     remove(c"rekey.db");
