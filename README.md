@@ -16,6 +16,13 @@ sqlite-wasm-rs = { version = "0.6", features = ["wasm-bindgen"] }
 sqlite-wasm-rs = { version = "0.6", features = ["wasm-bindgen", "sqlite3mc"] }
 ```
 
+```toml
+[dependencies]
+# Encryption is supported by SQLCipher
+# See <https://www.zetetic.net/sqlcipher/>
+sqlite-wasm-rs = { version = "0.6", features = ["wasm-bindgen", "sqlcipher"] }
+```
+
 ```rust
 use sqlite_wasm_rs as ffi;
 
