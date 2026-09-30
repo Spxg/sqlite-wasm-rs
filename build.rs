@@ -47,7 +47,7 @@ fn main() {
     #[cfg(feature = "sqlcipher")]
     let (default_dir, source_name, header_name) = (
         sqlcipher_src::source_dir().to_path_buf(),
-        sqlcipher_src::WASM_SOURCE_FILE,
+        sqlcipher_src::SOURCE_FILE,
         sqlcipher_src::HEADER_FILE,
     );
     #[cfg(feature = "sqlite3mc")]
@@ -79,7 +79,11 @@ fn main() {
     // Watch the directory too, including any headers used by a custom amalgamation.
     println!("cargo::rerun-if-changed={}", source_dir.display());
 
-    compile(&source);
+    // The wrapper includes SQLCipher and LibTomCrypt from the source directory.
+    #[cfg(feature = "sqlcipher")]
+    compile(Path::new("shim/sqlcipher-wasm.c"), Some(&source_dir));
+    #[cfg(not(feature = "sqlcipher"))]
+    compile(&source, None);
 
     #[cfg(feature = "bindgen")]
     {
@@ -93,21 +97,10 @@ fn main() {
             const SQLITE3_BINDGEN: &str = "src/bindings/sqlite3_bindgen.rs";
             #[cfg(feature = "sqlite3mc")]
             const SQLITE3_BINDGEN: &str = "src/bindings/sqlite3mc_bindgen.rs";
-            // sqlcipher-src regenerates the sqlcipher bindings next to its sources.
-            #[cfg(not(feature = "sqlcipher"))]
+            #[cfg(feature = "sqlcipher")]
+            const SQLITE3_BINDGEN: &str = "src/bindings/sqlcipher_bindgen.rs";
             std::fs::copy(&output, SQLITE3_BINDGEN).unwrap();
         }
-    }
-
-    #[cfg(all(not(feature = "bindgen"), feature = "sqlcipher"))]
-    {
-        let output = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR env not set"))
-            .join("bindgen.rs");
-        std::fs::copy(
-            sqlcipher_src::source_dir().join(sqlcipher_src::WASM_BINDINGS_FILE),
-            output,
-        )
-        .expect("failed to copy sqlcipher bindings");
     }
 }
 
@@ -251,7 +244,7 @@ fn bindgen(header: &Path, output: &Path) {
     bindings.write_to_file(output).unwrap();
 }
 
-fn compile(source: &Path) {
+fn compile(source: &Path, include: Option<&Path>) {
     const C_SOURCE: [&str; 36] = [
         // string
         "string/memchr.c",
@@ -309,6 +302,10 @@ fn compile(source: &Path) {
         .flag("-DPRINTF_ALIAS_STANDARD_FUNCTION_NAMES_HARD")
         .flag("-include")
         .flag("shim/wasm-shim.h");
+
+    if let Some(dir) = include {
+        cc.include(dir);
+    }
 
     for flag in FULL_FEATURED {
         cc.flag(flag);
