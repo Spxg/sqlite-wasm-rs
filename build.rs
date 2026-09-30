@@ -316,15 +316,5 @@ fn compile(source: &Path, include: Option<&Path>) {
         cc.flag(flag);
     }
 
-    // SQLCipher builds with SQLITE_THREADSAFE=1, and clang 18 strips its atomics without bulk memory.
-    #[cfg(feature = "sqlcipher")]
-    if std::env::var("CARGO_CFG_TARGET_FEATURE")
-        .unwrap_or_default()
-        .split(',')
-        .any(|feature| feature == "atomics")
-    {
-        cc.flag("-mbulk-memory");
-    }
-
     cc.compile("wsqlite3");
 }
