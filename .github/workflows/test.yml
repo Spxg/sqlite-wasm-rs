@@ -116,6 +116,7 @@ jobs:
     - name: Test shared-memory host adapter
       env:
         CFLAGS_wasm32_unknown_unknown: -matomics
+        WASM_BINDGEN_USE_BROWSER: 1
         RUSTFLAGS: >-
           -Ctarget-feature=+atomics
           -Clink-args=--shared-memory
