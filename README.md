@@ -59,6 +59,8 @@ cargo run -p rsqlite-vfs --example implement-a-vfs
 
 Multithreading is not supported, SQLite is compiled with `-DSQLITE_THREADSAFE=0`.
 
+For shared-memory builds with Clang versions requiring explicit bulk memory, set `CFLAGS_wasm32_unknown_unknown="-matomics -mbulk-memory"` when compiling C. SQLite remains single-threaded in this configuration.
+
 ## Use without wasm-bindgen
 
 No features are enabled by default, provide your own host functions. See [JS Host](./examples/host-js) or [C Host](./examples/host-c) example.
