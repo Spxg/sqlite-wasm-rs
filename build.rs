@@ -43,19 +43,20 @@ fn main() {
 
     #[cfg(feature = "sqlite3mc")]
     let (default_dir, source_name, header_name) = (
-        "sqlite3mc",
-        "sqlite3mc_amalgamation.c",
-        "sqlite3mc_amalgamation.h",
+        sqlite3mc_src::source_dir().to_path_buf(),
+        sqlite3mc_src::SOURCE_FILE,
+        sqlite3mc_src::HEADER_FILE,
     );
     #[cfg(not(feature = "sqlite3mc"))]
-    let (default_dir, source_name, header_name) = ("sqlite3", "sqlite3.c", "sqlite3.h");
+    let (default_dir, source_name, header_name) =
+        (PathBuf::from("sqlite3"), "sqlite3.c", "sqlite3.h");
 
     let source_dir = match std::env::var_os(SOURCE_DIR_ENV) {
         Some(dir) => {
             assert!(!dir.is_empty(), "{SOURCE_DIR_ENV} must not be empty");
             PathBuf::from(dir)
         }
-        None => PathBuf::from(default_dir),
+        None => default_dir,
     };
     let source = source_dir.join(source_name);
     let header = source_dir.join(header_name);

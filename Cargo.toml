@@ -24,11 +24,12 @@ wasm-bindgen = ["dep:wasm-bindgen", "dep:js-sys"]
 # SQLite3MultipleCiphers
 # <https://github.com/utelle/SQLite3MultipleCiphers>
 # <https://utelle.github.io/SQLite3MultipleCiphers>
-sqlite3mc = []
+sqlite3mc = ["dep:sqlite3mc-src"]
 
 [build-dependencies]
 cc = "1"
 bindgen = { version = "0.73", default-features = false, features = ["runtime", "prettyplease"], optional = true }
+sqlite3mc-src = { version = "=205.1.0", optional = true }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.78"
@@ -67,8 +68,6 @@ include = [
     'build.rs',
     'sqlite3/**/*.c',
     'sqlite3/**/*.h',
-    'sqlite3mc/**/*.c',
-    'sqlite3mc/**/*.h',
     'shim/**/*.h',
     'shim/**/*.c',
     'Cargo.toml',

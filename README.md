@@ -59,13 +59,15 @@ cargo run -p rsqlite-vfs --example implement-a-vfs
 
 Multithreading is not supported, SQLite is compiled with `-DSQLITE_THREADSAFE=0`.
 
+For shared-memory builds with Clang versions requiring explicit bulk memory, set `CFLAGS_wasm32_unknown_unknown="-matomics -mbulk-memory"` when compiling C. SQLite remains single-threaded in this configuration.
+
 ## Use without wasm-bindgen
 
 No features are enabled by default, provide your own host functions. See [JS Host](./examples/host-js) or [C Host](./examples/host-c) example.
 
 ## Use custom SQLite sources
 
-Point `SQLITE_WASM_RS_SOURCE_DIR` to your `sqlite3.c/.h` files (`sqlite3mc_amalgamation.c/.h` for `sqlite3mc`):
+By default `sqlite3mc` compiles the amalgamation shipped by the [`sqlite3mc-src`](https://crates.io/crates/sqlite3mc-src) crate. Point `SQLITE_WASM_RS_SOURCE_DIR` to your `sqlite3.c/.h` files (`sqlite3mc_amalgamation.c/.h` for `sqlite3mc`) to compile another one:
 
 ```sh
 SQLITE_WASM_RS_SOURCE_DIR=/path/to/sqlite cargo build --target wasm32-unknown-unknown --features bindgen
