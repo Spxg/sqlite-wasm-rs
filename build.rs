@@ -79,11 +79,20 @@ fn main() {
     // Watch the directory too, including any headers used by a custom amalgamation.
     println!("cargo::rerun-if-changed={}", source_dir.display());
 
-    // The wrapper includes SQLCipher and LibTomCrypt from the source directory.
     #[cfg(feature = "sqlcipher")]
-    compile(Path::new("shim/sqlcipher-wasm.c"), Some(&source_dir));
+    {
+        let tomcrypt = source_dir.join(sqlcipher_src::LIBTOMCRYPT_INCLUDE_DIR);
+        compile(
+            &[
+                Path::new("shim/sqlcipher-wasm.c"),
+                Path::new("shim/sqlcipher-libc.c"),
+            ],
+            &[&source_dir, &tomcrypt],
+        );
+        compile_libtomcrypt(&source_dir, &tomcrypt);
+    }
     #[cfg(not(feature = "sqlcipher"))]
-    compile(&source, None);
+    compile(&[&source], &[]);
 
     #[cfg(feature = "bindgen")]
     {
@@ -244,7 +253,21 @@ fn bindgen(header: &Path, output: &Path) {
     bindings.write_to_file(output).unwrap();
 }
 
-fn compile(source: &Path, include: Option<&Path>) {
+/// Compiler settings every C unit shares, with the shim standing in for libc.
+fn shim_build() -> cc::Build {
+    let mut cc = cc::Build::new();
+    cc.warnings(false)
+        .flag("-Wno-macro-redefined")
+        .include("shim")
+        .include("shim/musl/arch/generic")
+        .include("shim/musl/include")
+        .flag("-DPRINTF_ALIAS_STANDARD_FUNCTION_NAMES_HARD")
+        .flag("-include")
+        .flag("shim/wasm-shim.h");
+    cc
+}
+
+fn compile(sources: &[&Path], includes: &[&Path]) {
     const C_SOURCE: [&str; 36] = [
         // string
         "string/memchr.c",
@@ -290,22 +313,11 @@ fn compile(source: &Path, include: Option<&Path>) {
         "internal/shgetc.c",
     ];
 
-    let mut cc = cc::Build::new();
-    cc.warnings(false)
-        .flag("-Wno-macro-redefined")
-        .include("shim")
-        .include("shim/musl/arch/generic")
-        .include("shim/musl/include")
-        .file("shim/printf/printf.c")
-        .file(source)
+    let mut cc = shim_build();
+    cc.file("shim/printf/printf.c")
+        .files(sources)
         .files(C_SOURCE.map(|s| format!("shim/musl/{s}")))
-        .flag("-DPRINTF_ALIAS_STANDARD_FUNCTION_NAMES_HARD")
-        .flag("-include")
-        .flag("shim/wasm-shim.h");
-
-    if let Some(dir) = include {
-        cc.include(dir);
-    }
+        .includes(includes);
 
     for flag in FULL_FEATURED {
         cc.flag(flag);
@@ -317,4 +329,21 @@ fn compile(source: &Path, include: Option<&Path>) {
     }
 
     cc.compile("wsqlite3");
+}
+
+/// LibTomCrypt one file per unit, configured by the header the SQLCipher unit includes.
+#[cfg(feature = "sqlcipher")]
+fn compile_libtomcrypt(source_dir: &Path, tomcrypt: &Path) {
+    shim_build()
+        .include(tomcrypt)
+        .flag("-include")
+        .flag("shim/sqlcipher-ltc.h")
+        .define("LTC_SOURCE", None)
+        .file("shim/sqlcipher-entropy.c")
+        .files(
+            sqlcipher_src::LIBTOMCRYPT_SOURCES
+                .iter()
+                .map(|s| source_dir.join(s)),
+        )
+        .compile("wsqlcipher_ltc");
 }
