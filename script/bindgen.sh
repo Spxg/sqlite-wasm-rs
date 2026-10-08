@@ -7,3 +7,4 @@ rustup +"$toolchain" target add "$target"
 
 SQLITE_WASM_RS_UPDATE_BINDGEN=1 cargo +"$toolchain" build --target "$target" --features bindgen
 SQLITE_WASM_RS_UPDATE_BINDGEN=1 cargo +"$toolchain" build --target "$target" --features bindgen,sqlite3mc
+SQLITE_WASM_RS_UPDATE_BINDGEN=1 cargo +"$toolchain" build --target "$target" --features bindgen,sqlcipher
