@@ -190,6 +190,8 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Test rsqlite-vfs
-      run: cargo test -p rsqlite-vfs
+      run: |
+        cargo test -p rsqlite-vfs
+        cargo test -p rsqlite-vfs --features threadsafe
     - name: Test implement-a-vfs example
       run: cargo run -p rsqlite-vfs --example implement-a-vfs

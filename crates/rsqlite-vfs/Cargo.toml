@@ -14,5 +14,9 @@ categories = ["development-tools::ffi", "wasm", "database"]
 [dependencies]
 thiserror = { version = "2.0.20", default-features = false }
 
+[features]
+# Makes memvfs shareable between threads through SQLite's mutex API. Needs a SQLite built with SQLITE_THREADSAFE > 0.
+threadsafe = []
+
 [dev-dependencies]
 libsqlite3-sys = { version = "0.38.2", features = ["bundled"] }

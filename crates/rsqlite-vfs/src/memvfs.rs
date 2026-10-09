@@ -1,9 +1,12 @@
-//! A platform-independent, single-threaded in-memory VFS.
+//! A platform-independent in-memory VFS.
 //!
 //! Call [`install`] before use; select `memvfs` by name or install as default.
-//! Files are volatile and limited by address space and memory. Stay on the
-//! installing thread and use one connection per database: locks are no-ops,
-//! and repeated opens share data without enforcing this restriction.
+//! Files are volatile and limited by address space and memory.
+//!
+//! Every database carries real lock levels, so several connections may share
+//! one. By default, stay on the installing thread. With the `threadsafe`
+//! feature, SQLite's mutexes guard the file map and every file, so those
+//! connections may live on different threads.
 
 use crate::ffi as bindings;
 use crate::transfer::{DbTransfer, ExportSource, ImportTarget, TransferError};
@@ -17,13 +20,13 @@ use crate::{
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::format;
-use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::cell::RefCell;
 use core::convert::Infallible;
 use core::ffi::CStr;
 use core::sync::atomic::{AtomicPtr, Ordering};
+
+use crate::sync::{LastError, Locked, Shared};
 
 const VFS_NAME: &CStr = c"memvfs";
 const MAX_PATH_SIZE: i32 = 1024;
@@ -44,38 +47,144 @@ fn validate_db_filename(name: &str) -> Result<()> {
     Ok(())
 }
 
-#[derive(Clone)]
-struct MemAppData {
-    os: Rc<dyn OsCallback>,
-    files: Rc<RefCell<BTreeMap<String, Rc<RefCell<MemChunksFile>>>>>,
-    error: Rc<RefCell<Option<VfsError>>>,
+/// Platform services accepted by [`install`], which must be `Send + Sync` with `threadsafe`.
+#[cfg(not(feature = "threadsafe"))]
+pub trait MemVfsOs: OsCallback + 'static {}
+#[cfg(not(feature = "threadsafe"))]
+impl<T: OsCallback + 'static> MemVfsOs for T {}
+
+/// Platform services accepted by [`install`], which must be `Send + Sync` with `threadsafe`.
+#[cfg(feature = "threadsafe")]
+pub trait MemVfsOs: OsCallback + Send + Sync + 'static {}
+#[cfg(feature = "threadsafe")]
+impl<T: OsCallback + Send + Sync + 'static> MemVfsOs for T {}
+
+type FileRef = Shared<Locked<MemFile>>;
+type FileMap = BTreeMap<String, FileRef>;
+
+/// File bytes and the lock levels of every connection to it.
+struct MemFile {
+    data: MemChunksFile,
+    locks: LockTable,
 }
 
-impl MemAppData {
-    fn new(os: impl OsCallback + 'static) -> Self {
-        Self {
-            os: Rc::new(os),
-            files: Rc::default(),
-            error: Rc::default(),
-        }
+impl MemFile {
+    fn shared(data: MemChunksFile) -> VfsResult<FileRef> {
+        let file = MemFile {
+            data,
+            locks: LockTable::default(),
+        };
+        Ok(Shared::new(Locked::new(file)?))
     }
 }
 
-impl core::ops::Deref for MemAppData {
-    type Target = RefCell<BTreeMap<String, Rc<RefCell<MemChunksFile>>>>;
+/// Lock levels across all connections to one file, following SQLite's unix VFS.
+#[derive(Default)]
+struct LockTable {
+    /// Connections holding `Shared` or stronger.
+    readers: usize,
+    /// Whether a connection holds `Reserved` or stronger.
+    writer: bool,
+    /// Whether a connection holds `Pending` or `Exclusive`, which turns new readers away.
+    pending: bool,
+}
 
-    fn deref(&self) -> &Self::Target {
-        &self.files
+impl LockTable {
+    fn busy() -> VfsError {
+        VfsError::new(VfsErrorCode::Busy, "database is locked".into())
+    }
+
+    fn lock(&mut self, held: &mut LockLevel, level: LockLevel) -> VfsResult<()> {
+        if level <= *held {
+            return Ok(());
+        }
+        if *held == LockLevel::None {
+            if level != LockLevel::Shared {
+                // SQLite always takes a shared lock before any stronger one.
+                return Err(VfsError::new(
+                    VfsErrorCode::IoLock,
+                    "lock upgrade without a shared lock".into(),
+                ));
+            }
+            if self.pending {
+                return Err(Self::busy());
+            }
+            self.readers += 1;
+            *held = LockLevel::Shared;
+            return Ok(());
+        }
+        if *held == LockLevel::Shared {
+            if self.writer {
+                return Err(Self::busy());
+            }
+            self.writer = true;
+            *held = LockLevel::Reserved;
+        }
+        if level >= LockLevel::Pending && *held == LockLevel::Reserved {
+            self.pending = true;
+            *held = LockLevel::Pending;
+        }
+        if level == LockLevel::Exclusive {
+            // Readers already inside drain while `pending` keeps new ones out.
+            if self.readers > 1 {
+                return Err(Self::busy());
+            }
+            *held = LockLevel::Exclusive;
+        }
+        Ok(())
+    }
+
+    fn unlock(&mut self, held: &mut LockLevel, level: LockLevel) {
+        if level >= *held {
+            return;
+        }
+        if *held >= LockLevel::Pending && level < LockLevel::Pending {
+            self.pending = false;
+        }
+        if *held >= LockLevel::Reserved && level < LockLevel::Reserved {
+            self.writer = false;
+        }
+        if level == LockLevel::None {
+            // `held` is at least `Shared` here, so this connection is counted in `readers`.
+            self.readers -= 1;
+        }
+        *held = level;
+    }
+}
+
+#[derive(Clone)]
+struct MemAppData {
+    os: Shared<dyn MemVfsOs>,
+    files: Shared<Locked<FileMap>>,
+    error: LastError,
+}
+
+impl MemAppData {
+    fn new(os: impl MemVfsOs) -> VfsResult<Self> {
+        Ok(Self {
+            os: Shared::new(os),
+            files: Shared::new(Locked::new(FileMap::new())?),
+            error: LastError::new(),
+        })
     }
 }
 
 /// An independent open instance sharing only the underlying file data.
 struct MemFileHandle {
-    file: Rc<RefCell<MemChunksFile>>,
+    file: FileRef,
     read_only: bool,
+    level: LockLevel,
 }
 
 impl MemFileHandle {
+    fn new(file: FileRef, read_only: bool) -> Self {
+        Self {
+            file,
+            read_only,
+            level: LockLevel::None,
+        }
+    }
+
     fn check_writable(&self) -> VfsResult<()> {
         if self.read_only {
             return Err(VfsError::new(
@@ -89,38 +198,38 @@ impl MemFileHandle {
 
 impl VfsFile for MemFileHandle {
     fn read(&mut self, buf: &mut [u8], offset: u64) -> VfsResult<usize> {
-        self.file.borrow_mut().read(buf, offset)
+        self.file.lock().data.read(buf, offset)
     }
 
     fn write(&mut self, buf: &[u8], offset: u64) -> VfsResult<()> {
         self.check_writable()?;
-        self.file.borrow_mut().write(buf, offset)
+        self.file.lock().data.write(buf, offset)
     }
 
     fn truncate(&mut self, size: u64) -> VfsResult<()> {
         self.check_writable()?;
-        self.file.borrow_mut().truncate(size)
+        self.file.lock().data.truncate(size)
     }
 
     fn sync(&mut self, options: SyncOptions) -> VfsResult<()> {
-        self.file.borrow_mut().sync(options)
+        self.file.lock().data.sync(options)
     }
 
-    // Multiple connections to the same database are unsupported, not rejected.
     fn lock(&mut self, level: LockLevel) -> VfsResult<()> {
-        self.file.borrow_mut().lock(level)
+        self.file.lock().locks.lock(&mut self.level, level)
     }
 
     fn unlock(&mut self, level: LockLevel) -> VfsResult<()> {
-        self.file.borrow_mut().unlock(level)
+        self.file.lock().locks.unlock(&mut self.level, level);
+        Ok(())
     }
 
     fn check_reserved_lock(&self) -> VfsResult<bool> {
-        self.file.borrow().check_reserved_lock()
+        Ok(self.file.lock().locks.writer)
     }
 
     fn size(&self) -> VfsResult<u64> {
-        self.file.borrow().size()
+        self.file.lock().data.size()
     }
 }
 
@@ -132,11 +241,11 @@ impl VfsStore for MemStore {
     type AppData = MemAppData;
 
     fn record_error(data: &MemAppData, error: VfsError) {
-        data.error.replace(Some(error));
+        data.error.set(error);
     }
 
     fn last_error(data: &MemAppData) -> Option<VfsError> {
-        data.error.borrow().clone()
+        data.error.get()
     }
 
     fn open_file(
@@ -146,10 +255,10 @@ impl VfsStore for MemStore {
         let options = request.options;
         let Some(filename) = request.filename else {
             return Ok(OpenedFile {
-                file: MemFileHandle {
-                    file: Rc::new(RefCell::new(MemChunksFile::default())),
-                    read_only: options.access() == OpenAccess::ReadOnly,
-                },
+                file: MemFileHandle::new(
+                    MemFile::shared(MemChunksFile::default())?,
+                    options.access() == OpenAccess::ReadOnly,
+                ),
                 access: options.access(),
             });
         };
@@ -160,7 +269,7 @@ impl VfsStore for MemStore {
                 .map_err(|err| VfsError::new(VfsErrorCode::CantOpen, format!("{err}").into()))?;
         }
 
-        let mut files = app_data.borrow_mut();
+        let mut files = app_data.files.lock();
         let file = match files.get(name) {
             Some(_) if options.exclusive() => {
                 return Err(VfsError::new(
@@ -175,7 +284,7 @@ impl VfsStore for MemStore {
                 } else {
                     MemChunksFile::default()
                 };
-                let file = Rc::new(RefCell::new(file));
+                let file = MemFile::shared(file)?;
                 files.insert(name.into(), file.clone());
                 file
             }
@@ -187,10 +296,7 @@ impl VfsStore for MemStore {
             }
         };
         Ok(OpenedFile {
-            file: MemFileHandle {
-                file,
-                read_only: options.access() == OpenAccess::ReadOnly,
-            },
+            file: MemFileHandle::new(file, options.access() == OpenAccess::ReadOnly),
             access: options.access(),
         })
     }
@@ -198,18 +304,20 @@ impl VfsStore for MemStore {
     fn close_file(
         app_data: &MemAppData,
         name: Option<&str>,
-        file: MemFileHandle,
+        mut file: MemFileHandle,
         options: OpenOptions,
     ) -> VfsResult<()> {
+        // SQLite may close a file while it still holds a lock.
+        file.unlock(LockLevel::None)?;
         let Some(name) = name else {
             return Ok(());
         };
         if options.delete_on_close() {
-            let mut files = app_data.borrow_mut();
+            let mut files = app_data.files.lock();
             // Do not delete a replacement created under the same name.
             if files
                 .get(name)
-                .is_some_and(|current| Rc::ptr_eq(current, &file.file))
+                .is_some_and(|current| Shared::ptr_eq(current, &file.file))
             {
                 files.remove(name);
             }
@@ -219,7 +327,7 @@ impl VfsStore for MemStore {
 
     fn access(app_data: &MemAppData, file: &str, _mode: AccessMode) -> VfsResult<bool> {
         // Every file in this flat memory namespace is readable and writable.
-        Ok(app_data.borrow().contains_key(file))
+        Ok(app_data.files.lock().contains_key(file))
     }
 
     fn full_pathname(_data: &MemAppData, name: &str) -> VfsResult<String> {
@@ -230,7 +338,7 @@ impl VfsStore for MemStore {
     }
 
     fn delete_file(app_data: &MemAppData, file: &str, _sync_dir: bool) -> VfsResult<()> {
-        if app_data.borrow_mut().remove(file).is_none() {
+        if app_data.files.lock().remove(file).is_none() {
             return Err(VfsError::new(
                 VfsErrorCode::IoDelete,
                 format!("file not found: {file:?}").into(),
@@ -251,7 +359,7 @@ impl SQLiteIoMethods for MemIoMethods {
 struct MemVfs;
 
 impl SQLiteVfs<MemIoMethods> for MemVfs {
-    type Os = dyn OsCallback;
+    type Os = dyn MemVfsOs;
 
     fn os(data: &MemAppData) -> &Self::Os {
         &*data.os
@@ -292,8 +400,8 @@ impl MemVfsUtil {
     ///
     /// # Safety
     ///
-    /// Call on the installing thread, with serialized access to SQLite VFS
-    /// registration. All SQLite use of memvfs must stay on that same thread.
+    /// Call with serialized access to SQLite VFS registration. Without the
+    /// `threadsafe` feature, all SQLite use of memvfs must stay on this thread.
     pub unsafe fn get() -> Result<Self> {
         let vfs = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
         if vfs.is_null() {
@@ -308,24 +416,24 @@ impl VfsFilesManager for MemVfsUtil {
     type Error = Infallible;
 
     fn remove(&self, filename: &str) -> Result<bool, Self::Error> {
-        Ok(self.0.borrow_mut().remove(filename).is_some())
+        Ok(self.0.files.lock().remove(filename).is_some())
     }
 
     fn clear(&self) -> Result<(), Self::Error> {
-        core::mem::take(&mut *self.0.borrow_mut());
+        core::mem::take(&mut *self.0.files.lock());
         Ok(())
     }
 
     fn contains(&self, filename: &str) -> Result<bool, Self::Error> {
-        Ok(self.0.borrow().contains_key(filename))
+        Ok(self.0.files.lock().contains_key(filename))
     }
 
     fn names(&self) -> Result<Vec<String>, Self::Error> {
-        Ok(self.0.borrow().keys().cloned().collect())
+        Ok(self.0.files.lock().keys().cloned().collect())
     }
 
     fn len(&self) -> Result<usize, Self::Error> {
-        Ok(self.0.borrow().len())
+        Ok(self.0.files.lock().len())
     }
 }
 
@@ -338,7 +446,7 @@ impl DbTransfer for MemVfsUtil {
 
     fn create_import(&self, name: &str, size: u64) -> Result<Self::Target<'_>> {
         validate_db_filename(name)?;
-        if self.0.borrow().contains_key(name) {
+        if self.0.files.lock().contains_key(name) {
             return Err(MemVfsError::AlreadyExists(name.into()));
         }
         usize::try_from(size).map_err(|_| {
@@ -355,11 +463,12 @@ impl DbTransfer for MemVfsUtil {
     fn open_export(&self, name: &str) -> Result<Self::Source<'_>> {
         let file = self
             .0
-            .borrow()
+            .files
+            .lock()
             .get(name)
             .cloned()
             .ok_or_else(|| MemVfsError::NotFound(name.into()))?;
-        let size = file.borrow().size()?;
+        let size = file.lock().data.size()?;
         Ok(MemExportSource { file, size })
     }
 }
@@ -380,11 +489,12 @@ impl ImportTarget for MemImportTarget<'_> {
     }
 
     fn commit(self) -> Result<()> {
-        let mut files = self.util.0.borrow_mut();
+        let file = MemFile::shared(self.file)?;
+        let mut files = self.util.0.files.lock();
         if files.contains_key(&self.filename) {
             return Err(MemVfsError::AlreadyExists(self.filename));
         }
-        files.insert(self.filename, Rc::new(RefCell::new(self.file)));
+        files.insert(self.filename, file);
         Ok(())
     }
 
@@ -397,9 +507,11 @@ impl ImportTarget for MemImportTarget<'_> {
     }
 }
 
+/// Reads a byte snapshot per call. A writer's uncommitted pages may be visible,
+/// so export only while no transaction writes.
 #[doc(hidden)]
 pub struct MemExportSource {
-    file: Rc<RefCell<MemChunksFile>>,
+    file: FileRef,
     size: u64,
 }
 
@@ -411,7 +523,7 @@ impl ExportSource for MemExportSource {
     }
 
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<usize> {
-        Ok(self.file.borrow_mut().read(buf, offset)?)
+        Ok(self.file.lock().data.read(buf, offset)?)
     }
 }
 
@@ -421,12 +533,15 @@ impl ExportSource for MemExportSource {
 ///
 /// # Safety
 ///
-/// Use a valid SQLite context with serialized registration. Installation,
-/// management, file access and uninstallation must stay on one thread.
+/// Use a valid SQLite context with serialized registration. Without the
+/// `threadsafe` feature, installation, management, file access and
+/// uninstallation must stay on one thread. With it, file access and management
+/// may come from any thread, while installation and uninstallation stay
+/// serialized with SQLite initialization and with each other.
 /// Raw unregistration is allowed; never free or replace owned VFS/app data
 /// through raw pointers. Use [`uninstall`] for cleanup.
 pub unsafe fn install(
-    os: impl OsCallback + 'static,
+    os: impl MemVfsOs,
     default_vfs: bool,
 ) -> Result<MemVfsUtil, RegisterVfsError> {
     let registered = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
@@ -441,7 +556,9 @@ pub unsafe fn install(
         // SAFETY: The name is static, app data is retained until uninstall,
         // and MemVfs/MemIoMethods use the matching default file layout.
         // The caller guarantees serialized access to the SQLite context.
-        let data = VfsAppData::new(MemAppData::new(os)).leak();
+        let data =
+            MemAppData::new(os).map_err(|error| RegisterVfsError::RegisterVfs(error.code()))?;
+        let data = VfsAppData::new(data).leak();
         let vfs = Box::into_raw(Box::new(MemVfs::vfs(VFS_NAME.as_ptr(), data)));
         let code = bindings::sqlite3_vfs_register(vfs, i32::from(default_vfs));
         if code != bindings::SQLITE_OK {
@@ -481,8 +598,9 @@ fn check_owned(vfs: *mut bindings::sqlite3_vfs) -> Result<(), RegisterVfsError> 
 ///
 /// # Safety
 ///
-/// Use a valid SQLite context on the installing thread; serialize with VFS
-/// installation/uninstallation. Close all files and retire VFS/app-data
+/// Use a valid SQLite context, on the installing thread unless `threadsafe` is
+/// enabled, and serialize with VFS installation/uninstallation and with SQLite
+/// initialization. Close all files and retire VFS/app-data
 /// references (`MemVfsUtil` may outlive uninstall). Owned allocations must
 /// not have been freed or replaced through raw pointers.
 pub unsafe fn uninstall() -> Result<(), RegisterVfsError> {
@@ -537,6 +655,7 @@ mod tests {
             }
         }
 
-        test_vfs_store::<MemStore>(VfsAppData::new(MemAppData::new(CallbackOs))).unwrap();
+        let data = MemAppData::new(CallbackOs).unwrap();
+        test_vfs_store::<MemStore>(VfsAppData::new(data)).unwrap();
     }
 }
