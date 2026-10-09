@@ -118,6 +118,31 @@ fn test_encrypt_decrypt() {
 }
 
 #[wasm_bindgen_test]
+fn test_passphrase_encrypt_decrypt() {
+    // Ordinary passphrases exercise PBKDF2 with SQLCipher's default settings.
+    let passphrase = b"correct horse battery staple";
+    let name = c"passphrase.db";
+    let db = Db::open(name, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+    db.key(passphrase);
+    assert_eq!(
+        db.exec(c"CREATE TABLE t(s); INSERT INTO t VALUES('passphrase encrypted');"),
+        SQLITE_OK
+    );
+    db.close();
+
+    let db = Db::open(name, SQLITE_OPEN_READWRITE);
+    db.key(b"wrong passphrase");
+    assert_eq!(db.exec(c"SELECT s FROM t;"), SQLITE_NOTADB);
+    db.close();
+
+    let db = Db::open(name, SQLITE_OPEN_READWRITE);
+    db.key(passphrase);
+    assert_eq!(db.query(c"SELECT s FROM t"), b"passphrase encrypted");
+    db.close();
+    remove(name);
+}
+
+#[wasm_bindgen_test]
 fn test_rekey() {
     create(c"rekey.db");
 
