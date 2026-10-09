@@ -225,3 +225,9 @@ fn test_errors() {
         assert_eq!(sqlite3_step(query.raw), SQLITE_DONE);
     }
 }
+
+#[wasm_bindgen_test]
+fn test_sleep() {
+    // SAFETY: `sqlite3_sleep` takes no pointers and has no preconditions.
+    assert_eq!(unsafe { sqlite3_sleep(1) }, 1);
+}

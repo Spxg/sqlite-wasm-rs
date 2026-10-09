@@ -22,7 +22,8 @@
 //! `len <= isize::MAX`, and may be null only for zero length.
 //!
 //! `random` follows [`OsCallback::random`]. Sleep's nanoseconds are less than
-//! 1,000,000,000; the `wasm-bindgen` adapter cannot sleep without atomics.
+//! 1,000,000,000; the `wasm-bindgen` adapter cannot sleep without atomics or on
+//! a browser main thread.
 //! The clock returns UTC Unix milliseconds.
 //! `fill_entropy` must fill the buffer securely or fail, never fall back to
 //! weak randomness; SQLite3MC may abort on failure. `localtime` converts Unix
@@ -136,7 +137,7 @@ pub(crate) fn localtime(unix_seconds: i64) -> Result<LocalTime> {
 /// VFS platform services supplied by the linked host adapter.
 ///
 /// Uses `wasm-bindgen` when enabled, otherwise application-defined hooks.
-/// Without atomics, the `wasm-bindgen` adapter's sleep is a no-op.
+/// The `wasm-bindgen` adapter's sleep is a no-op without atomics and on a browser main thread.
 /// Does not make SQLite or the default memory VFS thread-safe.
 #[derive(Default)]
 pub struct WasmOsCallback;

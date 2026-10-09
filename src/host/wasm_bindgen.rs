@@ -6,12 +6,12 @@ use js_sys::{Date, Math, Number};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 
-/// Sleeps using atomic waits, or returns immediately when atomics are unavailable.
+/// Sleeps using atomic waits, or returns immediately where the thread may not wait.
 #[export_name = "rust_sqlite_wasm_host_sleep"]
 pub extern "C" fn sleep(seconds: u64, nanoseconds: u32) {
     let duration = Duration::new(seconds, nanoseconds);
     #[cfg(target_feature = "atomics")]
-    {
+    if can_block() {
         let mut nanos = duration.as_nanos();
         while nanos > 0 {
             let amount = core::cmp::min(i64::MAX as u128, nanos);
@@ -25,6 +25,14 @@ pub extern "C" fn sleep(seconds: u64, nanoseconds: u32) {
     // Browsers provide no synchronous sleep here without atomics. Do not busy-wait.
     #[cfg(not(target_feature = "atomics"))]
     let _ = duration;
+}
+
+/// Whether this thread may wait, which browsers forbid on the main thread.
+#[cfg(target_feature = "atomics")]
+fn can_block() -> bool {
+    let word = js_sys::Int32Array::new(&js_sys::SharedArrayBuffer::new(4));
+    // The word holds 0, so a permitted wait returns "not-equal" without waiting.
+    js_sys::Atomics::wait_with_timeout(&word, 0, 1, 0.0).is_ok()
 }
 
 /// Fills a buffer using Web Crypto, falling back to non-cryptographic randomness.
