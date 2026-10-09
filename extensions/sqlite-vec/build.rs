@@ -1,5 +1,3 @@
-include!("cc/shim/cc.rs");
-
 fn main() {
     let mut cc = cc::Build::new();
 
@@ -8,12 +6,9 @@ fn main() {
         .include("cc/shim/musl/arch/generic")
         .include("cc/shim/musl/include")
         .file("cc/sqlite-vec.c")
+        .flag("-include")
+        .flag("cc/shim/wasm-shim.h")
         .flag("-D__COSMOPOLITAN__")
-        .flag("-DSQLITE_CORE");
-
-    for (from, to) in RENAME_SYMBOLS {
-        cc.define(from, *to);
-    }
-
-    cc.compile("wsqlite_vec0");
+        .flag("-DSQLITE_CORE")
+        .compile("wsqlite_vec0");
 }
