@@ -38,9 +38,6 @@
 /* errno */
 #define __errno_location rust_sqlite_wasm_errno_location
 
-/* stdio */
-#define sprintf rust_sqlite_wasm_sprintf
-
 /* malloc */
 #define malloc rust_sqlite_wasm_malloc
 #define realloc rust_sqlite_wasm_realloc
@@ -56,3 +53,21 @@
 /* exit */
 #define abort rust_sqlite_wasm_abort
 #define __assert_fail rust_sqlite_wasm_assert_fail
+
+/* stdio */
+#define stdout rust_sqlite_wasm_stdout
+#define stderr rust_sqlite_wasm_stderr
+
+#define fopen rust_sqlite_wasm_fopen
+#define fprintf rust_sqlite_wasm_fprintf
+#define sprintf rust_sqlite_wasm_sprintf
+#define rename rust_sqlite_wasm_rename
+#define atexit rust_sqlite_wasm_atexit
+
+#include <stdio.h>
+
+#undef stdout
+#undef stderr
+
+#define stdout rust_sqlite_wasm_stdout
+#define stderr rust_sqlite_wasm_stderr
