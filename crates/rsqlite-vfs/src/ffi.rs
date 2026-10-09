@@ -765,3 +765,20 @@ extern "C" {
 
     pub fn sqlite3_uri_int64(filename: *const ::core::ffi::c_char, key: *const ::core::ffi::c_char, default: i64) -> i64;
 }
+
+#[cfg(feature = "threadsafe")]
+#[repr(C)]
+pub struct sqlite3_mutex {
+    _unused: [u8; 0],
+}
+
+#[cfg(feature = "threadsafe")]
+extern "C" {
+    pub fn sqlite3_mutex_alloc(arg1: ::core::ffi::c_int) -> *mut sqlite3_mutex;
+
+    pub fn sqlite3_mutex_free(arg1: *mut sqlite3_mutex);
+
+    pub fn sqlite3_mutex_enter(arg1: *mut sqlite3_mutex);
+
+    pub fn sqlite3_mutex_leave(arg1: *mut sqlite3_mutex);
+}

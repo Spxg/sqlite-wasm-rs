@@ -6,6 +6,12 @@
 #![allow(non_camel_case_types)]
 
 extern crate alloc;
+// Per-thread memvfs diagnostics need `std::thread_local!`.
+#[cfg(feature = "threadsafe")]
+extern crate std;
+// Unit tests allocate memvfs mutexes through the bundled SQLite.
+#[cfg(all(test, feature = "threadsafe"))]
+extern crate libsqlite3_sys;
 
 /// SQLite C types and bindings used to implement a VFS.
 #[rustfmt::skip]
@@ -14,6 +20,7 @@ mod error;
 mod filename;
 pub mod memvfs;
 mod options;
+mod sync;
 pub mod transfer;
 pub use error::{RawVfsErrorCode, SystemErrorCode, VfsErrorCode};
 pub use filename::{OpenRequest, VfsFilename};
