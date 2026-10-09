@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 
+include!("shim/cc.rs");
+
 // SQLite compile flags tuned for WASM: no threads/dlopen, keep common extensions.
-const FULL_FEATURED: [&str; 23] = [
+const FULL_FEATURED: &[&str] = &[
     "-DSQLITE_OS_OTHER",
     "-DSQLITE_USE_URI",
     // All SQLite calls must remain single-threaded.
@@ -224,51 +226,6 @@ fn bindgen(header: &Path, output: &Path) {
 }
 
 fn compile(source: &Path) {
-    const C_SOURCE: [&str; 36] = [
-        // string
-        "string/memchr.c",
-        "string/memrchr.c",
-        "string/stpcpy.c",
-        "string/stpncpy.c",
-        "string/strcat.c",
-        "string/strchr.c",
-        "string/strchrnul.c",
-        "string/strcmp.c",
-        "string/strcpy.c",
-        "string/strcspn.c",
-        "string/strlen.c",
-        "string/strncat.c",
-        "string/strncmp.c",
-        "string/strncpy.c",
-        "string/strrchr.c",
-        "string/strspn.c",
-        // stdlib
-        "stdlib/atoi.c",
-        "stdlib/bsearch.c",
-        "stdlib/qsort.c",
-        "stdlib/qsort_nr.c",
-        "stdlib/strtod.c",
-        "stdlib/strtol.c",
-        // math
-        "math/__fpclassifyl.c",
-        "math/acosh.c",
-        "math/asinh.c",
-        "math/atanh.c",
-        "math/fmodl.c",
-        "math/scalbn.c",
-        "math/scalbnl.c",
-        "math/sqrt.c",
-        "math/trunc.c",
-        // errno
-        "errno/__errno_location.c",
-        // stdio
-        "stdio/__toread.c",
-        "stdio/__uflow.c",
-        // internal
-        "internal/floatscan.c",
-        "internal/shgetc.c",
-    ];
-
     let mut cc = cc::Build::new();
     cc.warnings(false)
         .flag("-Wno-macro-redefined")
@@ -278,9 +235,11 @@ fn compile(source: &Path) {
         .file("shim/printf/printf.c")
         .file(source)
         .files(C_SOURCE.map(|s| format!("shim/musl/{s}")))
-        .flag("-DPRINTF_ALIAS_STANDARD_FUNCTION_NAMES_HARD")
-        .flag("-include")
-        .flag("shim/wasm-shim.h");
+        .flag("-DPRINTF_ALIAS_STANDARD_FUNCTION_NAMES_HARD");
+
+    for (from, to) in RENAME_SYMBOLS {
+        cc.define(from, *to);
+    }
 
     for flag in FULL_FEATURED {
         cc.flag(flag);
