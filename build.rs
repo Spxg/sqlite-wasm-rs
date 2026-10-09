@@ -1,11 +1,9 @@
 use std::path::{Path, PathBuf};
 
 // SQLite compile flags tuned for WASM: no threads/dlopen, keep common extensions.
-const FULL_FEATURED: [&str; 23] = [
+const FULL_FEATURED: &[&str] = &[
     "-DSQLITE_OS_OTHER",
     "-DSQLITE_USE_URI",
-    // All SQLite calls must remain single-threaded.
-    "-DSQLITE_THREADSAFE=0",
     "-DSQLITE_TEMP_STORE=2",
     "-DSQLITE_DEFAULT_CACHE_SIZE=-16384",
     "-DSQLITE_DEFAULT_PAGE_SIZE=8192",
@@ -31,7 +29,35 @@ const FULL_FEATURED: [&str; 23] = [
 ];
 
 #[cfg(feature = "sqlite3mc")]
-const SQLITE3_MC_FEATURED: [&str; 2] = ["-D__WASM__", "-DARGON2_NO_THREADS"];
+const BACKEND_FLAGS: &[&str] = &["-DSQLITE_THREADSAFE=0", "-D__WASM__", "-DARGON2_NO_THREADS"];
+
+#[cfg(feature = "sqlcipher")]
+const BACKEND_FLAGS: &[&str] = &[
+    "-DSQLITE_HAS_CODEC=1",
+    "-DSQLCIPHER_CRYPTO_LIBTOMCRYPT=1",
+    // Install the host entropy hook before SQLCipher initializes its provider.
+    "-DSQLITE_EXTRA_INIT=sqlcipher_wasm_extra_init",
+    "-DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown",
+    // The shim has no gettimeofday, log devices or memory locking.
+    "-DSQLCIPHER_OMIT_LOG=1",
+    "-DSQLCIPHER_OMIT_LOG_DEVICE=1",
+    "-DSQLCIPHER_OMIT_DEFAULT_LOGGING=1",
+    "-DOMIT_MEMLOCK=1",
+    // SQLCipher requires THREADSAFE=1 or 2. No-op mutexes keep this single-threaded.
+    "-DSQLITE_THREADSAFE=1",
+    "-DSQLITE_MUTEX_NOOP=1",
+];
+
+#[cfg(not(any(feature = "sqlite3mc", feature = "sqlcipher")))]
+const BACKEND_FLAGS: &[&str] = &["-DSQLITE_THREADSAFE=0"];
+
+/// Use the same SQLite configuration for C compilation and binding generation.
+fn sqlite_flags() -> impl Iterator<Item = &'static str> {
+    FULL_FEATURED
+        .iter()
+        .copied()
+        .chain(BACKEND_FLAGS.iter().copied())
+}
 
 #[cfg(all(feature = "sqlite3mc", feature = "sqlcipher"))]
 compile_error!("features `sqlite3mc` and `sqlcipher` are mutually exclusive");
@@ -72,27 +98,14 @@ fn main() {
     for file in [&source, &header] {
         assert!(
             file.is_file(),
-            "SQLite amalgamation file not found: {} (check {SOURCE_DIR_ENV} and the sqlite3mc feature)",
+            "SQLite amalgamation file not found: {} (check {SOURCE_DIR_ENV} and the selected backend feature)",
             file.display()
         );
     }
     // Watch the directory too, including any headers used by a custom amalgamation.
     println!("cargo::rerun-if-changed={}", source_dir.display());
 
-    #[cfg(feature = "sqlcipher")]
-    {
-        let tomcrypt = source_dir.join(sqlcipher_src::LIBTOMCRYPT_INCLUDE_DIR);
-        compile(
-            &[
-                Path::new("shim/sqlcipher-wasm.c"),
-                Path::new("shim/sqlcipher-libc.c"),
-            ],
-            &[&source_dir, &tomcrypt],
-        );
-        compile_libtomcrypt(&source_dir, &tomcrypt);
-    }
-    #[cfg(not(feature = "sqlcipher"))]
-    compile(&[&source], &[]);
+    compile(&source, &source_dir);
 
     #[cfg(feature = "bindgen")]
     {
@@ -218,18 +231,7 @@ fn bindgen(header: &Path, output: &Path) {
         .blocklist_function("sqlite3_create_module")
         .blocklist_function("sqlite3_prepare");
 
-    bindings = bindings.clang_args(FULL_FEATURED);
-
-    #[cfg(feature = "sqlite3mc")]
-    {
-        bindings = bindings.clang_args(SQLITE3_MC_FEATURED);
-    }
-
-    #[cfg(feature = "sqlcipher")]
-    {
-        // SQLITE_HAS_CODEC gates the sqlite3_key/rekey declarations in the header.
-        bindings = bindings.clang_arg("-DSQLITE_HAS_CODEC");
-    }
+    bindings = bindings.clang_args(sqlite_flags());
 
     bindings = bindings
         .blocklist_function("sqlite3_vmprintf")
@@ -267,7 +269,7 @@ fn shim_build() -> cc::Build {
     cc
 }
 
-fn compile(sources: &[&Path], includes: &[&Path]) {
+fn compile(source: &Path, source_dir: &Path) {
     const C_SOURCE: [&str; 36] = [
         // string
         "string/memchr.c",
@@ -315,31 +317,34 @@ fn compile(sources: &[&Path], includes: &[&Path]) {
 
     let mut cc = shim_build();
     cc.file("shim/printf/printf.c")
-        .files(sources)
+        .file(source)
         .files(C_SOURCE.map(|s| format!("shim/musl/{s}")))
-        .includes(includes);
+        .include(source_dir)
+        .flags(sqlite_flags());
 
-    for flag in FULL_FEATURED {
-        cc.flag(flag);
-    }
-
-    #[cfg(feature = "sqlite3mc")]
-    for flag in SQLITE3_MC_FEATURED {
-        cc.flag(flag);
-    }
-
+    #[cfg(feature = "sqlcipher")]
+    compile_sqlcipher(cc, source_dir);
+    #[cfg(not(feature = "sqlcipher"))]
     cc.compile("wsqlite3");
 }
 
-/// LibTomCrypt one file per unit, configured by the header the SQLCipher unit includes.
+/// SQLCipher and its shim share LibTomCrypt's configuration with every crypto unit.
 #[cfg(feature = "sqlcipher")]
-fn compile_libtomcrypt(source_dir: &Path, tomcrypt: &Path) {
-    shim_build()
-        .include(tomcrypt)
+fn compile_sqlcipher(mut sqlite: cc::Build, source_dir: &Path) {
+    let tomcrypt = source_dir.join(sqlcipher_src::LIBTOMCRYPT_INCLUDE_DIR);
+    sqlite
+        .include(&tomcrypt)
         .flag("-include")
-        .flag("shim/sqlcipher-ltc.h")
+        .flag("shim/sqlcipher/libtomcrypt.h")
+        .file("shim/sqlcipher/shim.c")
+        .compile("wsqlite3");
+
+    shim_build()
+        .include(&tomcrypt)
+        .flag("-include")
+        .flag("shim/sqlcipher/libtomcrypt.h")
+        // Expose internal declarations when compiling LibTomCrypt itself.
         .define("LTC_SOURCE", None)
-        .file("shim/sqlcipher-entropy.c")
         .files(
             sqlcipher_src::LIBTOMCRYPT_SOURCES
                 .iter()
