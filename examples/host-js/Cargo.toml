@@ -15,6 +15,7 @@ sqlite-wasm-rs = { path = "../..", default-features = false }
 
 [features]
 sqlite3mc = ["sqlite-wasm-rs/sqlite3mc"]
+sqlcipher = ["sqlite-wasm-rs/sqlcipher"]
 bindgen = ["sqlite-wasm-rs/bindgen"]
 
 [patch.crates-io]

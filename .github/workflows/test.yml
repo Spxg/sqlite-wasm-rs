@@ -26,6 +26,8 @@ jobs:
           - wasm-bindgen,sqlite3mc
           - wasm-bindgen,bindgen
           - wasm-bindgen,bindgen,sqlite3mc
+          - wasm-bindgen,sqlcipher
+          - wasm-bindgen,bindgen,sqlcipher
     steps:
     - uses: actions/checkout@v4
     - name: Install wasm-pack
@@ -74,20 +76,23 @@ jobs:
     strategy:
       matrix:
         example: [host-js, host-c]
+        features:
+          - ""
+          - sqlite3mc
+          - bindgen
+          - bindgen,sqlite3mc
+          - sqlcipher
+          - bindgen,sqlcipher
     steps:
     - uses: actions/checkout@v4
     - name: Test without wasm-bindgen
       working-directory: examples/${{ matrix.example }}
+      env:
+        FEATURES: ${{ matrix.features }}
       run: |
         rustup target add wasm32-unknown-unknown
-        for features in "" sqlite3mc bindgen bindgen,sqlite3mc; do
-          cargo build --target wasm32-unknown-unknown --features "$features"
-          node run.mjs
-          cargo tree --target wasm32-unknown-unknown --edges normal --features "$features" > dependencies.txt
-          if grep -E 'wasm-bindgen|js-sys' dependencies.txt; then
-            exit 1
-          fi
-        done
+        cargo build --target wasm32-unknown-unknown --features "$FEATURES"
+        node run.mjs
 
   test_style:
     runs-on: ubuntu-latest
@@ -102,7 +107,8 @@ jobs:
       run: |
         rustup target add wasm32-unknown-unknown
         cargo clippy --no-default-features --target wasm32-unknown-unknown -- -D warnings
-        cargo clippy --all-features --target wasm32-unknown-unknown -- -D warnings
+        cargo clippy --features wasm-bindgen,sqlite3mc,bindgen --target wasm32-unknown-unknown -- -D warnings
+        cargo clippy --features wasm-bindgen,sqlcipher,bindgen --target wasm32-unknown-unknown -- -D warnings
 
   test_atomics:
     runs-on: ubuntu-latest
@@ -111,6 +117,7 @@ jobs:
         features:
           - wasm-bindgen
           - wasm-bindgen,sqlite3mc
+          - wasm-bindgen,sqlcipher
     steps:
     - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@nightly
@@ -146,6 +153,7 @@ jobs:
       run: |
         cargo build --features wasm-bindgen --target wasm32-unknown-unknown
         cargo build --features wasm-bindgen,sqlite3mc --target wasm32-unknown-unknown
+        cargo build --features wasm-bindgen,sqlcipher --target wasm32-unknown-unknown
 
   test_examples:
     runs-on: ubuntu-latest

@@ -1,11 +1,9 @@
 use std::path::{Path, PathBuf};
 
 // SQLite compile flags tuned for WASM: no threads/dlopen, keep common extensions.
-const FULL_FEATURED: [&str; 23] = [
+const FULL_FEATURED: &[&str] = &[
     "-DSQLITE_OS_OTHER",
     "-DSQLITE_USE_URI",
-    // All SQLite calls must remain single-threaded.
-    "-DSQLITE_THREADSAFE=0",
     "-DSQLITE_TEMP_STORE=2",
     "-DSQLITE_DEFAULT_CACHE_SIZE=-16384",
     "-DSQLITE_DEFAULT_PAGE_SIZE=8192",
@@ -30,8 +28,78 @@ const FULL_FEATURED: [&str; 23] = [
     "-DSQLITE_ENABLE_COLUMN_METADATA",
 ];
 
-#[cfg(feature = "sqlite3mc")]
-const SQLITE3_MC_FEATURED: [&str; 2] = ["-D__WASM__", "-DARGON2_NO_THREADS"];
+#[cfg(all(feature = "sqlite3mc", feature = "sqlcipher"))]
+compile_error!("features `sqlite3mc` and `sqlcipher` are mutually exclusive");
+
+struct Backend {
+    name: &'static str,
+    source_dir: PathBuf,
+    source_name: &'static str,
+    header_name: &'static str,
+    flags: &'static [&'static str],
+    compile: Option<fn(cc::Build, &Path)>,
+}
+
+impl Backend {
+    /// Use the same SQLite configuration for C compilation and binding generation.
+    fn sqlite_flags(&self) -> impl Iterator<Item = &'static str> + '_ {
+        FULL_FEATURED
+            .iter()
+            .copied()
+            .chain(self.flags.iter().copied())
+    }
+}
+
+/// Select all backend-specific settings in one place.
+fn backend() -> Backend {
+    #[cfg(feature = "sqlcipher")]
+    {
+        Backend {
+            name: "sqlcipher",
+            source_dir: sqlcipher_src::source_dir().to_path_buf(),
+            source_name: sqlcipher_src::SOURCE_FILE,
+            header_name: sqlcipher_src::HEADER_FILE,
+            flags: &[
+                "-DSQLITE_HAS_CODEC=1",
+                "-DSQLCIPHER_CRYPTO_LIBTOMCRYPT=1",
+                // Install the host entropy hook before the provider initializes.
+                "-DSQLITE_EXTRA_INIT=sqlcipher_wasm_extra_init",
+                "-DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown",
+                // The shim has no gettimeofday, log devices or memory locking.
+                "-DSQLCIPHER_OMIT_LOG=1",
+                "-DSQLCIPHER_OMIT_LOG_DEVICE=1",
+                "-DSQLCIPHER_OMIT_DEFAULT_LOGGING=1",
+                "-DOMIT_MEMLOCK=1",
+                // SQLCipher requires THREADSAFE=1 or 2, but calls stay single-threaded.
+                "-DSQLITE_THREADSAFE=1",
+                "-DSQLITE_MUTEX_NOOP=1",
+            ],
+            compile: Some(compile_sqlcipher),
+        }
+    }
+    #[cfg(all(feature = "sqlite3mc", not(feature = "sqlcipher")))]
+    {
+        Backend {
+            name: "sqlite3mc",
+            source_dir: sqlite3mc_src::source_dir().to_path_buf(),
+            source_name: sqlite3mc_src::SOURCE_FILE,
+            header_name: sqlite3mc_src::HEADER_FILE,
+            flags: &["-DSQLITE_THREADSAFE=0", "-D__WASM__", "-DARGON2_NO_THREADS"],
+            compile: None,
+        }
+    }
+    #[cfg(not(any(feature = "sqlite3mc", feature = "sqlcipher")))]
+    {
+        Backend {
+            name: "sqlite3",
+            source_dir: PathBuf::from("sqlite3"),
+            source_name: "sqlite3.c",
+            header_name: "sqlite3.h",
+            flags: &["-DSQLITE_THREADSAFE=0"],
+            compile: None,
+        }
+    }
+}
 
 const UPDATE_BINDGEN_ENV: &str = "SQLITE_WASM_RS_UPDATE_BINDGEN";
 const SOURCE_DIR_ENV: &str = "SQLITE_WASM_RS_SOURCE_DIR";
@@ -41,56 +109,45 @@ fn main() {
     println!("cargo::rerun-if-env-changed={SOURCE_DIR_ENV}");
     println!("cargo::rerun-if-changed=shim");
 
-    #[cfg(feature = "sqlite3mc")]
-    let (default_dir, source_name, header_name) = (
-        sqlite3mc_src::source_dir().to_path_buf(),
-        sqlite3mc_src::SOURCE_FILE,
-        sqlite3mc_src::HEADER_FILE,
-    );
-    #[cfg(not(feature = "sqlite3mc"))]
-    let (default_dir, source_name, header_name) =
-        (PathBuf::from("sqlite3"), "sqlite3.c", "sqlite3.h");
-
+    let backend = backend();
     let source_dir = match std::env::var_os(SOURCE_DIR_ENV) {
         Some(dir) => {
             assert!(!dir.is_empty(), "{SOURCE_DIR_ENV} must not be empty");
             PathBuf::from(dir)
         }
-        None => default_dir,
+        None => backend.source_dir.clone(),
     };
-    let source = source_dir.join(source_name);
-    let header = source_dir.join(header_name);
+    let source = source_dir.join(backend.source_name);
+    let header = source_dir.join(backend.header_name);
     for file in [&source, &header] {
         assert!(
             file.is_file(),
-            "SQLite amalgamation file not found: {} (check {SOURCE_DIR_ENV} and the sqlite3mc feature)",
+            "{} amalgamation file not found: {} (check {SOURCE_DIR_ENV} and the selected backend feature)",
+            backend.name,
             file.display()
         );
     }
     // Watch the directory too, including any headers used by a custom amalgamation.
     println!("cargo::rerun-if-changed={}", source_dir.display());
 
-    compile(&source);
+    compile(&backend, &source, &source_dir);
 
     #[cfg(feature = "bindgen")]
     {
         let update_bindgen = std::env::var(UPDATE_BINDGEN_ENV).is_ok();
         let output = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR env not set"))
             .join("bindgen.rs");
-        bindgen(&header, &output);
+        bindgen(&backend, &header, &output);
 
         if update_bindgen {
-            #[cfg(not(feature = "sqlite3mc"))]
-            const SQLITE3_BINDGEN: &str = "src/bindings/sqlite3_bindgen.rs";
-            #[cfg(feature = "sqlite3mc")]
-            const SQLITE3_BINDGEN: &str = "src/bindings/sqlite3mc_bindgen.rs";
-            std::fs::copy(&output, SQLITE3_BINDGEN).unwrap();
+            let destination = format!("src/bindings/{}_bindgen.rs", backend.name);
+            std::fs::copy(&output, destination).unwrap();
         }
     }
 }
 
 #[cfg(feature = "bindgen")]
-fn bindgen(header: &Path, output: &Path) {
+fn bindgen(backend: &Backend, header: &Path, output: &Path) {
     use bindgen::callbacks::{IntKind, ParseCallbacks};
 
     #[derive(Debug)]
@@ -194,12 +251,7 @@ fn bindgen(header: &Path, output: &Path) {
         .blocklist_function("sqlite3_create_module")
         .blocklist_function("sqlite3_prepare");
 
-    bindings = bindings.clang_args(FULL_FEATURED);
-
-    #[cfg(feature = "sqlite3mc")]
-    {
-        bindings = bindings.clang_args(SQLITE3_MC_FEATURED);
-    }
+    bindings = bindings.clang_args(backend.sqlite_flags());
 
     bindings = bindings
         .blocklist_function("sqlite3_vmprintf")
@@ -223,7 +275,21 @@ fn bindgen(header: &Path, output: &Path) {
     bindings.write_to_file(output).unwrap();
 }
 
-fn compile(source: &Path) {
+/// Compiler settings every C unit shares, with the shim standing in for libc.
+fn shim_build() -> cc::Build {
+    let mut cc = cc::Build::new();
+    cc.warnings(false)
+        .flag("-Wno-macro-redefined")
+        .include("shim")
+        .include("shim/musl/arch/generic")
+        .include("shim/musl/include")
+        .flag("-DPRINTF_ALIAS_STANDARD_FUNCTION_NAMES_HARD")
+        .flag("-include")
+        .flag("shim/wasm-shim.h");
+    cc
+}
+
+fn compile(backend: &Backend, source: &Path, source_dir: &Path) {
     const C_SOURCE: [&str; 36] = [
         // string
         "string/memchr.c",
@@ -269,27 +335,40 @@ fn compile(source: &Path) {
         "internal/shgetc.c",
     ];
 
-    let mut cc = cc::Build::new();
-    cc.warnings(false)
-        .flag("-Wno-macro-redefined")
-        .include("shim")
-        .include("shim/musl/arch/generic")
-        .include("shim/musl/include")
-        .file("shim/printf/printf.c")
+    let mut cc = shim_build();
+    cc.file("shim/printf/printf.c")
         .file(source)
         .files(C_SOURCE.map(|s| format!("shim/musl/{s}")))
-        .flag("-DPRINTF_ALIAS_STANDARD_FUNCTION_NAMES_HARD")
+        .include(source_dir)
+        .flags(backend.sqlite_flags());
+
+    match backend.compile {
+        Some(compile) => compile(cc, source_dir),
+        None => cc.compile("wsqlite3"),
+    }
+}
+
+/// SQLCipher and its shim share LibTomCrypt's configuration with every crypto unit.
+#[cfg(feature = "sqlcipher")]
+fn compile_sqlcipher(mut sqlite: cc::Build, source_dir: &Path) {
+    let tomcrypt = source_dir.join(sqlcipher_src::LIBTOMCRYPT_INCLUDE_DIR);
+    sqlite
+        .include(&tomcrypt)
         .flag("-include")
-        .flag("shim/wasm-shim.h");
+        .flag("shim/sqlcipher/libtomcrypt.h")
+        .file("shim/sqlcipher/shim.c")
+        .compile("wsqlite3");
 
-    for flag in FULL_FEATURED {
-        cc.flag(flag);
-    }
-
-    #[cfg(feature = "sqlite3mc")]
-    for flag in SQLITE3_MC_FEATURED {
-        cc.flag(flag);
-    }
-
-    cc.compile("wsqlite3");
+    shim_build()
+        .include(&tomcrypt)
+        .flag("-include")
+        .flag("shim/sqlcipher/libtomcrypt.h")
+        // Expose internal declarations when compiling LibTomCrypt itself.
+        .define("LTC_SOURCE", None)
+        .files(
+            sqlcipher_src::LIBTOMCRYPT_SOURCES
+                .iter()
+                .map(|s| source_dir.join(s)),
+        )
+        .compile("wsqlcipher_ltc");
 }

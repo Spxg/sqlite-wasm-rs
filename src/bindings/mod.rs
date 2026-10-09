@@ -3,7 +3,10 @@
 #[cfg(all(not(feature = "bindgen"), feature = "sqlite3mc"))]
 mod sqlite3mc_bindgen;
 
-#[cfg(all(not(feature = "bindgen"), not(feature = "sqlite3mc")))]
+#[cfg(all(not(feature = "bindgen"), feature = "sqlcipher"))]
+mod sqlcipher_bindgen;
+
+#[cfg(all(not(feature = "bindgen"), not(feature = "sqlcipher"), not(feature = "sqlite3mc")))]
 mod sqlite3_bindgen;
 
 mod bindgen {
@@ -13,7 +16,10 @@ mod bindgen {
     #[cfg(all(not(feature = "bindgen"), feature = "sqlite3mc"))]
     pub use super::sqlite3mc_bindgen::*;
 
-    #[cfg(all(not(feature = "bindgen"), not(feature = "sqlite3mc")))]
+    #[cfg(all(not(feature = "bindgen"), feature = "sqlcipher"))]
+    pub use super::sqlcipher_bindgen::*;
+
+    #[cfg(all(not(feature = "bindgen"), not(feature = "sqlcipher"), not(feature = "sqlite3mc")))]
     pub use super::sqlite3_bindgen::*;
 }
 
