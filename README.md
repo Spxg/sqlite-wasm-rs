@@ -66,7 +66,7 @@ cargo run -p rsqlite-vfs --example implement-a-vfs
 
 Multithreading is not supported, SQLite is compiled with `-DSQLITE_THREADSAFE=0`.
 
-For shared-memory builds with Clang versions requiring explicit bulk memory, set `CFLAGS_wasm32_unknown_unknown="-matomics -mbulk-memory"` when compiling C. SQLite remains single-threaded in this configuration.
+For shared-memory builds, set `CFLAGS_wasm32_unknown_unknown="-matomics -mbulk-memory"`.
 
 ## Use without wasm-bindgen
 
@@ -74,7 +74,13 @@ No features are enabled by default, provide your own host functions. See [JS Hos
 
 ## Use custom SQLite sources
 
-By default `sqlite3mc` compiles the amalgamation shipped by the [`sqlite3mc-src`](https://crates.io/crates/sqlite3mc-src) crate and `sqlcipher` the sources shipped by the [`sqlcipher-src`](https://crates.io/crates/sqlcipher-src) crate. Point `SQLITE_WASM_RS_SOURCE_DIR` to your `sqlite3.c/.h` files (`sqlite3mc_amalgamation.c/.h` for `sqlite3mc`, a `sqlcipher-src` `sqlcipher` directory for `sqlcipher`) to compile another one:
+The encryption backends use sources from [`sqlite3mc-src`](https://crates.io/crates/sqlite3mc-src) or [`sqlcipher-src`](https://crates.io/crates/sqlcipher-src).
+
+Set `SQLITE_WASM_RS_SOURCE_DIR` to use custom sources:
+
+- SQLite: a directory containing `sqlite3.c` and `sqlite3.h`.
+- `sqlite3mc`: a directory containing `sqlite3mc_amalgamation.c` and `sqlite3mc_amalgamation.h`.
+- `sqlcipher`: a source tree matching the `sqlcipher-src` crate's `sqlcipher` directory, including LibTomCrypt.
 
 ```sh
 SQLITE_WASM_RS_SOURCE_DIR=/path/to/sqlite cargo build --target wasm32-unknown-unknown --features bindgen
