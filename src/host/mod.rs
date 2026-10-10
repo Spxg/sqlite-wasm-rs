@@ -1,33 +1,18 @@
 //! Link-time host services: sleep, randomness, clock, secure entropy and local time.
 //!
-//! The optional `wasm-bindgen` feature supplies all five hooks. For a custom host,
-//! leave it disabled throughout the dependency graph and implement the C ABI in
-//! [`sqlite-wasm-rs.h`](https://github.com/Spxg/sqlite-wasm-rs/blob/master/examples/host-c/sqlite-wasm-rs.h).
-//! Define each symbol once: link a C/Rust adapter or provide `env` imports.
-//! See [host-c](https://github.com/Spxg/sqlite-wasm-rs/tree/master/examples/host-c)
-//! and [host-js](https://github.com/Spxg/sqlite-wasm-rs/tree/master/examples/host-js).
-//! Rust exports use `#[no_mangle] pub unsafe extern "C" fn`; ensure the adapter
-//! crate is linked, e.g. with `use my_adapter as _;`.
+//! Required C ABI symbols:
 //!
-//! # Hook contract
+//! - `rust_sqlite_wasm_host_sleep`: sleeps for the requested duration; returns nothing.
+//! - `rust_sqlite_wasm_host_random`: writes up to `len` random bytes to `buf` and
+//!   returns the number written; cryptographic security is not required.
+//! - `rust_sqlite_wasm_host_epoch_timestamp_in_ms`: writes UTC Unix milliseconds
+//!   to `out` and returns a status code.
+//! - `rust_sqlite_wasm_host_fill_entropy`: fills all `len` bytes of `buf` with
+//!   cryptographically secure randomness or fails; returns a status code.
+//! - `rust_sqlite_wasm_host_localtime`: converts Unix seconds to the host's local
+//!   time zone, writes [`LocalTime`] to `out`, and returns a status code.
 //!
-//! Calls are single-threaded and may occur during initialization. Do not
-//! reenter SQLite, panic, or retain pointers. Pointers address Wasm linear
-//! memory; JavaScript receives `i64` arguments as `BigInt`.
-//!
-//! Fallible hooks return [`OK`] or an [`Error`] discriminant, not SQLite codes
-//! or errno; unknown nonzero codes mean unavailable. On success, fully write
-//! outputs. Output pointers must be non-null, aligned and writable. Buffers may be
-//! uninitialized, must occupy one exclusively accessible allocation with
-//! `len <= isize::MAX`, and may be null only for zero length.
-//!
-//! `random` follows [`OsCallback::random`]. Sleep's nanoseconds are less than
-//! 1,000,000,000; the `wasm-bindgen` adapter cannot sleep without atomics or on
-//! a browser main thread.
-//! The clock returns UTC Unix milliseconds.
-//! `fill_entropy` must fill the buffer securely or fail, never fall back to
-//! weak randomness; SQLite3MC may abort on failure. `localtime` converts Unix
-//! seconds to local time or fails, without a UTC fallback.
+//! Status codes are [`OK`] on success or an [`Error`] discriminant on failure.
 
 use core::fmt;
 use core::time::Duration;
@@ -134,11 +119,7 @@ pub(crate) fn localtime(unix_seconds: i64) -> Result<LocalTime> {
     Ok(out)
 }
 
-/// VFS platform services supplied by the linked host adapter.
-///
-/// Uses `wasm-bindgen` when enabled, otherwise application-defined hooks.
-/// The `wasm-bindgen` adapter's sleep is a no-op without atomics and on a browser main thread.
-/// Does not make SQLite or the default memory VFS thread-safe.
+/// VFS platform services supplied by the linked host.
 #[derive(Default)]
 pub struct WasmOsCallback;
 
