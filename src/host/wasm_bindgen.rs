@@ -83,10 +83,6 @@ pub unsafe extern "C" fn epoch_timestamp_in_ms(out: *mut i64) -> i32 {
 
 #[wasm_bindgen]
 extern "C" {
-    #[cfg(not(target_feature = "atomics"))]
-    #[wasm_bindgen(js_namespace = ["globalThis", "crypto"], js_name = getRandomValues, catch)]
-    fn get_random_values(buf: &mut [u8]) -> core::result::Result<(), JsValue>;
-    #[cfg(target_feature = "atomics")]
     #[wasm_bindgen(js_namespace = ["globalThis", "crypto"], js_name = getRandomValues, catch)]
     fn get_random_values(buf: &js_sys::Uint8Array) -> core::result::Result<(), JsValue>;
 }
@@ -125,16 +121,10 @@ unsafe fn output_buffer<'a>(buf: *mut u8, len: usize) -> Result<&'a mut [u8]> {
 fn fill_entropy_impl(buf: &mut [u8]) -> Result<()> {
     // Web Crypto limits each getRandomValues request to 65,536 bytes.
     for chunk in buf.chunks_mut(65_536) {
-        #[cfg(not(target_feature = "atomics"))]
-        get_random_values(chunk).map_err(|_| Error::Unavailable)?;
-
-        #[cfg(target_feature = "atomics")]
-        {
-            // Web Crypto cannot fill a view backed by shared Wasm memory.
-            let array = js_sys::Uint8Array::new_with_length(chunk.len() as u32);
-            get_random_values(&array).map_err(|_| Error::Unavailable)?;
-            array.copy_to(chunk);
-        }
+        // Use an unshared JS buffer so Web Crypto also works with shared Wasm memory.
+        let array = js_sys::Uint8Array::new_with_length(chunk.len() as u32);
+        get_random_values(&array).map_err(|_| Error::Unavailable)?;
+        array.copy_to(chunk);
     }
     Ok(())
 }
