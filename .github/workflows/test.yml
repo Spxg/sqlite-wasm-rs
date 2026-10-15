@@ -150,6 +150,10 @@ jobs:
       env:
         RUSTFLAGS: -Ctarget-feature=+atomics
       run: wasm-pack test --chrome --headless --features wasm-bindgen,threadsafe -Z build-std=panic_abort,std --test threadsafe_can_block
+    - name: Test SAH pool with shared memory
+      if: matrix.features == 'wasm-bindgen'
+      working-directory: crates/sqlite-wasm-vfs
+      run: wasm-pack test --chrome --headless --features sahpool -Z build-std=panic_abort,std
 
   test_msrv:
     runs-on: ubuntu-latest

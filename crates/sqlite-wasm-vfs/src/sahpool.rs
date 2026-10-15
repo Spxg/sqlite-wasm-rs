@@ -46,6 +46,7 @@ use std::{
     future::poll_fn,
     ops::Deref,
     rc::Rc,
+    sync::{Mutex, PoisonError},
     task::{Poll, Waker},
 };
 
@@ -412,11 +413,38 @@ impl SyncAccessFile {
     }
 }
 
+/// The worker whose JS realm holds a pool's handles, the only one allowed to call into the pool.
+#[derive(Clone, Copy)]
+struct Owner(std::thread::ThreadId);
+
+impl Owner {
+    fn current() -> Self {
+        Self(std::thread::current().id())
+    }
+
+    fn is_current(self) -> bool {
+        std::thread::current().id() == self.0
+    }
+
+    // Checked before any `Rc`, `RefCell` or JS handle is touched, since none of them may cross workers.
+    fn check(self) -> VfsResult<()> {
+        if self.is_current() {
+            Ok(())
+        } else {
+            Err(VfsError::new(
+                VfsErrorCode::Misuse,
+                "an OPFS SAH pool is usable only from the worker that installed it".into(),
+            ))
+        }
+    }
+}
+
 struct SyncAccessFileHandle {
     temporary_name: Option<String>,
     file: SyncAccessFile,
     read_only: bool,
     lock_level: LockLevel,
+    owner: Owner,
 }
 
 impl Drop for SyncAccessFileHandle {
@@ -456,6 +484,7 @@ impl VfsFile for SyncAccessFileHandle {
     }
 
     fn read(&mut self, buf: &mut [u8], offset: u64) -> VfsResult<usize> {
+        self.owner.check()?;
         if buf.is_empty() {
             return Ok(0);
         }
@@ -467,6 +496,7 @@ impl VfsFile for SyncAccessFileHandle {
     }
 
     fn write(&mut self, buf: &[u8], offset: u64) -> VfsResult<()> {
+        self.owner.check()?;
         self.check_writable()?;
 
         if buf.is_empty() {
@@ -480,6 +510,7 @@ impl VfsFile for SyncAccessFileHandle {
     }
 
     fn truncate(&mut self, size: u64) -> VfsResult<()> {
+        self.owner.check()?;
         self.check_writable()?;
 
         let size = physical_offset(size, 0, VfsErrorCode::IoTruncate)?;
@@ -490,6 +521,7 @@ impl VfsFile for SyncAccessFileHandle {
     }
 
     fn sync(&mut self, _options: SyncOptions) -> VfsResult<()> {
+        self.owner.check()?;
         // OPFS has one flush primitive, used for both sync strengths and metadata.
         self.file
             .flush()
@@ -497,10 +529,12 @@ impl VfsFile for SyncAccessFileHandle {
     }
 
     fn size(&self) -> VfsResult<u64> {
+        self.owner.check()?;
         self.file.size()
     }
 
     fn lock(&mut self, level: LockLevel) -> VfsResult<()> {
+        self.owner.check()?;
         self.lock_level = self.lock_level.max(level);
 
         Ok(())
@@ -535,7 +569,20 @@ impl Drop for Operation<'_> {
     }
 }
 
+/// A file another worker closed, waiting for the installing worker to release it.
+struct Orphan {
+    file: SyncAccessFileHandle,
+    name: Option<String>,
+    options: OpenOptions,
+}
+
+// SAFETY: other workers only move an orphan into the queue, and only the installing worker touches its `Rc` and JS handle.
+unsafe impl Send for Orphan {}
+
 struct OpfsSAHPool {
+    owner: Owner,
+    // The only field other workers write, so their closes reach the owner without touching pool state.
+    orphans: Mutex<Vec<Orphan>>,
     last_error: RefCell<Option<VfsError>>,
     dh_opaque: FileSystemDirectoryHandle,
     lock_file: FileSystemFileHandle,
@@ -559,7 +606,7 @@ struct OpfsSAHPool {
 }
 
 impl OpfsSAHPool {
-    async fn new<C: OsCallback + Default + 'static>(options: &OpfsSAHPoolCfg) -> Result<Rc<Self>> {
+    async fn new<C: SahPoolOs + Default>(options: &OpfsSAHPoolCfg) -> Result<Rc<Self>> {
         let directory = normalize_directory(&options.directory)?;
         let create = FileSystemGetDirectoryOptions::new();
         create.set_create(true);
@@ -614,6 +661,8 @@ impl OpfsSAHPool {
                 .into();
 
         let pool = Rc::new(Self {
+            owner: Owner::current(),
+            orphans: Mutex::new(Vec::new()),
             last_error: RefCell::new(None),
             dh_opaque,
             lock_file,
@@ -638,6 +687,8 @@ impl OpfsSAHPool {
     }
 
     fn check_state(&self) -> Result<()> {
+        // Store calls and most management calls start here, so closes from other workers finish before they read state.
+        self.reap_orphans();
         match self.state.get() {
             PoolState::Active => Ok(()),
             PoolState::Paused => Err(OpfsSAHError::Paused),
@@ -681,6 +732,50 @@ impl OpfsSAHPool {
         } else {
             Ok(())
         }
+    }
+
+    /// Releases files other workers closed. Callers sit behind the owner checks and hold no borrow of the file maps.
+    fn reap_orphans(&self) {
+        let orphans =
+            std::mem::take(&mut *self.orphans.lock().unwrap_or_else(PoisonError::into_inner));
+        for orphan in orphans {
+            // SQLite already discarded this close's result, so a failure has nobody to reach.
+            let _ = self.release(orphan.name.as_deref(), orphan.file, orphan.options);
+        }
+    }
+
+    /// Closes `file` on the installing worker, deleting it when it was opened with delete on close.
+    fn release(
+        &self,
+        name: Option<&str>,
+        mut file: SyncAccessFileHandle,
+        options: OpenOptions,
+    ) -> VfsResult<()> {
+        let temporary_name = file.temporary_name.take();
+        let name = name
+            .or(temporary_name.as_deref())
+            .expect("opened SAH file has a name");
+
+        let flushed = file
+            .file
+            .flush()
+            .map_err(|err| err.vfs_err(VfsErrorCode::IoSync));
+        drop(file);
+
+        let deleted = if options.delete_on_close() {
+            self.delete_for_sqlite(name)
+        } else {
+            Ok(())
+        };
+
+        flushed.and(deleted)
+    }
+
+    /// Deletes `name` on SQLite's behalf, always flushing the slot header, including when `sync_dir` is false.
+    fn delete_for_sqlite(&self, name: &str) -> VfsResult<()> {
+        self.delete_file(name)
+            .map(|_| ())
+            .map_err(|err| err.vfs_err(VfsErrorCode::IoDelete))
     }
 
     async fn add_capacity(&self, n: usize) -> Result<usize> {
@@ -952,6 +1047,7 @@ impl OpfsSAHPool {
     }
 
     fn pause(&self) -> Result<()> {
+        self.reap_orphans();
         let _operation = self.begin_operation()?;
         if self.state.get() == PoolState::Paused {
             return Ok(());
@@ -1145,41 +1241,43 @@ impl VfsStore for SyncAccessHandleStore {
     fn close_file(
         data: &Self::AppData,
         name: Option<&str>,
-        mut file: Self::File,
+        file: Self::File,
         options: OpenOptions,
     ) -> VfsResult<()> {
-        let temporary_name = file.temporary_name.take();
-        let name = name
-            .or(temporary_name.as_deref())
-            .expect("opened SAH file has a name");
-
-        let flushed = file
-            .file
-            .flush()
-            .map_err(|err| err.vfs_err(VfsErrorCode::IoSync));
-        drop(file);
-
-        let deleted = if options.delete_on_close() {
-            Self::delete_file(data, name, false)
-        } else {
-            Ok(())
-        };
-
-        flushed.and(deleted)
+        if let Err(error) = file.owner.check() {
+            // Dropping here would flush a foreign JS handle and race on its `Rc`, so the owner releases it later.
+            let name = name.map(String::from);
+            data.orphans
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(Orphan {
+                    file,
+                    name,
+                    options,
+                });
+            return Err(error);
+        }
+        data.release(name, file, options)
     }
 
     fn record_error(data: &Self::AppData, error: VfsError) {
-        data.last_error.replace(Some(error));
+        if data.owner.is_current() {
+            data.last_error.replace(Some(error));
+        }
     }
 
     fn last_error(data: &Self::AppData) -> Option<VfsError> {
-        data.last_error.borrow().clone()
+        data.owner
+            .is_current()
+            .then(|| data.last_error.borrow().clone())
+            .flatten()
     }
 
     fn open_file(
         pool: &Self::AppData,
         request: rsqlite_vfs::OpenRequest<'_>,
     ) -> VfsResult<OpenedFile<Self::File>> {
+        pool.owner.check()?;
         let open = || -> Result<OpenedFile<Self::File>> {
             pool.check_active()?;
 
@@ -1237,6 +1335,7 @@ impl VfsStore for SyncAccessHandleStore {
                     temporary_name,
                     read_only: options.access() == OpenAccess::ReadOnly,
                     lock_level: LockLevel::None,
+                    owner: pool.owner,
                 },
                 access: options.access(),
             })
@@ -1246,6 +1345,7 @@ impl VfsStore for SyncAccessHandleStore {
     }
 
     fn access(pool: &Self::AppData, name: &str, _mode: AccessMode) -> VfsResult<bool> {
+        pool.owner.check()?;
         pool.check_active()
             .map_err(|err| err.vfs_err(VfsErrorCode::IoAccess))?;
 
@@ -1259,11 +1359,8 @@ impl VfsStore for SyncAccessHandleStore {
     }
 
     fn delete_file(pool: &Self::AppData, name: &str, _sync_dir: bool) -> VfsResult<()> {
-        // Always flush the slot header, including when sync_dir is false.
-        pool.delete_file(name)
-            .map_err(|err| err.vfs_err(VfsErrorCode::IoDelete))?;
-
-        Ok(())
+        pool.owner.check()?;
+        pool.delete_for_sqlite(name)
     }
 }
 
@@ -1740,6 +1837,7 @@ impl OpfsSAHPoolUtil {
             return Ok(());
         }
 
+        self.pool.reap_orphans();
         let _operation = self.pool.begin_operation()?;
         self.pool.check_closed()?;
 
@@ -1766,6 +1864,20 @@ impl OpfsSAHPoolUtil {
     }
 }
 
+/// Platform services accepted by [`install`], which must be `Sync` in shared-memory builds
+/// because SQLite asks any worker's VFS for randomness, sleep and time.
+#[cfg(not(target_feature = "atomics"))]
+pub trait SahPoolOs: OsCallback + 'static {}
+#[cfg(not(target_feature = "atomics"))]
+impl<T: OsCallback + 'static> SahPoolOs for T {}
+
+/// Platform services accepted by [`install`], which must be `Sync` in shared-memory builds
+/// because SQLite asks any worker's VFS for randomness, sleep and time.
+#[cfg(target_feature = "atomics")]
+pub trait SahPoolOs: OsCallback + Sync + 'static {}
+#[cfg(target_feature = "atomics")]
+impl<T: OsCallback + Sync + 'static> SahPoolOs for T {}
+
 /// Installs or reuses a pool, validating [`OpfsSAHPoolCfg`].
 ///
 /// Reuse requires the same directory and callback type; it neither resumes a
@@ -1774,7 +1886,7 @@ impl OpfsSAHPoolUtil {
 ///
 /// `default_vfs = true` promotes the VFS now or on resume; `false` never demotes.
 /// Concurrent installs wait; overlapping management returns [`OpfsSAHError::Busy`].
-pub async fn install<C: OsCallback + Default + 'static>(
+pub async fn install<C: SahPoolOs + Default>(
     options: &OpfsSAHPoolCfg,
     default_vfs: bool,
 ) -> Result<OpfsSAHPoolUtil> {

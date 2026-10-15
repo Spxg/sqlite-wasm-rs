@@ -42,10 +42,15 @@ web-sys = { version = "0.3.105", default-features = false, optional = true, feat
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.78"
+wasm-bindgen-futures = "0.4.78"
 sqlite-wasm-rs = { version = "0.6", default-features = false, features = ["wasm-bindgen"] }
 
 [[test]]
 name = "sahpool"
+required-features = ["sahpool"]
+
+[[test]]
+name = "sahpool_workers"
 required-features = ["sahpool"]
 
 [package.metadata.docs.rs]

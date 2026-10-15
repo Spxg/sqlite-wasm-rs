@@ -57,16 +57,19 @@ extern "C" {
     ) -> Promise;
 }
 
-/// Work for one worker.
-pub type Task = Box<dyn FnOnce() + Send>;
+/// Work for one worker, returning `undefined` or a promise the worker awaits before reporting.
+pub type Task = Box<dyn FnOnce() -> JsValue + Send>;
 
 pub fn task(work: impl FnOnce() + Send + 'static) -> Task {
-    Box::new(work)
+    Box::new(move || {
+        work();
+        JsValue::UNDEFINED
+    })
 }
 
 /// Worker entry point: runs the boxed task whose address the spawner sent.
 #[wasm_bindgen]
-pub fn run_test_worker_task(task: usize) {
+pub fn run_test_worker_task(task: usize) -> JsValue {
     // SAFETY: `task` came from `Box::into_raw` in `spawn` and is consumed exactly once, here.
     let task = unsafe { Box::from_raw(task as *mut Task) };
     task()
