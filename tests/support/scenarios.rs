@@ -1,6 +1,8 @@
-//! Serialized connections and workers that start together, shared by the worker suites.
+//! Serialized connections, workers that start together and concurrency scenarios on one memvfs
+//! database, shared by the worker suites.
 //!
-//! The including test crate also declares `mod workers`.
+//! The including test crate also declares `mod workers`. Scenarios take an `open` function so
+//! a caller can add an encryption key.
 
 use sqlite_wasm_rs::{
     sqlite3, sqlite3_busy_timeout, sqlite3_close, sqlite3_column_int64, sqlite3_errmsg,
@@ -9,6 +11,7 @@ use sqlite_wasm_rs::{
     SQLITE_OPEN_READWRITE, SQLITE_ROW,
 };
 use std::ffi::{CStr, CString};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Once};
 
 use crate::workers;
@@ -120,6 +123,10 @@ pub fn assert_counter(connection: &Connection, expected: usize) {
     connection.assert_integrity();
 }
 
+pub fn create_pairs(connection: &Connection) {
+    connection.exec("CREATE TABLE t(k INTEGER PRIMARY KEY, v INTEGER NOT NULL);");
+}
+
 /// Runs `work(index, start)` on `parties` workers, each of which calls `start.wait()` once to begin together.
 pub async fn run_together(parties: usize, work: impl Fn(usize, &Barrier) + Send + Sync + 'static) {
     let work = Arc::new(work);
@@ -131,4 +138,92 @@ pub async fn run_together(parties: usize, work: impl Fn(usize, &Barrier) + Send 
         })
         .collect();
     workers::spawn(tasks).await.unwrap();
+}
+
+/// Each of `parties` workers adds `increments` to one counter on its own connection, and none is lost.
+pub async fn concurrent_increments(
+    open: fn() -> Connection,
+    parties: usize,
+    increments: usize,
+) -> Connection {
+    let setup = open();
+    create_counter(&setup);
+    run_together(parties, move |_, start| {
+        let connection = open();
+        start.wait();
+        for _ in 0..increments {
+            connection.exec("BEGIN IMMEDIATE; UPDATE counter SET n = n + 1; COMMIT;");
+        }
+    })
+    .await;
+    assert_counter(&setup, parties * increments);
+    setup
+}
+
+/// Writers insert row pairs summing to zero while readers check that every snapshot is committed.
+pub async fn readers_see_only_committed_states(
+    open: fn() -> Connection,
+    writers: usize,
+    readers: usize,
+    pairs: usize,
+) -> Connection {
+    let setup = open();
+    create_pairs(&setup);
+    let writers_done = AtomicUsize::new(0);
+    let reads = Arc::new(AtomicUsize::new(0));
+    let total_reads = reads.clone();
+    run_together(writers + readers, move |index, start| {
+        let connection = open();
+        start.wait();
+        if index < writers {
+            write_pairs(&connection, index, pairs);
+            writers_done.fetch_add(1, Ordering::Release);
+        } else {
+            let done = || writers_done.load(Ordering::Acquire) == writers;
+            reads.fetch_add(read_pairs(&connection, &done), Ordering::Relaxed);
+        }
+    })
+    .await;
+    let expected = i64::try_from(2 * writers * pairs).unwrap();
+    assert_eq!(
+        setup.query_row("SELECT count(*), sum(v) FROM t"),
+        [expected, 0]
+    );
+    setup.assert_integrity();
+    assert!(
+        total_reads.load(Ordering::Relaxed) > readers,
+        "readers never overlapped the writers"
+    );
+    setup
+}
+
+fn write_pairs(connection: &Connection, writer: usize, pairs: usize) {
+    for pair in 0..pairs {
+        let key = 1 + writer * pairs + pair;
+        // Each pair sums to zero, so a torn snapshot shows a nonzero sum or an odd count.
+        connection.exec(&format!(
+            "BEGIN IMMEDIATE; INSERT INTO t VALUES ({key}, {key}); INSERT INTO t VALUES (-{key}, -{key}); COMMIT;"
+        ));
+    }
+}
+
+/// Reads count and sum until `done` holds, checks each snapshot, and returns the number of reads.
+fn read_pairs(connection: &Connection, done: &dyn Fn() -> bool) -> usize {
+    let mut last_count = 0;
+    let mut reads = 0;
+    loop {
+        let finished = done();
+        let [count, sum] = connection.query_row("SELECT count(*), coalesce(sum(v), 0) FROM t");
+        assert_eq!(count % 2, 0, "torn snapshot with {count} rows");
+        assert_eq!(sum, 0, "torn snapshot with sum {sum}");
+        assert!(
+            count >= last_count,
+            "count went back from {last_count} to {count}"
+        );
+        last_count = count;
+        reads += 1;
+        if finished {
+            return reads;
+        }
+    }
 }
