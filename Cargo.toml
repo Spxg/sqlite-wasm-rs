@@ -29,6 +29,9 @@ sqlite3mc = ["dep:sqlite3mc-src"]
 # <https://github.com/sqlcipher/sqlcipher>
 # <https://www.zetetic.net/sqlcipher/>
 sqlcipher = ["dep:sqlcipher-src"]
+# Builds SQLite with SQLITE_THREADSAFE=1 and an atomics-based mutex.
+# Threads need a shared-memory build with `-Ctarget-feature=+atomics` and `--shared-memory`.
+threadsafe = []
 
 [build-dependencies]
 cc = "1"
@@ -38,6 +41,7 @@ sqlcipher-src = { version = "=419.0.6", optional = true }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.78"
+wasm-bindgen-futures = "0.4.78"
 
 [[test]]
 name = "sqlite3"
@@ -50,6 +54,18 @@ required-features = ["wasm-bindgen", "sqlite3mc"]
 [[test]]
 name = "sqlcipher"
 required-features = ["wasm-bindgen", "sqlcipher"]
+
+[[test]]
+name = "threadsafe"
+required-features = ["wasm-bindgen", "threadsafe"]
+
+[[test]]
+name = "threadsafe_main_thread"
+required-features = ["wasm-bindgen", "threadsafe"]
+
+[[test]]
+name = "threadsafe_can_block"
+required-features = ["wasm-bindgen", "threadsafe"]
 
 [package.metadata.docs.rs]
 targets = ["wasm32-unknown-unknown"]
