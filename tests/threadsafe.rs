@@ -91,6 +91,24 @@ async fn mutex_excludes_other_workers_and_recurses() {
 }
 
 #[wasm_bindgen_test]
+async fn concurrent_increments_lose_no_update() {
+    init();
+    scenarios::concurrent_increments(|| Connection::open("workers-increments.db"), 8, 100).await;
+}
+
+#[wasm_bindgen_test]
+async fn readers_see_only_committed_states() {
+    init();
+    scenarios::readers_see_only_committed_states(
+        || Connection::open("workers-snapshots.db"),
+        4,
+        4,
+        100,
+    )
+    .await;
+}
+
+#[wasm_bindgen_test]
 async fn workers_share_one_serialized_connection() {
     const WORKERS: usize = 4;
     const UPDATES: usize = 100;
@@ -109,4 +127,29 @@ async fn workers_share_one_serialized_connection() {
     })
     .await;
     scenarios::assert_counter(&shared, WORKERS * UPDATES);
+}
+
+#[cfg(feature = "sqlite3mc")]
+#[wasm_bindgen_test]
+async fn encrypted_increments_lose_no_update() {
+    init();
+    scenarios::concurrent_increments(
+        || {
+            // The URI routes through SQLite3MC's cipher wrapper around memvfs, which holds the key.
+            let connection =
+                Connection::open("file:workers-encrypted.db?vfs=multipleciphers-memvfs");
+            connection.exec("PRAGMA key = 'threadsafe passphrase';");
+            connection
+        },
+        8,
+        100,
+    )
+    .await;
+
+    // Without the key the file is unreadable, so the workers wrote through the cipher.
+    let plain = Connection::open("workers-encrypted.db");
+    assert_eq!(
+        plain.try_query_row::<1>("SELECT n FROM counter"),
+        Err(sqlite_wasm_rs::SQLITE_NOTADB)
+    );
 }

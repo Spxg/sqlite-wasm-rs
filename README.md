@@ -68,7 +68,7 @@ By default every SQLite call must stay on one thread.
 
 For shared-memory builds, set `CFLAGS_wasm32_unknown_unknown="-matomics -mbulk-memory"`.
 
-The `threadsafe` feature lets workers that share one module and its memory use SQLite concurrently. It needs a nightly shared-memory build:
+The `threadsafe` feature lets workers that share one module and its memory use SQLite and the memory VFS concurrently. It needs a nightly shared-memory build:
 
 ```sh
 CFLAGS_wasm32_unknown_unknown="-matomics -mbulk-memory" \
@@ -81,7 +81,6 @@ cargo +nightly build --target wasm32-unknown-unknown -Z build-std=panic_abort,st
 * Browsers need `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` on the page to share memory with workers.
 * Make the first SQLite call on one thread before other workers use SQLite.
 * The browser main thread never waits, so mutexes spin there and `sqlite3_sleep` returns at once.
-* Files of the memory VFS must all be opened and used on one worker. `:memory:` databases do not use them.
 * An OPFS `sahpool` works only from the worker that installed it.
 * A worker terminated inside a SQLite call leaves its mutexes locked.
 
