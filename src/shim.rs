@@ -292,11 +292,11 @@ mod tests {
             assert_eq!(sqlite3_shutdown(), SQLITE_OK, "failed to shutdown again");
 
             // Raw unregistration removes registry membership, not ownership.
-            use alloc::rc::Rc;
+            use alloc::sync::Arc;
             use core::time::Duration;
             use rsqlite_vfs::{memvfs, OsCallback, VfsResult};
             struct TrackedOs {
-                _token: Rc<()>,
+                _token: Arc<()>,
             }
             impl OsCallback for TrackedOs {
                 fn sleep(&self, duration: Duration) {
@@ -311,7 +311,7 @@ mod tests {
             }
             assert_eq!(sqlite3_initialize(), SQLITE_OK);
             memvfs::uninstall().unwrap();
-            let token = Rc::new(());
+            let token = Arc::new(());
             let util = memvfs::install(
                 TrackedOs {
                     _token: token.clone(),
@@ -327,10 +327,10 @@ mod tests {
             assert_eq!(reinstalled.export_db("detached.db").unwrap(), [42; 512]);
             drop(util);
             drop(reinstalled);
-            assert_eq!(Rc::strong_count(&token), 2);
+            assert_eq!(Arc::strong_count(&token), 2);
             assert_eq!(crate::sqlite3_vfs_unregister(original), SQLITE_OK);
             memvfs::uninstall().unwrap();
-            assert_eq!(Rc::strong_count(&token), 1);
+            assert_eq!(Arc::strong_count(&token), 1);
             assert_eq!(sqlite3_shutdown(), SQLITE_OK);
         }
     }
