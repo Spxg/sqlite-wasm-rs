@@ -19,31 +19,39 @@ pub extern "C" fn sleep(seconds: u64, nanoseconds: u32) {
     }
 
     // Fall back to a no-op if lookup, construction, or waiting fails.
-    let wait = || -> core::result::Result<(), JsValue> {
-        // Prefer the global SharedArrayBuffer constructor.
-        let constructor = Reflect::get(&js_sys::global(), &JsValue::from_str("SharedArrayBuffer"))
-            .and_then(|value| value.dyn_into::<Function>())
-            .or_else(|_| {
-                // If unavailable, obtain the constructor from the module's buffer.
-                // <https://html.spec.whatwg.org/multipage/webappapis.html#creating-a-new-javascript-realm>
-                //
-                // Unshared memory yields an ArrayBuffer constructor; Atomics.wait
-                // will then return Err, leaving sleep as a no-op.
-                let memory = wasm_bindgen::memory().unchecked_into::<WebAssembly::Memory>();
+    let milliseconds = duration.as_secs_f64() * 1000.0;
+    let _ = shared_word().and_then(|word| Atomics::wait_with_timeout(&word, 0, 0, milliseconds));
+}
 
-                Reflect::get(&memory.buffer(), &JsValue::from_str("constructor"))?
-                    .dyn_into::<Function>()
-            })?;
+/// Reports whether this thread may wait on the module's memory, for the mutexes of the `threadsafe` feature.
+#[cfg(all(feature = "threadsafe", target_feature = "atomics"))]
+#[export_name = "rust_sqlite_wasm_host_can_block"]
+pub extern "C" fn can_block() -> i32 {
+    // `Atomics.wait` throws on unshared memory and where the thread may not block, and a zero timeout returns at once.
+    let memory = wasm_bindgen::memory().unchecked_into::<WebAssembly::Memory>();
+    let words = Int32Array::new(&memory.buffer());
+    i32::from(Atomics::wait_with_timeout(&words, 0, 0, 0.0).is_ok())
+}
 
-        let buffer = Reflect::construct(&constructor, &Array::of1(&JsValue::from_f64(4.0)))?;
-        let word = Int32Array::new(&buffer);
+/// A private one-word shared buffer for `Atomics.wait`.
+fn shared_word() -> core::result::Result<Int32Array, JsValue> {
+    // Prefer the global SharedArrayBuffer constructor.
+    let constructor = Reflect::get(&js_sys::global(), &JsValue::from_str("SharedArrayBuffer"))
+        .and_then(|value| value.dyn_into::<Function>())
+        .or_else(|_| {
+            // If unavailable, obtain the constructor from the module's buffer.
+            // <https://html.spec.whatwg.org/multipage/webappapis.html#creating-a-new-javascript-realm>
+            //
+            // Unshared memory yields an ArrayBuffer constructor; Atomics.wait
+            // will then return Err, leaving sleep as a no-op.
+            let memory = wasm_bindgen::memory().unchecked_into::<WebAssembly::Memory>();
 
-        Atomics::wait_with_timeout(&word, 0, 0, duration.as_secs_f64() * 1000.0)?;
+            Reflect::get(&memory.buffer(), &JsValue::from_str("constructor"))?
+                .dyn_into::<Function>()
+        })?;
 
-        Ok(())
-    };
-
-    let _ = wait();
+    let buffer = Reflect::construct(&constructor, &Array::of1(&JsValue::from_f64(4.0)))?;
+    Ok(Int32Array::new(&buffer))
 }
 
 /// Fills a buffer using Web Crypto, falling back to non-cryptographic randomness.
