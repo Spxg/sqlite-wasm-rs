@@ -63,6 +63,10 @@ int32_t rust_sqlite_wasm_host_fill_entropy(uint8_t *buf, size_t len);
 int32_t rust_sqlite_wasm_host_localtime(int64_t unix_seconds,
                                       rust_sqlite_wasm_local_time *out);
 
+/* Only for threadsafe builds with atomics. Nonzero if this thread may wait on the
+ * module's memory, which requires that memory to be shared. */
+int32_t rust_sqlite_wasm_host_can_block(void);
+
 #ifdef __cplusplus
 }
 #endif
