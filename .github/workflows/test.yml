@@ -109,6 +109,7 @@ jobs:
         cargo clippy --no-default-features --target wasm32-unknown-unknown -- -D warnings
         cargo clippy --features wasm-bindgen,sqlite3mc,bindgen --target wasm32-unknown-unknown -- -D warnings
         cargo clippy --features wasm-bindgen,sqlcipher,bindgen --target wasm32-unknown-unknown -- -D warnings
+        cargo clippy --features wasm-bindgen,threadsafe --target wasm32-unknown-unknown -- -D warnings
 
   test_atomics:
     runs-on: ubuntu-latest
@@ -118,28 +119,41 @@ jobs:
           - wasm-bindgen
           - wasm-bindgen,sqlite3mc
           - wasm-bindgen,sqlcipher
+    env:
+      CFLAGS_wasm32_unknown_unknown: -matomics -mbulk-memory
+      WASM_BINDGEN_USE_BROWSER: 1
+      RUSTFLAGS: >-
+        -Ctarget-feature=+atomics
+        -Clink-args=--shared-memory
+        -Clink-args=--max-memory=1073741824
+        -Clink-args=--import-memory
+        -Clink-args=--export=__wasm_init_tls
+        -Clink-args=--export=__tls_size
+        -Clink-args=--export=__tls_align
+        -Clink-args=--export=__tls_base
+        -Clink-args=--export=__heap_base
     steps:
     - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@nightly
       with:
-        components: rust-src
+        components: rust-src, clippy
     - name: Install wasm-pack
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+    - name: Lint shared-memory code (${{ matrix.features }})
+      run: cargo clippy -p sqlite-wasm-rs --no-deps --all-targets --target wasm32-unknown-unknown --features ${{ matrix.features }},threadsafe -Z build-std=panic_abort,std -- -D warnings
     - name: Test shared-memory host adapter (${{ matrix.features }})
-      env:
-        CFLAGS_wasm32_unknown_unknown: -matomics -mbulk-memory
-        WASM_BINDGEN_USE_BROWSER: 1
-        RUSTFLAGS: >-
-          -Ctarget-feature=+atomics
-          -Clink-args=--shared-memory
-          -Clink-args=--max-memory=1073741824
-          -Clink-args=--import-memory
-          -Clink-args=--export=__wasm_init_tls
-          -Clink-args=--export=__tls_size
-          -Clink-args=--export=__tls_align
-          -Clink-args=--export=__tls_base
-          -Clink-args=--export=__heap_base
       run: wasm-pack test --chrome --headless --features ${{ matrix.features }} -Z build-std=panic_abort,std
+    - name: Test SQLite across workers sharing memory (${{ matrix.features }})
+      run: wasm-pack test --chrome --headless --features ${{ matrix.features }},threadsafe -Z build-std=panic_abort,std
+    - name: Test threadsafe with atomics and unshared memory
+      if: matrix.features == 'wasm-bindgen'
+      env:
+        RUSTFLAGS: -Ctarget-feature=+atomics
+      run: wasm-pack test --chrome --headless --features wasm-bindgen,threadsafe -Z build-std=panic_abort,std --test threadsafe_can_block
+    - name: Test SAH pool with shared memory
+      if: matrix.features == 'wasm-bindgen'
+      working-directory: crates/sqlite-wasm-vfs
+      run: wasm-pack test --chrome --headless --features sahpool -Z build-std=panic_abort,std
 
   test_msrv:
     runs-on: ubuntu-latest
@@ -154,6 +168,7 @@ jobs:
         cargo build --features wasm-bindgen --target wasm32-unknown-unknown
         cargo build --features wasm-bindgen,sqlite3mc --target wasm32-unknown-unknown
         cargo build --features wasm-bindgen,sqlcipher --target wasm32-unknown-unknown
+        cargo build --features wasm-bindgen,threadsafe --target wasm32-unknown-unknown
 
   test_examples:
     runs-on: ubuntu-latest
@@ -190,6 +205,8 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Test rsqlite-vfs
-      run: cargo test -p rsqlite-vfs
+      run: |
+        cargo test -p rsqlite-vfs
+        cargo test -p rsqlite-vfs --features threadsafe
     - name: Test implement-a-vfs example
       run: cargo run -p rsqlite-vfs --example implement-a-vfs
