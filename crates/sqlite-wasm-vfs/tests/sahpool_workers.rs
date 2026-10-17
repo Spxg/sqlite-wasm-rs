@@ -4,9 +4,9 @@
 #[path = "../../../tests/support/workers.rs"]
 mod workers;
 
-use rsqlite_vfs::VfsFilesManager;
+use rsqlite_vfs::{transfer::DbTransfer, VfsFilesManager};
 use sqlite_wasm_rs::*;
-use sqlite_wasm_vfs::sahpool::{install, OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil};
+use sqlite_wasm_vfs::sahpool::{install, OpfsSAHError, OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil};
 use std::ffi::{CStr, CString};
 use std::future::Future;
 use std::sync::{Arc, Mutex};
@@ -33,6 +33,7 @@ where
 const VFS: &CStr = c"sahpool-owner";
 const OTHER_VFS: &CStr = c"sahpool-other";
 const MANAGED_VFS: &CStr = c"sahpool-managed";
+const BUSY_VFS: &CStr = c"sahpool-busy";
 
 fn open_with(name: &str, vfs: &CStr, flags: i32) -> (i32, *mut sqlite3) {
     let name = CString::new(name).unwrap();
@@ -70,6 +71,16 @@ fn exec(db: *mut sqlite3, sql: &CStr) {
         )
     };
     assert_eq!(rc, SQLITE_OK);
+}
+
+/// Spills a temporary table to disk, which gives `db` a file deleted on close.
+fn spill(db: *mut sqlite3) {
+    exec(
+        db,
+        c"PRAGMA temp_store = FILE; CREATE TEMP TABLE spill(x); PRAGMA temp.cache_size = 2;
+          WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 64)
+          INSERT INTO spill SELECT randomblob(4096) FROM n;",
+    );
 }
 
 async fn install_pool(vfs: &CStr) -> OpfsSAHPoolUtil {
@@ -216,13 +227,7 @@ async fn other_workers_are_refused() {
     let db = open("owner.db", VFS);
     exec(db, c"CREATE TABLE t(x); INSERT INTO t VALUES (42);");
     let closed = open("closed.db", VFS);
-    // A temporary table spilled to disk gives the connection a file deleted on close.
-    exec(
-        closed,
-        c"PRAGMA temp_store = FILE; CREATE TEMP TABLE spill(x); PRAGMA temp.cache_size = 2;
-          WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 64)
-          INSERT INTO spill SELECT randomblob(4096) FROM n;",
-    );
+    spill(closed);
     assert_eq!(pool.len().unwrap(), 3);
     assert_eq!(
         open_code("missing.db", VFS, SQLITE_OPEN_READWRITE),
@@ -284,9 +289,9 @@ async fn other_workers_are_refused() {
     assert_eq!(names, ["closed.db", "owner.db"]);
 }
 
-/// Opens `main.db` on `MANAGED_VFS` here and closes it on another worker.
-async fn close_on_other_worker() {
-    let db = Lent(open("main.db", MANAGED_VFS));
+/// Closes `db` on another worker.
+async fn close_on_other_worker(db: *mut sqlite3) {
+    let db = Lent(db);
     workers::spawn(vec![workers::task(move || {
         // SAFETY: no statement is pending on `db`, which this worker's spawner no longer touches.
         assert_eq!(unsafe { sqlite3_close(db.get()) }, SQLITE_OK);
@@ -299,11 +304,27 @@ async fn close_on_other_worker() {
 async fn pause_and_uninstall_release_closes_from_other_workers() {
     let pool = install_pool(MANAGED_VFS).await;
 
-    close_on_other_worker().await;
+    close_on_other_worker(open("main.db", MANAGED_VFS)).await;
     pool.pause().unwrap();
     pool.resume().await.unwrap();
 
-    close_on_other_worker().await;
+    close_on_other_worker(open("main.db", MANAGED_VFS)).await;
     // SAFETY: the only connection was closed, and no VFS pointer is retained.
     unsafe { pool.uninstall() }.unwrap();
+}
+
+#[wasm_bindgen_test]
+async fn closes_from_other_workers_outlast_pool_operations() {
+    let pool = install_pool(BUSY_VFS).await;
+    let db = open("main.db", BUSY_VFS);
+    spill(db);
+    assert_eq!(pool.len().unwrap(), 2);
+
+    let import = pool.begin_import_unchecked("import.db", 3).unwrap();
+    close_on_other_worker(db).await;
+    assert!(matches!(pool.len(), Err(OpfsSAHError::Busy)));
+    drop(import);
+
+    // The close from the other worker deletes its temporary file once the import ends.
+    assert_eq!(pool.names().unwrap(), ["main.db"]);
 }
