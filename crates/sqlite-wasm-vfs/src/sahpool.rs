@@ -734,8 +734,12 @@ impl OpfsSAHPool {
         }
     }
 
-    /// Releases files other workers closed. Callers sit behind the owner checks and hold no borrow of the file maps.
+    /// Releases files other workers closed, waiting out a running operation, which would refuse their deletes.
+    /// Callers sit behind the owner checks and hold no borrow of the file maps.
     fn reap_orphans(&self) {
+        if self.busy.get() {
+            return;
+        }
         let orphans =
             std::mem::take(&mut *self.orphans.lock().unwrap_or_else(PoisonError::into_inner));
         for orphan in orphans {
