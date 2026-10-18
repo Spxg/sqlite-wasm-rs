@@ -38,6 +38,12 @@ jobs:
       if: matrix.features == 'wasm-bindgen'
       working-directory: examples/use-prebuild-lib
       run: RUSTFLAGS="-L $(pwd)" wasm-pack test --node
+    - name: Test SQLITE_WASM_RS_FLAGS
+      if: matrix.features == 'wasm-bindgen,bindgen'
+      env:
+        RUSTFLAGS: --cfg sqlite_wasm_rs_flags
+        SQLITE_WASM_RS_FLAGS: SQLITE_SOUNDEX SQLITE_ENABLE_NORMALIZE -DSQLITE_ENABLE_FTS3 -USQLITE_ENABLE_MATH_FUNCTIONS
+      run: wasm-pack test --node --features wasm-bindgen,bindgen --test sqlite_flags
 
   test_diesel:
     runs-on: ubuntu-latest
