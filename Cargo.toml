@@ -51,13 +51,6 @@ required-features = ["wasm-bindgen", "sqlite3mc"]
 name = "sqlcipher"
 required-features = ["wasm-bindgen", "sqlcipher"]
 
-[[test]]
-name = "sqlite_flags"
-required-features = ["wasm-bindgen", "bindgen"]
-
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(sqlite_wasm_rs_flags)"] }
-
 [package.metadata.docs.rs]
 targets = ["wasm32-unknown-unknown"]
 

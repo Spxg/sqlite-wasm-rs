@@ -1,7 +1,5 @@
-//! Build with `RUSTFLAGS="--cfg sqlite_wasm_rs_flags"` and
-//! `SQLITE_WASM_RS_FLAGS="SQLITE_SOUNDEX SQLITE_ENABLE_NORMALIZE -DSQLITE_ENABLE_FTS3 -USQLITE_ENABLE_MATH_FUNCTIONS"`.
-#![cfg(sqlite_wasm_rs_flags)]
-
+//! Run in this crate with
+//! `SQLITE_WASM_RS_FLAGS="SQLITE_SOUNDEX SQLITE_ENABLE_NORMALIZE -DSQLITE_ENABLE_FTS3 -USQLITE_ENABLE_MATH_FUNCTIONS" wasm-pack test --node`.
 use sqlite_wasm_rs::*;
 use std::{ffi::CStr, ptr};
 use wasm_bindgen_test::wasm_bindgen_test;

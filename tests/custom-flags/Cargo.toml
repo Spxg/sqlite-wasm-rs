@@ -1,0 +1,15 @@
+[package]
+name = "custom-flags-tests"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Run separately because these tests require custom SQLite compile flags.
+[workspace]
+
+[dependencies]
+sqlite-wasm-rs = { path = "../..", features = ["wasm-bindgen", "bindgen"] }
+wasm-bindgen-test = "0.3.78"
+
+[patch.crates-io]
+rsqlite-vfs = { path = "../../crates/rsqlite-vfs" }
