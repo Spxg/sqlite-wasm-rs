@@ -18,5 +18,9 @@ thiserror = { version = "2.0.20", default-features = false }
 # Shares memvfs between threads through SQLite's mutexes, so SQLite needs SQLITE_THREADSAFE > 0.
 threadsafe = []
 
+[[example]]
+name = "memvfs_context_workers"
+required-features = ["threadsafe"]
+
 [dev-dependencies]
 libsqlite3-sys = { version = "0.38.2", features = ["bundled"] }

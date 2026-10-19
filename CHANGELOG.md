@@ -3,6 +3,10 @@
 
 ## Unreleased
 
+### Added
+
+* With `threadsafe`, `MemVfsContext::try_new()`, `MemVfsUtil::get(&context)` and `memvfs::install(&context, os, default_vfs)` give safe memvfs access on every target. Context construction validates the backend and rejects unsupported mutex configurations with `MemVfsContextError::SingleThreaded` or `MemVfsContextError::UnverifiedMutexes`.
+
 ### Changed
 
 * Concurrent memvfs installations with `threadsafe` serialize registration and keep rejected callback destruction outside the registration lock.

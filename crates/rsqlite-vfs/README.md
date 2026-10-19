@@ -2,6 +2,7 @@
 
 Traits and utilities for implementing SQLite VFS in Rust.
 Includes a memory VFS, single-threaded unless the `threadsafe` feature is enabled.
+Safe memory VFS access goes through `MemVfsContext`, which with `threadsafe` first validates SQLite's mutexes.
 
 See [implement-a-vfs](https://github.com/Spxg/sqlite-wasm-rs/blob/master/crates/rsqlite-vfs/examples/implement-a-vfs.rs) for a complete example. Run it from the repository root:
 

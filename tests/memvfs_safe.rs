@@ -1,5 +1,8 @@
 //! Memory VFS management through `MemVfsContext`, without `unsafe`.
-#![cfg(all(target_family = "wasm", not(target_feature = "atomics")))]
+#![cfg(any(
+    feature = "threadsafe",
+    all(target_family = "wasm", not(target_feature = "atomics"))
+))]
 #![deny(unsafe_code)]
 
 use core::ptr;
