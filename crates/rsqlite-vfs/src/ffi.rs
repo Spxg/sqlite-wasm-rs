@@ -767,6 +767,11 @@ extern "C" {
 }
 
 #[cfg(feature = "threadsafe")]
+extern "C" {
+    pub fn sqlite3_initialize() -> ::core::ffi::c_int;
+}
+
+#[cfg(feature = "threadsafe")]
 #[repr(C)]
 pub struct sqlite3_mutex {
     _unused: [u8; 0],
