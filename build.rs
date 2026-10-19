@@ -37,21 +37,23 @@ struct Backend {
     source_name: &'static str,
     header_name: &'static str,
     flags: &'static [&'static str],
+    extra_flags: Vec<String>,
     compile: Option<fn(cc::Build, &Path)>,
 }
 
 impl Backend {
     /// Use the same SQLite configuration for C compilation and binding generation.
-    fn sqlite_flags(&self) -> impl Iterator<Item = &'static str> + '_ {
+    fn sqlite_flags(&self) -> impl Iterator<Item = &str> + '_ {
         FULL_FEATURED
             .iter()
             .copied()
             .chain(self.flags.iter().copied())
+            .chain(self.extra_flags.iter().map(String::as_str))
     }
 }
 
 /// Select all backend-specific settings in one place.
-fn backend() -> Backend {
+fn backend(extra_flags: Vec<String>) -> Backend {
     #[cfg(feature = "sqlcipher")]
     {
         Backend {
@@ -74,6 +76,7 @@ fn backend() -> Backend {
                 "-DSQLITE_THREADSAFE=1",
                 "-DSQLITE_MUTEX_NOOP=1",
             ],
+            extra_flags,
             compile: Some(compile_sqlcipher),
         }
     }
@@ -85,6 +88,7 @@ fn backend() -> Backend {
             source_name: sqlite3mc_src::SOURCE_FILE,
             header_name: sqlite3mc_src::HEADER_FILE,
             flags: &["-DSQLITE_THREADSAFE=0", "-D__WASM__", "-DARGON2_NO_THREADS"],
+            extra_flags,
             compile: None,
         }
     }
@@ -96,6 +100,7 @@ fn backend() -> Backend {
             source_name: "sqlite3.c",
             header_name: "sqlite3.h",
             flags: &["-DSQLITE_THREADSAFE=0"],
+            extra_flags,
             compile: None,
         }
     }
@@ -103,13 +108,36 @@ fn backend() -> Backend {
 
 const UPDATE_BINDGEN_ENV: &str = "SQLITE_WASM_RS_UPDATE_BINDGEN";
 const SOURCE_DIR_ENV: &str = "SQLITE_WASM_RS_SOURCE_DIR";
+const FLAGS_ENV: &str = "SQLITE_WASM_RS_FLAGS";
+
+/// Parse `SQLITE_WASM_RS_FLAGS` with the grammar of `LIBSQLITE3_FLAGS` in `libsqlite3-sys`.
+fn extra_flags() -> Vec<String> {
+    let flags = match std::env::var(FLAGS_ENV) {
+        Ok(flags) => flags,
+        Err(std::env::VarError::NotPresent) => return Vec::new(),
+        Err(std::env::VarError::NotUnicode(_)) => panic!("{FLAGS_ENV} must be valid UTF-8"),
+    };
+    flags
+        .split_whitespace()
+        .map(|flag| {
+            if flag.starts_with("-D") || flag.starts_with("-U") {
+                flag.to_owned()
+            } else if flag.starts_with("SQLITE_") {
+                format!("-D{flag}")
+            } else {
+                panic!("Don't understand {flag} in {FLAGS_ENV}")
+            }
+        })
+        .collect()
+}
 
 fn main() {
     println!("cargo::rerun-if-env-changed={UPDATE_BINDGEN_ENV}");
     println!("cargo::rerun-if-env-changed={SOURCE_DIR_ENV}");
+    println!("cargo::rerun-if-env-changed={FLAGS_ENV}");
     println!("cargo::rerun-if-changed=shim");
 
-    let backend = backend();
+    let backend = backend(extra_flags());
     let source_dir = match std::env::var_os(SOURCE_DIR_ENV) {
         Some(dir) => {
             assert!(!dir.is_empty(), "{SOURCE_DIR_ENV} must not be empty");

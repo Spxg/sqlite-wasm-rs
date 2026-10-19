@@ -72,7 +72,7 @@ For shared-memory builds, set `CFLAGS_wasm32_unknown_unknown="-matomics -mbulk-m
 
 No features are enabled by default, provide your own host functions. See [JS Host](./examples/host-js) or [C Host](./examples/host-c) example.
 
-## Use custom SQLite sources
+## Use custom SQLite sources and flags
 
 The encryption backends use sources from [`sqlite3mc-src`](https://crates.io/crates/sqlite3mc-src) or [`sqlcipher-src`](https://crates.io/crates/sqlcipher-src).
 
@@ -84,6 +84,12 @@ Set `SQLITE_WASM_RS_SOURCE_DIR` to use custom sources:
 
 ```sh
 SQLITE_WASM_RS_SOURCE_DIR=/path/to/sqlite cargo build --target wasm32-unknown-unknown --features bindgen
+```
+
+Set `SQLITE_WASM_RS_FLAGS` to add SQLite compile flags, with the grammar of `LIBSQLITE3_FLAGS` in `libsqlite3-sys`. Entries are separated by whitespace and are either `-D`/`-U` flags or bare `SQLITE_` names, which get `-D`. They follow the built-in flags, so `-U` removes a built-in option. Enable `bindgen` when a flag changes the C API.
+
+```sh
+SQLITE_WASM_RS_FLAGS="SQLITE_SOUNDEX -DSQLITE_ENABLE_FTS3" cargo build --target wasm32-unknown-unknown
 ```
 
 ## Minimum supported Rust version (MSRV)

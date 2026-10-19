@@ -38,6 +38,12 @@ jobs:
       if: matrix.features == 'wasm-bindgen'
       working-directory: examples/use-prebuild-lib
       run: RUSTFLAGS="-L $(pwd)" wasm-pack test --node
+    - name: Test SQLITE_WASM_RS_FLAGS
+      if: matrix.features == 'wasm-bindgen,bindgen'
+      working-directory: tests/custom-flags
+      env:
+        SQLITE_WASM_RS_FLAGS: SQLITE_SOUNDEX SQLITE_ENABLE_NORMALIZE -DSQLITE_ENABLE_FTS3 -USQLITE_ENABLE_MATH_FUNCTIONS
+      run: wasm-pack test --node
 
   test_diesel:
     runs-on: ubuntu-latest
@@ -103,6 +109,7 @@ jobs:
         cargo fmt --all --check
         cargo fmt --manifest-path examples/host-js/Cargo.toml --check
         cargo fmt --manifest-path examples/host-c/Cargo.toml --check
+        cargo fmt --manifest-path tests/custom-flags/Cargo.toml --check
     - name: Check clippy
       run: |
         rustup target add wasm32-unknown-unknown
