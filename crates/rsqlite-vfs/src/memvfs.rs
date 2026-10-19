@@ -1,9 +1,11 @@
 //! A platform-independent in-memory VFS.
 //!
-//! Call [`install`] before use; select `memvfs` by name or install as default.
+//! Install it with `install_unchecked`, or with `install` using a
+//! `MemVfsContext` where safe access is available, then select `memvfs` by
+//! name or as the default VFS.
+//!
 //! Files are volatile and limited by address space and memory.
 //!
-//! Databases carry real lock levels, so several connections may share one.
 //! Stay on the installing thread unless the `threadsafe` feature is enabled.
 
 use crate::ffi as bindings;
@@ -47,13 +49,15 @@ fn validate_db_filename(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Platform services accepted by [`install`], which must be `Send + Sync` with `threadsafe`.
+/// Platform services accepted by `install_unchecked` and, where available,
+/// `install`, which must be `Send + Sync` with `threadsafe`.
 #[cfg(not(feature = "threadsafe"))]
 pub trait MemVfsOs: OsCallback + 'static {}
 #[cfg(not(feature = "threadsafe"))]
 impl<T: OsCallback + 'static> MemVfsOs for T {}
 
-/// Platform services accepted by [`install`], which must be `Send + Sync` with `threadsafe`.
+/// Platform services accepted by `install_unchecked` and, where available,
+/// `install`, which must be `Send + Sync` with `threadsafe`.
 #[cfg(feature = "threadsafe")]
 pub trait MemVfsOs: OsCallback + Send + Sync + 'static {}
 #[cfg(feature = "threadsafe")]
@@ -388,11 +392,344 @@ pub enum MemVfsError {
     Transfer(#[from] TransferError),
 }
 
+/// Memory VFS context errors. Match variants rather than display text.
+#[cfg(any(
+    feature = "threadsafe",
+    all(target_family = "wasm", not(target_feature = "atomics"))
+))]
+#[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
+pub enum MemVfsContextError {
+    #[error("SQLite is single-threaded or its core mutexes are unavailable")]
+    SingleThreaded,
+    #[error("SQLite's mutex methods cannot be verified")]
+    UnverifiedMutexes,
+    #[error("context construction is already in progress")]
+    InitializationInProgress,
+    #[error("SQLite context validation failed ({0})")]
+    Sqlite(i32),
+}
+
+/// The context lease held by a safe memvfs object.
+#[cfg(any(
+    feature = "threadsafe",
+    all(target_family = "wasm", not(target_feature = "atomics"))
+))]
+type ContextLease = Option<MemVfsContext>;
+
+#[cfg(not(any(
+    feature = "threadsafe",
+    all(target_family = "wasm", not(target_feature = "atomics"))
+)))]
+#[derive(Clone)]
+struct ContextLease;
+
+#[cfg(any(
+    feature = "threadsafe",
+    all(target_family = "wasm", not(target_feature = "atomics"))
+))]
+const NO_CONTEXT: ContextLease = None;
+#[cfg(not(any(
+    feature = "threadsafe",
+    all(target_family = "wasm", not(target_feature = "atomics"))
+)))]
+const NO_CONTEXT: ContextLease = ContextLease;
+
+/// A verified environment for safe memvfs access.
+///
+/// Construction may initialize SQLite and run auto-extensions, while live contexts share their validation.
+/// Reentrant or competing initialization returns `MemVfsContextError::InitializationInProgress` without waiting.
+///
+/// # Foreign interoperability
+///
+/// Foreign shutdown, mutex replacement and threading changes must exclude construction and every live context or derived safe object.
+/// Dropping a context never shuts SQLite down.
+#[cfg(feature = "threadsafe")]
+pub struct MemVfsContext(alloc::sync::Arc<context_core::Core>);
+
+#[cfg(feature = "threadsafe")]
+impl MemVfsContext {
+    /// Constructs or reuses the verified context for this process.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MemVfsContextError` when initialization is in progress, mutex validation fails or SQLite reports an error.
+    pub fn try_new() -> Result<Self, MemVfsContextError> {
+        let previous = {
+            let mut state = context_core::lock();
+            match &*state {
+                CoreState::Live(weak) => {
+                    if let Some(core) = weak.upgrade() {
+                        return Ok(Self(core));
+                    }
+                }
+                CoreState::Idle => {}
+                CoreState::Validating => {
+                    return Err(MemVfsContextError::InitializationInProgress);
+                }
+            }
+            core::mem::replace(&mut *state, CoreState::Validating)
+        };
+        struct Claim;
+        impl Drop for Claim {
+            fn drop(&mut self) {
+                *context_core::lock() = CoreState::Idle;
+            }
+        }
+        let claim = Claim;
+        drop(previous);
+        let core = validate()?;
+        *context_core::lock() = CoreState::Live(alloc::sync::Arc::downgrade(&core));
+        core::mem::forget(claim);
+        Ok(Self(core))
+    }
+}
+
+#[cfg(feature = "threadsafe")]
+impl Clone for MemVfsContext {
+    /// Acquires another lease on the verified core.
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+/// The cached verification state, guarded by a lock held for no SQLite call
+/// or user callback.
+#[cfg(feature = "threadsafe")]
+mod context_core {
+    use alloc::sync::Weak;
+    use std::sync::{Mutex, MutexGuard, TryLockError};
+
+    /// The immutable proof that the environment passed validation.
+    pub(crate) struct Core;
+
+    pub(crate) enum CoreState {
+        Idle,
+        Validating,
+        Live(Weak<Core>),
+    }
+
+    static STATE: Mutex<CoreState> = Mutex::new(CoreState::Idle);
+
+    pub(crate) fn lock() -> MutexGuard<'static, CoreState> {
+        loop {
+            match STATE.try_lock() {
+                Ok(guard) => return guard,
+                Err(TryLockError::Poisoned(poisoned)) => return poisoned.into_inner(),
+                Err(TryLockError::WouldBlock) => core::hint::spin_loop(),
+            }
+        }
+    }
+}
+
+#[cfg(feature = "threadsafe")]
+use context_core::CoreState;
+
+/// Verifies the current SQLite environment and builds the core proof.
+///
+/// C debug builds are rejected outright. Release no-op methods are detected
+/// by the shared static probe pointer, and the probe connection checks the
+/// core locks on a real connection before it is closed.
+#[cfg(feature = "threadsafe")]
+fn validate() -> Result<alloc::sync::Arc<context_core::Core>, MemVfsContextError> {
+    // SAFETY: these queries read immutable build settings.
+    let (threadsafe, debug) = unsafe {
+        (
+            bindings::sqlite3_threadsafe(),
+            bindings::sqlite3_compileoption_used(c"DEBUG".as_ptr()),
+        )
+    };
+    if threadsafe == 0 {
+        return Err(MemVfsContextError::SingleThreaded);
+    }
+    if debug != 0 {
+        return Err(MemVfsContextError::UnverifiedMutexes);
+    }
+    // SAFETY: static allocation initializes the mutex subsystem under the validation claim.
+    let (first, second) = unsafe {
+        (
+            bindings::sqlite3_mutex_alloc(bindings::SQLITE_MUTEX_STATIC_APP1),
+            bindings::sqlite3_mutex_alloc(bindings::SQLITE_MUTEX_STATIC_APP2),
+        )
+    };
+    if first.is_null() || second.is_null() {
+        return Err(MemVfsContextError::UnverifiedMutexes);
+    }
+    if first == second {
+        return Err(MemVfsContextError::SingleThreaded);
+    }
+    // SAFETY: the validation claim serializes initialization, and foreign teardown excludes construction.
+    let code = unsafe { bindings::sqlite3_initialize() };
+    if code != bindings::SQLITE_OK {
+        return Err(MemVfsContextError::Sqlite(code));
+    }
+    // Closing the probe before publication releases its VFS pointers.
+    struct Probe {
+        db: *mut bindings::sqlite3,
+    }
+
+    impl Drop for Probe {
+        fn drop(&mut self) {
+            if !self.db.is_null() {
+                // SAFETY: `db` came from `sqlite3_open_v2` and is closed
+                // exactly once here.
+                unsafe {
+                    let _ = bindings::sqlite3_close_v2(self.db);
+                }
+            }
+        }
+    }
+
+    let mut db: *mut bindings::sqlite3 = core::ptr::null_mut();
+    let flags = bindings::SQLITE_OPEN_READONLY
+        | bindings::SQLITE_OPEN_FULLMUTEX
+        | bindings::SQLITE_OPEN_PRIVATECACHE;
+    // SAFETY: the filename is a valid static C string and `db` is written
+    // exactly once by the call.
+    let code = unsafe {
+        bindings::sqlite3_open_v2(c":memory:".as_ptr(), &mut db, flags, core::ptr::null())
+    };
+    let probe = Probe { db };
+    if code != bindings::SQLITE_OK {
+        return Err(MemVfsContextError::Sqlite(code));
+    }
+    // SAFETY: `probe.db` is the connection opened successfully above.
+    if unsafe { bindings::sqlite3_db_mutex(probe.db) }.is_null() {
+        return Err(MemVfsContextError::SingleThreaded);
+    }
+    drop(probe);
+    Ok(alloc::sync::Arc::new(context_core::Core))
+}
+
+/// A verified environment for safe memvfs access.
+///
+/// Construction initializes the module on its sole thread without mutex probing.
+///
+/// # Foreign interoperability
+///
+/// Foreign shutdown, mutex replacement and threading changes must exclude construction and every live context or derived safe object.
+/// Dropping a context never shuts SQLite down.
+#[cfg(all(
+    not(feature = "threadsafe"),
+    target_family = "wasm",
+    not(target_feature = "atomics")
+))]
+pub struct MemVfsContext(module_local::Lease);
+
+#[cfg(all(
+    not(feature = "threadsafe"),
+    target_family = "wasm",
+    not(target_feature = "atomics")
+))]
+impl MemVfsContext {
+    /// Constructs or reuses the module-local context.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MemVfsContextError` when initialization is in progress or SQLite reports an error.
+    pub fn try_new() -> Result<Self, MemVfsContextError> {
+        use core::sync::atomic::Ordering;
+        use module_local::{Lease, IDLE, LIVE, STATE, VALIDATING};
+
+        match STATE.load(Ordering::Acquire) {
+            LIVE => return Ok(Self(Lease::reserved())),
+            VALIDATING => {
+                return Err(MemVfsContextError::InitializationInProgress);
+            }
+            _ => {}
+        }
+        match STATE.compare_exchange(IDLE, VALIDATING, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => {}
+            Err(VALIDATING) => return Err(MemVfsContextError::InitializationInProgress),
+            Err(LIVE) => return Ok(Self(Lease::reserved())),
+            Err(_) => unreachable!(),
+        }
+        // SAFETY: the claimed validation state excludes concurrent
+        // construction and reconfiguration on the module's single thread.
+        let code = unsafe { bindings::sqlite3_initialize() };
+        if code != bindings::SQLITE_OK {
+            STATE.store(IDLE, Ordering::Release);
+            return Err(MemVfsContextError::Sqlite(code));
+        }
+        module_local::LEASES.store(1, Ordering::Release);
+        STATE.store(LIVE, Ordering::Release);
+        Ok(Self(Lease::first()))
+    }
+}
+
+#[cfg(all(
+    not(feature = "threadsafe"),
+    target_family = "wasm",
+    not(target_feature = "atomics")
+))]
+impl Clone for MemVfsContext {
+    /// Acquires another lease on the module context.
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+/// Validation state for a module with one execution thread.
+#[cfg(all(
+    not(feature = "threadsafe"),
+    target_family = "wasm",
+    not(target_feature = "atomics")
+))]
+mod module_local {
+    use core::marker::PhantomData;
+    use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+
+    pub(crate) const IDLE: i32 = 0;
+    pub(crate) const VALIDATING: i32 = 1;
+    pub(crate) const LIVE: i32 = 2;
+
+    pub(crate) static STATE: AtomicI32 = AtomicI32::new(IDLE);
+    pub(crate) static LEASES: AtomicUsize = AtomicUsize::new(0);
+
+    /// A lease on the module's verified environment, module-local by design.
+    pub(crate) struct Lease(PhantomData<*const ()>);
+
+    impl Lease {
+        /// Reserves another lease on the live context.
+        pub(crate) fn reserved() -> Self {
+            LEASES.fetch_add(1, Ordering::Relaxed);
+            Self(PhantomData)
+        }
+
+        /// Creates the lease whose count the publisher initialized.
+        pub(crate) fn first() -> Self {
+            Self(PhantomData)
+        }
+    }
+
+    impl Clone for Lease {
+        fn clone(&self) -> Self {
+            Self::reserved()
+        }
+    }
+
+    impl Drop for Lease {
+        fn drop(&mut self) {
+            if LEASES.fetch_sub(1, Ordering::Relaxed) == 1 {
+                // Retired leases require fresh initialization validation.
+                STATE.store(IDLE, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
 /// A management handle that keeps memory files alive after VFS uninstallation.
 ///
-/// After reinstallation, obtain a new handle to access the new VFS instance.
-/// Import [`VfsFilesManager`] for file management and [`DbTransfer`] for transfers.
-pub struct MemVfsUtil(MemAppData);
+/// A handle obtained through the context also holds its lease, so the
+/// handle's file data and mutexes retire before the lease. After
+/// reinstallation, obtain a new handle to access the new VFS instance.
+///
+/// Import [`VfsFilesManager`] for file management and [`DbTransfer`] for
+/// transfers.
+pub struct MemVfsUtil {
+    inner: MemAppData,
+    lease: ContextLease,
+}
 
 impl MemVfsUtil {
     /// Gets the installed memory VFS without registering it or changing the
@@ -401,40 +738,70 @@ impl MemVfsUtil {
     /// # Safety
     ///
     /// Without `threadsafe`, all SQLite use of memvfs must stay on this thread.
-    /// With it, use SQLite mutexes that provide real mutual exclusion.
-    /// Exclude uninstallation and SQLite shutdown.
-    pub unsafe fn get() -> Result<Self> {
-        let vfs = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
-        if vfs.is_null() {
-            return Err(MemVfsError::NotInstalled);
-        }
-        check_owned(vfs)?;
-        Ok(Self(VfsAppData::<MemAppData>::get(vfs).data.clone()))
+    /// With `threadsafe`, preserve SQLite's global threading rules and real mutex methods for every returned object.
+    /// Exclude uninstallation and SQLite shutdown during lookup.
+    pub unsafe fn get_unchecked() -> Result<Self> {
+        // SAFETY: the caller supplies the SQLite environment and excludes teardown.
+        let inner = unsafe { get_inner()? };
+        Ok(Self {
+            inner,
+            lease: NO_CONTEXT,
+        })
     }
+
+    /// Gets the installed memory VFS using the verified context.
+    ///
+    /// The returned handle holds a context lease. SQLite's own automatic
+    /// initialization may still run.
+    #[cfg(any(
+        feature = "threadsafe",
+        all(target_family = "wasm", not(target_feature = "atomics"))
+    ))]
+    pub fn get(context: &MemVfsContext) -> Result<Self> {
+        // SAFETY: the context keeps core locking valid, and unsafe uninstallation excludes this call.
+        let inner = unsafe { get_inner()? };
+        Ok(Self {
+            inner,
+            lease: Some(context.clone()),
+        })
+    }
+}
+
+unsafe fn get_inner() -> Result<MemAppData> {
+    // SAFETY: the caller provides the SQLite environment and excludes uninstallation.
+    let vfs = unsafe { bindings::sqlite3_vfs_find(VFS_NAME.as_ptr()) };
+    if vfs.is_null() {
+        return Err(MemVfsError::NotInstalled);
+    }
+    check_owned(vfs)?;
+    // SAFETY: check_owned proved the registration is owned by this crate, so
+    // the vfs app data has the required type and alignment and outlives this.
+    let data = unsafe { VfsAppData::<MemAppData>::get(vfs).data.clone() };
+    Ok(data)
 }
 
 impl VfsFilesManager for MemVfsUtil {
     type Error = Infallible;
 
     fn remove(&self, filename: &str) -> Result<bool, Self::Error> {
-        Ok(self.0.files.lock().remove(filename).is_some())
+        Ok(self.inner.files.lock().remove(filename).is_some())
     }
 
     fn clear(&self) -> Result<(), Self::Error> {
-        core::mem::take(&mut *self.0.files.lock());
+        core::mem::take(&mut *self.inner.files.lock());
         Ok(())
     }
 
     fn contains(&self, filename: &str) -> Result<bool, Self::Error> {
-        Ok(self.0.files.lock().contains_key(filename))
+        Ok(self.inner.files.lock().contains_key(filename))
     }
 
     fn names(&self) -> Result<Vec<String>, Self::Error> {
-        Ok(self.0.files.lock().keys().cloned().collect())
+        Ok(self.inner.files.lock().keys().cloned().collect())
     }
 
     fn len(&self) -> Result<usize, Self::Error> {
-        Ok(self.0.files.lock().len())
+        Ok(self.inner.files.lock().len())
     }
 }
 
@@ -447,7 +814,7 @@ impl DbTransfer for MemVfsUtil {
 
     fn create_import(&self, name: &str, size: u64) -> Result<Self::Target<'_>> {
         validate_db_filename(name)?;
-        if self.0.files.lock().contains_key(name) {
+        if self.inner.files.lock().contains_key(name) {
             return Err(MemVfsError::AlreadyExists(name.into()));
         }
         usize::try_from(size).map_err(|_| {
@@ -463,14 +830,20 @@ impl DbTransfer for MemVfsUtil {
 
     fn open_export(&self, name: &str) -> Result<Self::Source<'_>> {
         let file = self
-            .0
+            .inner
             .files
             .lock()
             .get(name)
             .cloned()
             .ok_or_else(|| MemVfsError::NotFound(name.into()))?;
         let size = file.lock().data.size()?;
-        Ok(MemExportSource { file, size })
+        // The lease goes last so the export's data and mutexes retire
+        // before it.
+        Ok(MemExportSource {
+            file,
+            size,
+            lease: self.lease.clone(),
+        })
     }
 }
 
@@ -491,7 +864,7 @@ impl ImportTarget for MemImportTarget<'_> {
 
     fn commit(self) -> Result<()> {
         let file = MemFile::shared(self.file)?;
-        let mut files = self.util.0.files.lock();
+        let mut files = self.util.inner.files.lock();
         if files.contains_key(&self.filename) {
             return Err(MemVfsError::AlreadyExists(self.filename));
         }
@@ -514,6 +887,8 @@ impl ImportTarget for MemImportTarget<'_> {
 pub struct MemExportSource {
     file: FileRef,
     size: u64,
+    #[expect(dead_code, reason = "lease is held until the export drops")]
+    lease: ContextLease,
 }
 
 impl ExportSource for MemExportSource {
@@ -538,12 +913,47 @@ impl ExportSource for MemExportSource {
 /// file access and uninstallation must stay on one thread. With it, configured
 /// SQLite mutexes must provide real mutual exclusion. Installations serialize internally.
 /// Exclude uninstallation and SQLite shutdown while this call runs.
+/// Preserve SQLite's global threading rules and mutex lifetimes for every returned object.
 /// Raw unregistration is allowed, but never free or replace owned VFS/app data
 /// through raw pointers. Use [`uninstall`] for cleanup.
-pub unsafe fn install(
+pub unsafe fn install_unchecked(
     os: impl MemVfsOs,
     default_vfs: bool,
 ) -> Result<MemVfsUtil, RegisterVfsError> {
+    let inner = install_inner(os, default_vfs)?;
+    Ok(MemVfsUtil {
+        inner,
+        lease: NO_CONTEXT,
+    })
+}
+
+/// Installs memvfs using the verified context.
+///
+/// Reuses the owned registration, services and data if present, and
+/// re-registers the same allocation if raw SQLite unregistration detached
+/// it. The returned handle holds a context lease.
+#[cfg(any(
+    feature = "threadsafe",
+    all(target_family = "wasm", not(target_feature = "atomics"))
+))]
+pub fn install(
+    context: &MemVfsContext,
+    os: impl MemVfsOs,
+    default_vfs: bool,
+) -> Result<MemVfsUtil, RegisterVfsError> {
+    // SAFETY: the context verified the environment, and the unchecked
+    // contract excludes shutdown while installation runs.
+    let inner = unsafe { install_inner(os, default_vfs)? };
+    Ok(MemVfsUtil {
+        inner,
+        lease: Some(context.clone()),
+    })
+}
+
+unsafe fn install_inner(
+    os: impl MemVfsOs,
+    default_vfs: bool,
+) -> Result<MemAppData, RegisterVfsError> {
     #[cfg(feature = "threadsafe")]
     let registration = RegistrationGuard::enter()?;
     let registered = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
@@ -587,7 +997,9 @@ pub unsafe fn install(
         owned
     };
 
-    Ok(MemVfsUtil(VfsAppData::<MemAppData>::get(vfs).data.clone()))
+    // SAFETY: the registration is owned by this crate, so the app data has
+    // the required type, alignment and lifetime.
+    Ok(VfsAppData::<MemAppData>::get(vfs).data.clone())
 }
 
 fn check_owned(vfs: *mut bindings::sqlite3_vfs) -> Result<(), RegisterVfsError> {
@@ -603,11 +1015,9 @@ fn check_owned(vfs: *mut bindings::sqlite3_vfs) -> Result<(), RegisterVfsError> 
 ///
 /// # Safety
 ///
-/// Use a valid SQLite context, on the installing thread unless `threadsafe` is
-/// enabled, and serialize with VFS lookup, installation, uninstallation and
-/// SQLite initialization. Close all files and retire VFS/app-data
-/// references (`MemVfsUtil` may outlive uninstall). Owned allocations must
-/// not have been freed or replaced through raw pointers.
+/// Use a valid SQLite context on the installing thread unless `threadsafe` is enabled, and exclude safe and unchecked lookup, installation, context construction, uninstallation and SQLite initialization.
+/// Close all files and retire VFS/app-data references, while `MemVfsUtil` handles may remain alive.
+/// Owned allocations must not have been freed or replaced through raw pointers.
 pub unsafe fn uninstall() -> Result<(), RegisterVfsError> {
     let registered = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
     let vfs = MEM_VFS.load(Ordering::Acquire);

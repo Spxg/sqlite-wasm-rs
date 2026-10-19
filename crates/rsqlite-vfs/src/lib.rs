@@ -1,6 +1,4 @@
-//! Low-level utilities and traits for implementing custom SQLite Virtual File Systems (VFS).
-//!
-//! Includes a platform-independent, single-threaded in-memory VFS in [`memvfs`].
+#![doc = include_str!("../README.md")]
 #![no_std]
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]

@@ -32,7 +32,7 @@ fn install() {
     static INSTALL: Once = Once::new();
     // SAFETY: registration is serialized by `Once`, and memvfs stays installed for the whole binary.
     INSTALL.call_once(|| unsafe {
-        memvfs::install(NativeOs, false).unwrap();
+        memvfs::install_unchecked(NativeOs, false).unwrap();
     });
 }
 

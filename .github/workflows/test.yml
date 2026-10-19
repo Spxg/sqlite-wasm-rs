@@ -204,5 +204,10 @@ jobs:
       run: |
         cargo test -p rsqlite-vfs
         cargo test -p rsqlite-vfs --features threadsafe
+    - name: Reject unsupported SQLite mutex builds
+      run: |
+        LIBSQLITE3_FLAGS="-DSQLITE_DEBUG" cargo test -p rsqlite-vfs --features threadsafe --test memvfs_context_mutexes --test memvfs_context_bootstrap --test memvfs_context_config_first
+        LIBSQLITE3_FLAGS="-DSQLITE_MUTEX_NOOP" cargo test -p rsqlite-vfs --features threadsafe --test memvfs_context_mutexes
+        LIBSQLITE3_FLAGS="-DSQLITE_MUTEX_NOOP -DSQLITE_DEBUG" cargo test -p rsqlite-vfs --features threadsafe --test memvfs_context_mutexes
     - name: Test implement-a-vfs example
       run: cargo run -p rsqlite-vfs --example implement-a-vfs

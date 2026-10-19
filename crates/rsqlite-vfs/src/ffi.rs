@@ -766,6 +766,17 @@ extern "C" {
     pub fn sqlite3_uri_int64(filename: *const ::core::ffi::c_char, key: *const ::core::ffi::c_char, default: i64) -> i64;
 }
 
+#[cfg(any(feature = "threadsafe", all(target_family = "wasm", not(target_feature = "atomics"))))]
+extern "C" {
+    pub fn sqlite3_initialize() -> ::core::ffi::c_int;
+}
+
+#[cfg(feature = "threadsafe")]
+#[repr(C)]
+pub struct sqlite3 {
+    _unused: [u8; 0],
+}
+
 #[cfg(feature = "threadsafe")]
 #[repr(C)]
 pub struct sqlite3_mutex {
@@ -782,5 +793,18 @@ extern "C" {
 
     pub fn sqlite3_mutex_leave(arg1: *mut sqlite3_mutex);
 
-    pub fn sqlite3_initialize() -> ::core::ffi::c_int;
+    pub fn sqlite3_threadsafe() -> ::core::ffi::c_int;
+
+    pub fn sqlite3_compileoption_used(zOpt: *const ::core::ffi::c_char) -> ::core::ffi::c_int;
+
+    pub fn sqlite3_open_v2(
+        zFilename: *const ::core::ffi::c_char,
+        ppDb: *mut *mut sqlite3,
+        flags: ::core::ffi::c_int,
+        zVfs: *const ::core::ffi::c_char,
+    ) -> ::core::ffi::c_int;
+
+    pub fn sqlite3_db_mutex(pDb: *mut sqlite3) -> *mut sqlite3_mutex;
+
+    pub fn sqlite3_close_v2(pDb: *mut sqlite3) -> ::core::ffi::c_int;
 }

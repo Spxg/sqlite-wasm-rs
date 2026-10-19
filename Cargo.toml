@@ -71,6 +71,14 @@ required-features = ["wasm-bindgen", "threadsafe"]
 name = "threadsafe_sqlcipher"
 required-features = ["wasm-bindgen", "threadsafe", "sqlcipher"]
 
+[[test]]
+name = "threadsafe_memvfs"
+required-features = ["wasm-bindgen", "threadsafe"]
+
+[[test]]
+name = "memvfs_safe"
+required-features = ["wasm-bindgen"]
+
 [package.metadata.docs.rs]
 targets = ["wasm32-unknown-unknown"]
 

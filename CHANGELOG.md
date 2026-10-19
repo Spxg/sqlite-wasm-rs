@@ -3,6 +3,12 @@
 
 ## Unreleased
 
+### Breaking changes
+
+* Safe `memvfs` access requires an explicit `MemVfsContext`. Construct it with `MemVfsContext::try_new()` and pass it to `MemVfsUtil::get(&context)` and `memvfs::install(&context, os, default_vfs)`, available with `threadsafe` or on Wasm without `atomics`. `get_unchecked()` and `install_unchecked()` are available in every build.
+
+* Threaded context construction validates the backend and rejects unsupported mutex configurations with `MemVfsContextError::SingleThreaded` or `MemVfsContextError::UnverifiedMutexes`.
+
 ### Changed
 
 * Concurrent memvfs installations with `threadsafe` serialize registration and keep rejected callback destruction outside the registration lock.

@@ -6,6 +6,9 @@ use std::{
 };
 use wasm_bindgen_test::wasm_bindgen_test;
 
+#[path = "support/memvfs.rs"]
+mod memvfs;
+
 struct Db(*mut sqlite3);
 
 impl Db {
@@ -86,10 +89,7 @@ fn test_cipher(cipher: &str) {
     }
     drop(db);
 
-    // Remove the test fixture after every connection has closed.
-    unsafe { vfs::memvfs::MemVfsUtil::get().unwrap() }
-        .remove(name.to_str().unwrap())
-        .unwrap();
+    memvfs::get().remove(name.to_str().unwrap()).unwrap();
 }
 
 macro_rules! cipher_test {

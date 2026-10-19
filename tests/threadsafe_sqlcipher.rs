@@ -6,7 +6,7 @@ mod scenarios;
 mod workers;
 
 use scenarios::{init, Connection};
-use sqlite_wasm_rs::vfs::memvfs::MemVfsUtil;
+use sqlite_wasm_rs::vfs::memvfs::{MemVfsContext, MemVfsUtil};
 use sqlite_wasm_rs::vfs::transfer::DbTransfer;
 use sqlite_wasm_rs::SQLITE_NOTADB;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -63,8 +63,8 @@ async fn every_worker_draws_its_own_entropy() {
     })
     .await;
 
-    // SAFETY: SQLite's initialization installed memvfs, and no connection is open.
-    let util = unsafe { MemVfsUtil::get() }.unwrap();
+    let context = MemVfsContext::try_new().unwrap();
+    let util = MemVfsUtil::get(&context).unwrap();
     let mut salts: Vec<Vec<u8>> = (0..WORKERS)
         .map(|worker| util.export_db(&format!("entropy-{worker}.db")).unwrap()[..16].to_vec())
         .collect();

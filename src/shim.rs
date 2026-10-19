@@ -226,10 +226,10 @@ pub unsafe extern "C" fn rust_sqlite_wasm_calloc(num: c_size_t, size: c_size_t) 
 ///
 /// # Safety
 ///
-/// Must satisfy [`rsqlite_vfs::memvfs::install`]'s threading and ownership contract.
+/// Must satisfy [`rsqlite_vfs::memvfs::install_unchecked`]'s threading and ownership contract.
 #[no_mangle]
 pub unsafe extern "C" fn sqlite3_os_init() -> core::ffi::c_int {
-    match rsqlite_vfs::memvfs::install(WasmOsCallback, true) {
+    match rsqlite_vfs::memvfs::install_unchecked(WasmOsCallback, true) {
         Ok(_) => crate::bindings::SQLITE_OK,
         Err(_) => crate::bindings::SQLITE_ERROR,
     }
@@ -265,7 +265,7 @@ mod tests {
     fn test_initialize_shutdown() {
         unsafe {
             assert_eq!(sqlite3_initialize(), SQLITE_OK, "failed to initialize");
-            let util = crate::vfs::memvfs::MemVfsUtil::get().unwrap();
+            let util = crate::vfs::memvfs::MemVfsUtil::get_unchecked().unwrap();
             let original_default = crate::sqlite3_vfs_find(core::ptr::null());
             for name in ["", "hidden\0suffix"] {
                 assert!(matches!(
@@ -286,7 +286,7 @@ mod tests {
             assert_eq!(util.len().unwrap(), 1);
             assert_eq!(util.names().unwrap(), ["survives-shutdown.db"]);
             assert_eq!(util.export_db("survives-shutdown.db").unwrap(), [42; 512]);
-            let new_util = crate::vfs::memvfs::MemVfsUtil::get().unwrap();
+            let new_util = crate::vfs::memvfs::MemVfsUtil::get_unchecked().unwrap();
             assert!(!new_util.contains("survives-shutdown.db").unwrap());
             util.remove("survives-shutdown.db").unwrap();
             assert_eq!(sqlite3_shutdown(), SQLITE_OK, "failed to shutdown again");
@@ -312,7 +312,7 @@ mod tests {
             assert_eq!(sqlite3_initialize(), SQLITE_OK);
             memvfs::uninstall().unwrap();
             let token = Arc::new(());
-            let util = memvfs::install(
+            let util = memvfs::install_unchecked(
                 TrackedOs {
                     _token: token.clone(),
                 },
@@ -322,7 +322,7 @@ mod tests {
             util.import_db_unchecked("detached.db", &[42; 512]).unwrap();
             let original = crate::sqlite3_vfs_find(c"memvfs".as_ptr());
             assert_eq!(crate::sqlite3_vfs_unregister(original), SQLITE_OK);
-            let reinstalled = memvfs::install(WasmOsCallback, true).unwrap();
+            let reinstalled = memvfs::install_unchecked(WasmOsCallback, true).unwrap();
             assert_eq!(crate::sqlite3_vfs_find(c"memvfs".as_ptr()), original);
             assert_eq!(reinstalled.export_db("detached.db").unwrap(), [42; 512]);
             drop(util);

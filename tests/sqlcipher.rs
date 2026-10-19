@@ -1,9 +1,11 @@
-use sqlite_wasm_rs::vfs::memvfs::MemVfsUtil;
 use sqlite_wasm_rs::vfs::transfer::DbTransfer;
 use sqlite_wasm_rs::vfs::VfsFilesManager;
 use sqlite_wasm_rs::*;
 use std::{ffi::CStr, mem::ManuallyDrop, ptr};
 use wasm_bindgen_test::wasm_bindgen_test;
+
+#[path = "support/memvfs.rs"]
+mod memvfs;
 
 // Raw keys skip the PBKDF2 derivation, which takes seconds per key in unoptimized builds.
 const KEY: &[u8] = b"x'000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f'";
@@ -86,18 +88,14 @@ fn create(name: &CStr) {
 }
 
 fn remove(name: &CStr) {
-    unsafe { MemVfsUtil::get().unwrap() }
-        .remove(name.to_str().unwrap())
-        .unwrap();
+    memvfs::get().remove(name.to_str().unwrap()).unwrap();
 }
 
 #[wasm_bindgen_test]
 fn test_encrypt_decrypt() {
     create(c"encrypted.db");
 
-    let bytes = unsafe { MemVfsUtil::get().unwrap() }
-        .export_db("encrypted.db")
-        .unwrap();
+    let bytes = memvfs::get().export_db("encrypted.db").unwrap();
     assert!(!bytes.windows(16).any(|w| w == b"SQLite format 3\0"));
     assert!(!bytes.windows(15).any(|w| w == b"hello sqlcipher"));
 

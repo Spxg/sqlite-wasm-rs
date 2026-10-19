@@ -45,7 +45,7 @@ impl Drop for TestOs {
     fn drop(&mut self) {
         if self.reenter {
             // SAFETY: SQLite is initialized, real mutexes protect memvfs, and no uninstall runs.
-            let result = unsafe { memvfs::install(Self { reenter: false }, false) };
+            let result = unsafe { memvfs::install_unchecked(Self { reenter: false }, false) };
             REENTERED.store(result.is_ok(), Ordering::Release);
         }
     }
@@ -75,7 +75,8 @@ fn registration_survives_reentrant_failure_and_concurrent_installers() {
     FAIL_FAST.store(true, Ordering::Relaxed);
     std::thread::spawn(move || {
         // SAFETY: real SQLite mutexes serialize registration and no uninstall runs.
-        let result = unsafe { memvfs::install(TestOs { reenter: true }, false) }.map(|_| ());
+        let result =
+            unsafe { memvfs::install_unchecked(TestOs { reenter: true }, false) }.map(|_| ());
         let _ = finished_tx.send(("allocation-failure", result));
     });
     let (id, result) = finished_rx
@@ -106,7 +107,7 @@ fn registration_survives_reentrant_failure_and_concurrent_installers() {
             let result = (|| -> Result<(), alloc::string::String> {
                 let installed = if id % 2 == 0 {
                     // SAFETY: real SQLite mutexes serialize installation and no uninstall runs.
-                    unsafe { memvfs::install(TestOs { reenter: false }, false) }
+                    unsafe { memvfs::install_unchecked(TestOs { reenter: false }, false) }
                         .map_err(|error| error.to_string())?
                 } else {
                     loop {
@@ -114,7 +115,7 @@ fn registration_survives_reentrant_failure_and_concurrent_installers() {
                             return Err(format!("lookup {id} timed out"));
                         }
                         // SAFETY: installations retain their allocations and no uninstall runs.
-                        match unsafe { MemVfsUtil::get() } {
+                        match unsafe { MemVfsUtil::get_unchecked() } {
                             Ok(util) => break util,
                             Err(MemVfsError::NotInstalled) => std::thread::yield_now(),
                             Err(error) => return Err(error.to_string()),
@@ -126,7 +127,8 @@ fn registration_survives_reentrant_failure_and_concurrent_installers() {
                     .import_db_unchecked(&name, &[42; 512])
                     .map_err(|error| error.to_string())?;
                 // SAFETY: registration remains alive until every worker has completed.
-                let found = unsafe { MemVfsUtil::get() }.map_err(|error| error.to_string())?;
+                let found =
+                    unsafe { MemVfsUtil::get_unchecked() }.map_err(|error| error.to_string())?;
                 let bytes = found.export_db(&name).map_err(|error| error.to_string())?;
                 if bytes != [42; 512] {
                     return Err(format!("unexpected bytes exported from {name}"));
@@ -154,7 +156,7 @@ fn registration_survives_reentrant_failure_and_concurrent_installers() {
     }
 
     // SAFETY: every installer finished and the registration remains alive.
-    let util = unsafe { MemVfsUtil::get() }.unwrap();
+    let util = unsafe { MemVfsUtil::get_unchecked() }.unwrap();
     let mut names = util.names().unwrap();
     names.sort();
     let mut expected: Vec<_> = (0..WORKERS)
