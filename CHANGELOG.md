@@ -1,6 +1,14 @@
 # `sqlite-wasm-rs` Change Log
 --------------------------------------------------------------------------------
 
+## Unreleased
+
+### Changed
+
+* Concurrent memvfs installations with `threadsafe` serialize registration and keep rejected callback destruction outside the registration lock.
+
+--------------------------------------------------------------------------------
+
 ## [0.6.2](https://github.com/Spxg/sqlite-wasm-rs/compare/0.6.1...0.6.2)
 
 ### Added

@@ -45,10 +45,11 @@ mod imp {
 #[cfg(feature = "threadsafe")]
 mod imp {
     use crate::ffi::{
-        sqlite3_mutex, sqlite3_mutex_alloc, sqlite3_mutex_enter, sqlite3_mutex_free,
-        sqlite3_mutex_leave, SQLITE_MUTEX_FAST,
+        sqlite3_initialize, sqlite3_mutex, sqlite3_mutex_alloc, sqlite3_mutex_enter,
+        sqlite3_mutex_free, sqlite3_mutex_leave, SQLITE_MUTEX_FAST, SQLITE_MUTEX_STATIC_VFS2,
+        SQLITE_OK,
     };
-    use crate::{VfsError, VfsErrorCode, VfsResult};
+    use crate::{RegisterVfsError, VfsError, VfsErrorCode, VfsResult};
     use core::cell::{RefCell, UnsafeCell};
     use core::marker::PhantomData;
     use core::ops::{Deref, DerefMut};
@@ -149,6 +150,43 @@ mod imp {
             LAST_ERROR.with(|slot| slot.borrow().clone())
         }
     }
+
+    /// Holds SQLite's extension-VFS mutex during memvfs installation.
+    pub(crate) struct RegistrationGuard {
+        mutex: NonNull<sqlite3_mutex>,
+        _not_send: PhantomData<*const ()>,
+    }
+
+    impl RegistrationGuard {
+        pub(crate) fn enter() -> Result<Self, RegisterVfsError> {
+            // Initialize before locking so sqlite3_os_init can install memvfs recursively.
+            // SAFETY: the installer requires a valid SQLite context and excludes shutdown.
+            let code = unsafe { sqlite3_initialize() };
+            if code != SQLITE_OK {
+                return Err(RegisterVfsError::RegisterVfs(
+                    VfsErrorCode::from_raw(code).expect("SQLite must return a valid error code"),
+                ));
+            }
+            // SAFETY: initialization established the mutex subsystem, and the caller excludes shutdown while this guard lives.
+            let mutex = NonNull::new(unsafe { sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_VFS2) })
+                .ok_or(RegisterVfsError::RegisterVfs(VfsErrorCode::NoMemory))?;
+            // SAFETY: this is a live static mutex, entered once and retained by this non-Send guard.
+            unsafe { sqlite3_mutex_enter(mutex.as_ptr()) };
+            Ok(Self {
+                mutex,
+                _not_send: PhantomData,
+            })
+        }
+    }
+
+    impl Drop for RegistrationGuard {
+        fn drop(&mut self) {
+            // SAFETY: this non-Send guard leaves the live mutex once on the entering thread.
+            unsafe { sqlite3_mutex_leave(self.mutex.as_ptr()) };
+        }
+    }
 }
 
+#[cfg(feature = "threadsafe")]
+pub(crate) use imp::RegistrationGuard;
 pub(crate) use imp::{LastError, Locked, Shared};
