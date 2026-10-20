@@ -1,6 +1,36 @@
 # `sqlite-wasm-rs` Change Log
 --------------------------------------------------------------------------------
 
+## [0.6.2](https://github.com/Spxg/sqlite-wasm-rs/compare/0.6.1...0.6.2)
+
+### Added
+
+* SQLCipher encryption through the `sqlcipher` feature, built from `sqlcipher-src`
+  with LibTomCrypt. The `sqlcipher` and `sqlite3mc` features are mutually exclusive.
+  [#194](https://github.com/Spxg/sqlite-wasm-rs/pull/194)
+
+* `SQLITE_WASM_RS_FLAGS` for custom SQLite compile options, supporting `-D`, `-U`
+  and bare `SQLITE_` names. Options apply to both C compilation and binding generation.
+  [#209](https://github.com/Spxg/sqlite-wasm-rs/pull/209)
+
+### Changed
+
+* Use JavaScript `Atomics.wait` for `wasm-bindgen` sleep, removing the requirement
+  for Wasm atomics and unstable Rust atomic-wait intrinsics.
+  [#207](https://github.com/Spxg/sqlite-wasm-rs/pull/207)
+
+### Fixed
+
+* Make `sqlite3_sleep` return immediately on browser main threads and when
+  synchronous waiting is unavailable.
+  [#203](https://github.com/Spxg/sqlite-wasm-rs/pull/203)
+
+* Fix Web Crypto entropy generation with shared Wasm memory by using an unshared
+  JavaScript buffer.
+  [#207](https://github.com/Spxg/sqlite-wasm-rs/pull/207)
+
+--------------------------------------------------------------------------------
+
 ## [0.6.1](https://github.com/Spxg/sqlite-wasm-rs/compare/0.6.0...0.6.1)
 
 ### Changed
