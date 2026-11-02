@@ -44,6 +44,10 @@ name = "sqlite3"
 required-features = ["wasm-bindgen"]
 
 [[test]]
+name = "batch_atomic"
+required-features = ["wasm-bindgen"]
+
+[[test]]
 name = "sqlite3mc"
 required-features = ["wasm-bindgen", "sqlite3mc"]
 

@@ -75,6 +75,8 @@ fn backend(extra_flags: Vec<String>) -> Backend {
                 // SQLCipher requires THREADSAFE=1 or 2, but calls stay single-threaded.
                 "-DSQLITE_THREADSAFE=1",
                 "-DSQLITE_MUTEX_NOOP=1",
+                // Used only by VFSs that report SQLITE_IOCAP_BATCH_ATOMIC.
+                "-DSQLITE_ENABLE_BATCH_ATOMIC_WRITE",
             ],
             extra_flags,
             compile: Some(compile_sqlcipher),
@@ -87,6 +89,7 @@ fn backend(extra_flags: Vec<String>) -> Backend {
             source_dir: sqlite3mc_src::source_dir().to_path_buf(),
             source_name: sqlite3mc_src::SOURCE_FILE,
             header_name: sqlite3mc_src::HEADER_FILE,
+            // SQLite3MC cannot encrypt a spilled in-memory journal, so batch writes stay off.
             flags: &["-DSQLITE_THREADSAFE=0", "-D__WASM__", "-DARGON2_NO_THREADS"],
             extra_flags,
             compile: None,
@@ -99,7 +102,11 @@ fn backend(extra_flags: Vec<String>) -> Backend {
             source_dir: PathBuf::from("sqlite3"),
             source_name: "sqlite3.c",
             header_name: "sqlite3.h",
-            flags: &["-DSQLITE_THREADSAFE=0"],
+            flags: &[
+                "-DSQLITE_THREADSAFE=0",
+                // Used only by VFSs that report SQLITE_IOCAP_BATCH_ATOMIC.
+                "-DSQLITE_ENABLE_BATCH_ATOMIC_WRITE",
+            ],
             extra_flags,
             compile: None,
         }
