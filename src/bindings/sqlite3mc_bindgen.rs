@@ -40,16 +40,16 @@ pub unsafe fn sqlite3_enable_load_extension(
 }
 
 pub const SQLITE3MC_VERSION_MAJOR: i32 = 2;
-pub const SQLITE3MC_VERSION_MINOR: i32 = 5;
+pub const SQLITE3MC_VERSION_MINOR: i32 = 6;
 pub const SQLITE3MC_VERSION_RELEASE: i32 = 1;
 pub const SQLITE3MC_VERSION_SUBRELEASE: i32 = 0;
-pub const SQLITE3MC_VERSION_STRING: &::core::ffi::CStr = c"SQLite3 Multiple Ciphers 2.5.1";
-pub const SQLITE_VERSION: &::core::ffi::CStr = c"3.53.4";
-pub const SQLITE_VERSION_NUMBER: i32 = 3053004;
-pub const SQLITE_SOURCE_ID: &::core::ffi::CStr = c"2026-07-24 19:02:57 bf7c7f30031888f4e796e429ab3978879485813aaca6f641c7b33e4e09459bcc";
-pub const SQLITE_SCM_BRANCH: &::core::ffi::CStr = c"branch-3.53";
-pub const SQLITE_SCM_TAGS: &::core::ffi::CStr = c"release version-3.53.4";
-pub const SQLITE_SCM_DATETIME: &::core::ffi::CStr = c"2026-07-24T19:02:57.525Z";
+pub const SQLITE3MC_VERSION_STRING: &::core::ffi::CStr = c"SQLite3 Multiple Ciphers 2.6.1";
+pub const SQLITE_VERSION: &::core::ffi::CStr = c"3.54.0";
+pub const SQLITE_VERSION_NUMBER: i32 = 3054000;
+pub const SQLITE_SOURCE_ID: &::core::ffi::CStr = c"2026-10-09 15:46:58 be8d059e9a49089ab2dce5ed26dd87aaf598fdc5fbe0b107c0dd758464bcd5e3";
+pub const SQLITE_SCM_BRANCH: &::core::ffi::CStr = c"trunk";
+pub const SQLITE_SCM_TAGS: &::core::ffi::CStr = c"release major-release version-3.54.0";
+pub const SQLITE_SCM_DATETIME: &::core::ffi::CStr = c"2026-10-09T15:46:58.543Z";
 pub const SQLITE_OK: i32 = 0;
 pub const SQLITE_ERROR: i32 = 1;
 pub const SQLITE_INTERNAL: i32 = 2;
@@ -354,7 +354,6 @@ pub const SQLITE_CREATE_VTABLE: i32 = 29;
 pub const SQLITE_DROP_VTABLE: i32 = 30;
 pub const SQLITE_FUNCTION: i32 = 31;
 pub const SQLITE_SAVEPOINT: i32 = 32;
-pub const SQLITE_COPY: i32 = 0;
 pub const SQLITE_RECURSIVE: i32 = 33;
 pub const SQLITE_TRACE_STMT: ::core::ffi::c_uint = 1;
 pub const SQLITE_TRACE_PROFILE: ::core::ffi::c_uint = 2;
@@ -373,6 +372,8 @@ pub const SQLITE_LIMIT_VARIABLE_NUMBER: i32 = 9;
 pub const SQLITE_LIMIT_TRIGGER_DEPTH: i32 = 10;
 pub const SQLITE_LIMIT_WORKER_THREADS: i32 = 11;
 pub const SQLITE_LIMIT_PARSER_DEPTH: i32 = 12;
+pub const SQLITE_LIMIT_SCHEMA: i32 = 13;
+pub const SQLITE_LIMIT_TRIGGER_STEPS: i32 = 14;
 pub const SQLITE_PREPARE_PERSISTENT: ::core::ffi::c_uint = 1;
 pub const SQLITE_PREPARE_NORMALIZE: ::core::ffi::c_uint = 2;
 pub const SQLITE_PREPARE_NO_VTAB: ::core::ffi::c_uint = 4;
@@ -476,6 +477,9 @@ pub const SQLITE_TESTCTRL_LOGEST: i32 = 33;
 pub const SQLITE_TESTCTRL_USELONGDOUBLE: i32 = 34;
 pub const SQLITE_TESTCTRL_ATOF: i32 = 34;
 pub const SQLITE_TESTCTRL_LAST: i32 = 34;
+pub const SQLITE_COPY: i32 = 0;
+pub const SQLITE_XFER: i32 = 1;
+pub const SQLITE_FINISH: i32 = 2;
 pub const SQLITE_STATUS_MEMORY_USED: i32 = 0;
 pub const SQLITE_STATUS_PAGECACHE_USED: i32 = 1;
 pub const SQLITE_STATUS_PAGECACHE_OVERFLOW: i32 = 2;
@@ -977,6 +981,9 @@ extern "C" {
 }
 extern "C" {
     pub fn sqlite3_complete(sql: *const ::core::ffi::c_char) -> ::core::ffi::c_int;
+}
+extern "C" {
+    pub fn sqlite3_incomplete(sql: *const ::core::ffi::c_char) -> sqlite3_int64;
 }
 extern "C" {
     pub fn sqlite3_busy_handler(
@@ -2267,6 +2274,13 @@ extern "C" {
 }
 extern "C" {
     pub fn sqlite3_str_free(arg1: *mut sqlite3_str);
+}
+extern "C" {
+    pub fn sqlite3_result_str(
+        arg1: *mut sqlite3_context,
+        arg2: *mut sqlite3_str,
+        arg3: ::core::ffi::c_int,
+    );
 }
 extern "C" {
     pub fn sqlite3_str_appendf(
