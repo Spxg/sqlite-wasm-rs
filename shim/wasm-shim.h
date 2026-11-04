@@ -54,6 +54,13 @@
 #define abort rust_sqlite_wasm_abort
 #define __assert_fail rust_sqlite_wasm_assert_fail
 
+/* musl internals, used by strtod and strtol */
+#define __floatscan rust_sqlite_wasm___floatscan
+#define __shgetc rust_sqlite_wasm___shgetc
+#define __shlim rust_sqlite_wasm___shlim
+#define __toread rust_sqlite_wasm___toread
+#define __uflow rust_sqlite_wasm___uflow
+
 /* stdio */
 #define stdout rust_sqlite_wasm_stdout
 #define stderr rust_sqlite_wasm_stderr
@@ -61,6 +68,11 @@
 #define fopen rust_sqlite_wasm_fopen
 #define fprintf rust_sqlite_wasm_fprintf
 #define sprintf rust_sqlite_wasm_sprintf
+#define printf rust_sqlite_wasm_printf
+#define vprintf rust_sqlite_wasm_vprintf
+#define snprintf rust_sqlite_wasm_snprintf
+#define vsnprintf rust_sqlite_wasm_vsnprintf
+#define vsprintf rust_sqlite_wasm_vsprintf
 #define rename rust_sqlite_wasm_rename
 #define atexit rust_sqlite_wasm_atexit
 
