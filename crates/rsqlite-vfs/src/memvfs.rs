@@ -1,6 +1,7 @@
 //! A platform-independent, single-threaded in-memory VFS.
 //!
-//! Call [`install`] before use; select `memvfs` by name or install as default.
+//! Call [`install_unchecked`], or `install` on Wasm without `atomics`, then
+//! select `memvfs` by name or install it as default.
 //! Files are volatile and limited by address space and memory. Stay on the
 //! installing thread and use one connection per database: locks are no-ops,
 //! and repeated opens share data without enforcing this restriction.
@@ -280,6 +281,37 @@ pub enum MemVfsError {
     Transfer(#[from] TransferError),
 }
 
+/// Errors from `MemVfsContext::try_new`.
+#[cfg(all(target_family = "wasm", not(target_feature = "atomics")))]
+#[derive(thiserror::Error, Debug)]
+#[non_exhaustive]
+pub enum MemVfsContextError {
+    #[error("SQLite initialization failed ({0})")]
+    Sqlite(i32),
+}
+
+/// Proof that SQLite is initialized in a module with one thread, required by the safe memvfs calls.
+#[cfg(all(target_family = "wasm", not(target_feature = "atomics")))]
+#[derive(Clone, Debug)]
+pub struct MemVfsContext(());
+
+#[cfg(all(target_family = "wasm", not(target_feature = "atomics")))]
+impl MemVfsContext {
+    /// Initializes SQLite.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MemVfsContextError::Sqlite` when SQLite fails to initialize.
+    pub fn try_new() -> Result<Self, MemVfsContextError> {
+        // SAFETY: the module has one thread, so initialization cannot race.
+        let code = unsafe { bindings::sqlite3_initialize() };
+        if code != bindings::SQLITE_OK {
+            return Err(MemVfsContextError::Sqlite(code));
+        }
+        Ok(Self(()))
+    }
+}
+
 /// A management handle that keeps memory files alive after VFS uninstallation.
 ///
 /// After reinstallation, obtain a new handle to access the new VFS instance.
@@ -294,13 +326,21 @@ impl MemVfsUtil {
     ///
     /// Call on the installing thread, with serialized access to SQLite VFS
     /// registration. All SQLite use of memvfs must stay on that same thread.
-    pub unsafe fn get() -> Result<Self> {
+    pub unsafe fn get_unchecked() -> Result<Self> {
         let vfs = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
         if vfs.is_null() {
             return Err(MemVfsError::NotInstalled);
         }
         check_owned(vfs)?;
         Ok(Self(VfsAppData::<MemAppData>::get(vfs).data.clone()))
+    }
+
+    /// Gets the installed memory VFS without registering it or changing the
+    /// default VFS.
+    #[cfg(all(target_family = "wasm", not(target_feature = "atomics")))]
+    pub fn get(_context: &MemVfsContext) -> Result<Self> {
+        // SAFETY: the module has one thread, and only unsafe teardown frees the registration.
+        unsafe { Self::get_unchecked() }
     }
 }
 
@@ -425,7 +465,7 @@ impl ExportSource for MemExportSource {
 /// management, file access and uninstallation must stay on one thread.
 /// Raw unregistration is allowed; never free or replace owned VFS/app data
 /// through raw pointers. Use [`uninstall`] for cleanup.
-pub unsafe fn install(
+pub unsafe fn install_unchecked(
     os: impl OsCallback + 'static,
     default_vfs: bool,
 ) -> Result<MemVfsUtil, RegisterVfsError> {
@@ -468,6 +508,17 @@ pub unsafe fn install(
     Ok(MemVfsUtil(VfsAppData::<MemAppData>::get(vfs).data.clone()))
 }
 
+/// Installs memvfs like [`install_unchecked`].
+#[cfg(all(target_family = "wasm", not(target_feature = "atomics")))]
+pub fn install(
+    _context: &MemVfsContext,
+    os: impl OsCallback + 'static,
+    default_vfs: bool,
+) -> Result<MemVfsUtil, RegisterVfsError> {
+    // SAFETY: the module has one thread, and only unsafe teardown frees the registration.
+    unsafe { install_unchecked(os, default_vfs) }
+}
+
 fn check_owned(vfs: *mut bindings::sqlite3_vfs) -> Result<(), RegisterVfsError> {
     if vfs != MEM_VFS.load(Ordering::Relaxed) {
         return Err(RegisterVfsError::NameConflict("memvfs".into()));
@@ -482,9 +533,9 @@ fn check_owned(vfs: *mut bindings::sqlite3_vfs) -> Result<(), RegisterVfsError> 
 /// # Safety
 ///
 /// Use a valid SQLite context on the installing thread; serialize with VFS
-/// installation/uninstallation. Close all files and retire VFS/app-data
-/// references (`MemVfsUtil` may outlive uninstall). Owned allocations must
-/// not have been freed or replaced through raw pointers.
+/// lookup, installation and uninstallation, safe or unchecked. Close all files
+/// and retire VFS/app-data references (`MemVfsUtil` may outlive uninstall).
+/// Owned allocations must not have been freed or replaced through raw pointers.
 pub unsafe fn uninstall() -> Result<(), RegisterVfsError> {
     let registered = bindings::sqlite3_vfs_find(VFS_NAME.as_ptr());
     let vfs = MEM_VFS.load(Ordering::Relaxed);

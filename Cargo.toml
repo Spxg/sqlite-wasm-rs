@@ -51,6 +51,10 @@ required-features = ["wasm-bindgen", "sqlite3mc"]
 name = "sqlcipher"
 required-features = ["wasm-bindgen", "sqlcipher"]
 
+[[test]]
+name = "memvfs_safe"
+required-features = ["wasm-bindgen"]
+
 [package.metadata.docs.rs]
 targets = ["wasm32-unknown-unknown"]
 
