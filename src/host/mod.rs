@@ -11,8 +11,12 @@
 //!   cryptographically secure randomness or fails; returns a status code.
 //! - `rust_sqlite_wasm_host_localtime`: converts Unix seconds to the host's local
 //!   time zone, writes [`LocalTime`] to `out`, and returns a status code.
+//! - `rust_sqlite_wasm_host_can_block`: needed only for `threadsafe` with the `atomics` target
+//!   feature, returns nonzero if the calling thread may wait on the module's memory, which
+//!   requires that memory to be shared.
 //!
 //! Status codes are [`OK`] on success or an [`Error`] discriminant on failure.
+//! With `threadsafe`, workers sharing the module may call any hook concurrently.
 
 use core::fmt;
 use core::time::Duration;
@@ -97,7 +101,16 @@ mod ffi {
         pub fn fill_entropy(buf: *mut u8, len: usize) -> i32;
         #[link_name = "rust_sqlite_wasm_host_localtime"]
         pub fn localtime(unix_seconds: i64, out: *mut LocalTime) -> i32;
+        #[cfg(all(feature = "threadsafe", target_feature = "atomics"))]
+        #[link_name = "rust_sqlite_wasm_host_can_block"]
+        pub fn can_block() -> i32;
     }
+}
+
+#[cfg(all(feature = "threadsafe", target_feature = "atomics"))]
+pub(crate) fn can_block() -> bool {
+    // SAFETY: the hook takes no arguments and only inspects the calling thread and the module's memory.
+    unsafe { ffi::can_block() != 0 }
 }
 
 fn check_status(status: i32) -> Result<()> {
