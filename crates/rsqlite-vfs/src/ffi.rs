@@ -765,3 +765,8 @@ extern "C" {
 
     pub fn sqlite3_uri_int64(filename: *const ::core::ffi::c_char, key: *const ::core::ffi::c_char, default: i64) -> i64;
 }
+
+#[cfg(all(target_family = "wasm", not(target_feature = "atomics")))]
+extern "C" {
+    pub fn sqlite3_initialize() -> ::core::ffi::c_int;
+}
