@@ -1,6 +1,28 @@
 # `sqlite-wasm-rs` Change Log
 --------------------------------------------------------------------------------
 
+## [0.6.3](https://github.com/Spxg/sqlite-wasm-rs/compare/0.6.2...0.6.3)
+
+### Changed
+
+* Update SQLite to 3.54.1.
+  [#214](https://github.com/Spxg/sqlite-wasm-rs/pull/214)
+
+* Update SQLite3MC to 2.6.1 through `sqlite3mc-src` 206.1.0.
+  [#213](https://github.com/Spxg/sqlite-wasm-rs/pull/213)
+
+* Update SQLCipher to 4.20.0 through `sqlcipher-src` 420.0.0.
+  [#212](https://github.com/Spxg/sqlite-wasm-rs/pull/212)
+
+### Fixed
+
+* Fix invalid Wasm modules and unresolved `putchar_` references when linking
+  alongside another libc by giving the shim's musl internals and printf functions
+  private symbol names.
+  [#218](https://github.com/Spxg/sqlite-wasm-rs/pull/218)
+
+--------------------------------------------------------------------------------
+
 ## [0.6.2](https://github.com/Spxg/sqlite-wasm-rs/compare/0.6.1...0.6.2)
 
 ### Added
