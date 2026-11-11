@@ -86,7 +86,7 @@ fn create(name: &CStr) {
 }
 
 fn remove(name: &CStr) {
-    unsafe { MemVfsUtil::get().unwrap() }
+    unsafe { MemVfsUtil::get_unchecked().unwrap() }
         .remove(name.to_str().unwrap())
         .unwrap();
 }
@@ -95,7 +95,7 @@ fn remove(name: &CStr) {
 fn test_encrypt_decrypt() {
     create(c"encrypted.db");
 
-    let bytes = unsafe { MemVfsUtil::get().unwrap() }
+    let bytes = unsafe { MemVfsUtil::get_unchecked().unwrap() }
         .export_db("encrypted.db")
         .unwrap();
     assert!(!bytes.windows(16).any(|w| w == b"SQLite format 3\0"));
