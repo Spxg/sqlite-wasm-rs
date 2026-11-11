@@ -87,7 +87,7 @@ fn test_cipher(cipher: &str) {
     drop(db);
 
     // Remove the test fixture after every connection has closed.
-    unsafe { vfs::memvfs::MemVfsUtil::get().unwrap() }
+    unsafe { vfs::memvfs::MemVfsUtil::get_unchecked().unwrap() }
         .remove(name.to_str().unwrap())
         .unwrap();
 }
