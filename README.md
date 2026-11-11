@@ -2,6 +2,8 @@
 
 `wasm32-unknown-unknown` bindings to the libsqlite3 library.
 
+Playground: [sqlight.dev](https://sqlight.dev).
+
 ## Usage
 
 ```toml
