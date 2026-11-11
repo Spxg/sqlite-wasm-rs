@@ -1,8 +1,6 @@
 [![Crates.io](https://img.shields.io/crates/v/sqlite-wasm-rs.svg)](https://crates.io/crates/sqlite-wasm-rs)
 
-`wasm32-unknown-unknown` bindings to the libsqlite3 library.
-
-Playground: [sqlight.dev](https://sqlight.dev).
+`wasm32-unknown-unknown` bindings to the libsqlite3 library. Try it in the [playground](https://sqlight.dev).
 
 ## Usage
 
