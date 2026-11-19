@@ -1726,6 +1726,14 @@ impl OpfsSAHPoolUtil {
         self.pool.state.get() == PoolState::Removed
     }
 
+    /// Returns the latest diagnostic this pool reported to SQLite, if any.
+    ///
+    /// This is the error behind `xGetLastError`, shared by all connections using
+    /// the pool. Reading does not consume it, and later successes do not clear it.
+    pub fn last_error(&self) -> Option<VfsError> {
+        self.pool.last_error.borrow().clone()
+    }
+
     /// Unregisters and frees the VFS, releases handles, and permits reinstall.
     ///
     /// Persistent files are not deleted. Already uninstalled is a no-op.

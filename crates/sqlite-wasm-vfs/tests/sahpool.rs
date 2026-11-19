@@ -1,7 +1,7 @@
 use js_sys::futures::JsFuture;
 use rsqlite_vfs::{
     transfer::{DbTransfer, TransferError},
-    VfsFilesManager,
+    VfsErrorCode, VfsFilesManager,
 };
 use sqlite_wasm_rs::*;
 use sqlite_wasm_vfs::sahpool::{install, OpfsSAHError, OpfsSAHPoolCfgBuilder, OpfsSAHPoolUtil};
@@ -478,6 +478,40 @@ async fn test_opfs_write_failure() {
     assert_eq!(db.scalar(c"SELECT sum(n) FROM t;"), 42);
     db.exec(c"INSERT INTO t VALUES(43);");
     assert_eq!(db.scalar(c"SELECT sum(n) FROM t;"), 85);
+    drop(db);
+
+    unsafe { util.uninstall().unwrap() };
+}
+
+#[wasm_bindgen_test]
+async fn test_last_error() {
+    let util = pool("last-error", 1).await;
+    assert!(util.last_error().is_none());
+
+    let fault = Restore(fail_next("write", 1, "UnknownError"));
+    assert_eq!(
+        Db::try_open("last-error", "first.db").err(),
+        Some(SQLITE_CANTOPEN)
+    );
+    drop(fault);
+    let error = util.last_error().unwrap();
+    assert_eq!(error.code(), VfsErrorCode::CantOpen);
+    assert_eq!(
+        error.message(),
+        "write file: UnknownError: injected OPFS failure"
+    );
+
+    let db = Db::open("last-error", "first.db");
+    assert_eq!(
+        Db::try_open("last-error", "second.db").err(),
+        Some(SQLITE_CANTOPEN)
+    );
+    for _ in 0..2 {
+        let error = util.last_error().unwrap();
+        assert_eq!(error.code(), VfsErrorCode::CantOpen);
+        assert_eq!(error.message(), OpfsSAHError::NoCapacity.to_string());
+        assert_eq!(error.system_error(), None);
+    }
     drop(db);
 
     unsafe { util.uninstall().unwrap() };
