@@ -81,6 +81,7 @@ cargo +nightly build --target wasm32-unknown-unknown -Z build-std=panic_abort,st
 * Browsers need `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` on the page to share memory with workers.
 * Make the first SQLite call on one thread before other workers use SQLite.
 * The browser main thread never waits, so mutexes spin there and `sqlite3_sleep` returns at once.
+* `host::memvfs_util` serves every worker while SQLite uses these mutexes, and refuses after `SQLITE_CONFIG_SINGLETHREAD`.
 * An OPFS `sahpool` works only from the worker that installed it.
 * A worker terminated inside a SQLite call leaves its mutexes locked.
 

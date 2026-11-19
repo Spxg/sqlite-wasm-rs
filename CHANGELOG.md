@@ -7,6 +7,8 @@
 
 * Concurrent memvfs installations with `threadsafe` serialize registration and keep rejected callback destruction outside the registration lock.
 
+* `host::memvfs_util` accepts shared memory with `threadsafe` and `atomics` while SQLite uses its mutexes.
+
 --------------------------------------------------------------------------------
 
 ## [0.6.3](https://github.com/Spxg/sqlite-wasm-rs/compare/0.6.2...0.6.3)

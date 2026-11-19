@@ -29,7 +29,7 @@ mod safe {
     use wasm_bindgen_test::wasm_bindgen_test;
 
     // The shared-memory CI job builds on nightly, where `cfg` sees `atomics`.
-    #[cfg(not(target_feature = "atomics"))]
+    #[cfg(any(not(target_feature = "atomics"), feature = "threadsafe"))]
     #[wasm_bindgen_test]
     fn manages_files_created_by_a_connection() {
         use sqlite_wasm_rs::vfs::VfsFilesManager;
@@ -43,7 +43,7 @@ mod safe {
         assert!(util.names().unwrap().is_empty());
     }
 
-    #[cfg(target_feature = "atomics")]
+    #[cfg(all(target_feature = "atomics", not(feature = "threadsafe")))]
     #[wasm_bindgen_test]
     fn refuses_shared_memory() {
         super::create_with_connection(c"a.db");

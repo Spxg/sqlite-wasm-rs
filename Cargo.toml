@@ -76,6 +76,14 @@ name = "threadsafe_fallback"
 required-features = ["wasm-bindgen", "threadsafe"]
 
 [[test]]
+name = "threadsafe_memvfs_util"
+required-features = ["wasm-bindgen", "threadsafe"]
+
+[[test]]
+name = "threadsafe_memvfs_util_single_thread"
+required-features = ["wasm-bindgen", "threadsafe"]
+
+[[test]]
 name = "threadsafe_sqlcipher"
 required-features = ["wasm-bindgen", "threadsafe", "sqlcipher"]
 

@@ -13,7 +13,7 @@ use wasm_bindgen::{JsCast, JsValue};
 /// Errors from [`memvfs_util`].
 #[derive(Debug)]
 pub enum MemVfsUtilError {
-    /// The module's memory is shared, so another thread may use memvfs.
+    /// The module's memory is shared, and SQLite here has no mutexes that serialize threads.
     SharedMemory,
     /// memvfs is not installed, or another VFS is registered under its name.
     MemVfs(MemVfsError),
@@ -22,7 +22,9 @@ pub enum MemVfsUtilError {
 impl fmt::Display for MemVfsUtilError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::SharedMemory => f.write_str("module memory is shared between threads"),
+            Self::SharedMemory => {
+                f.write_str("module memory is shared between threads without SQLite mutexes")
+            }
             Self::MemVfs(error) => error.fmt(f),
         }
     }
@@ -40,20 +42,43 @@ impl core::error::Error for MemVfsUtilError {
 /// Returns a handle to the installed memvfs without `unsafe`.
 ///
 /// Refuses when the module's memory is a `SharedArrayBuffer`, the only case in
-/// which another thread can reach this module's SQLite.
+/// which another thread can reach this module's SQLite, unless `threadsafe` with
+/// `cfg(target_feature = "atomics")` provides SQLite mutexes that SQLite still uses.
 ///
 /// # Errors
 ///
-/// Returns [`MemVfsUtilError::SharedMemory`] for a shared memory, and
-/// [`MemVfsUtilError::MemVfs`] when memvfs is not installed.
+/// Returns [`MemVfsUtilError::SharedMemory`] for a shared memory without those
+/// mutexes, and [`MemVfsUtilError::MemVfs`] when memvfs is not installed.
 pub fn memvfs_util() -> core::result::Result<MemVfsUtil, MemVfsUtilError> {
-    if module_memory_is_shared() {
+    if module_memory_is_shared() && !sqlite_mutexes_serialize_threads() {
         return Err(MemVfsUtilError::SharedMemory);
     }
-    // SAFETY: Only a shared memory can be posted to another agent, so this
-    // module and its SQLite run on this one thread. That serializes VFS
-    // registration and keeps all memvfs use on the installing thread.
+    // SAFETY: Unshared memory keeps this module and its SQLite on this one thread,
+    // and shared memory passes only with SQLite mutexes that exclude across threads.
     unsafe { MemVfsUtil::get() }.map_err(MemVfsUtilError::MemVfs)
+}
+
+#[cfg(all(feature = "threadsafe", target_feature = "atomics"))]
+fn sqlite_mutexes_serialize_threads() -> bool {
+    use crate::bindings::{
+        sqlite3_mutex_alloc, sqlite3_threadsafe, SQLITE_MUTEX_STATIC_APP1, SQLITE_MUTEX_STATIC_APP2,
+    };
+    // SAFETY: `sqlite3_threadsafe` reads a build constant, and static allocation runs only
+    // `sqlite3MutexInit`, the first step of `sqlite3_initialize`, which SQLite documents as threadsafe.
+    let (threadsafe, first, second) = unsafe {
+        (
+            sqlite3_threadsafe(),
+            sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_APP1),
+            sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_APP2),
+        )
+    };
+    // The no-op mutexes of `SQLITE_CONFIG_SINGLETHREAD` share one dummy pointer.
+    threadsafe != 0 && !first.is_null() && !second.is_null() && first != second
+}
+
+#[cfg(not(all(feature = "threadsafe", target_feature = "atomics")))]
+fn sqlite_mutexes_serialize_threads() -> bool {
+    false
 }
 
 fn module_memory_is_shared() -> bool {
