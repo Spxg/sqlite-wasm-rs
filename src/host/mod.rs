@@ -20,6 +20,8 @@ use rsqlite_vfs::{OsCallback, VfsError, VfsErrorCode, VfsResult};
 
 #[cfg(feature = "wasm-bindgen")]
 mod wasm_bindgen;
+#[cfg(feature = "wasm-bindgen")]
+pub use wasm_bindgen::{memvfs_util, MemVfsUtilError};
 
 /// Successful completion of a fallible C ABI host hook.
 pub const OK: i32 = 0;

@@ -1,10 +1,64 @@
-//! `wasm-bindgen` implementation of the C ABI host hooks.
+//! `wasm-bindgen` implementation of the C ABI host hooks, and safe memvfs access.
 
 use super::{Error, LocalTime, Result, OK};
+use core::fmt;
 use core::time::Duration;
-use js_sys::{Array, Atomics, Date, Function, Int32Array, Math, Number, Reflect, WebAssembly};
+use js_sys::{
+    Array, ArrayBuffer, Atomics, Date, Function, Int32Array, Math, Number, Reflect, WebAssembly,
+};
+use rsqlite_vfs::memvfs::{MemVfsError, MemVfsUtil};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::{JsCast, JsValue};
+
+/// Errors from [`memvfs_util`].
+#[derive(Debug)]
+pub enum MemVfsUtilError {
+    /// The module's memory is shared, so another thread may use memvfs.
+    SharedMemory,
+    /// memvfs is not installed, or another VFS is registered under its name.
+    MemVfs(MemVfsError),
+}
+
+impl fmt::Display for MemVfsUtilError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SharedMemory => f.write_str("module memory is shared between threads"),
+            Self::MemVfs(error) => error.fmt(f),
+        }
+    }
+}
+
+impl core::error::Error for MemVfsUtilError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::SharedMemory => None,
+            Self::MemVfs(error) => Some(error),
+        }
+    }
+}
+
+/// Returns a handle to the installed memvfs without `unsafe`.
+///
+/// Refuses when the module's memory is a `SharedArrayBuffer`, the only case in
+/// which another thread can reach this module's SQLite.
+///
+/// # Errors
+///
+/// Returns [`MemVfsUtilError::SharedMemory`] for a shared memory, and
+/// [`MemVfsUtilError::MemVfs`] when memvfs is not installed.
+pub fn memvfs_util() -> core::result::Result<MemVfsUtil, MemVfsUtilError> {
+    let memory = ::wasm_bindgen::memory().unchecked_into::<WebAssembly::Memory>();
+    // A `SharedArrayBuffer` is no `ArrayBuffer` instance. Testing for
+    // `ArrayBuffer` needs no `SharedArrayBuffer` global, which browsers omit
+    // without cross-origin isolation.
+    if !memory.buffer().is_instance_of::<ArrayBuffer>() {
+        return Err(MemVfsUtilError::SharedMemory);
+    }
+    // SAFETY: Only a shared memory can be posted to another agent, so this
+    // module and its SQLite run on this one thread. That serializes VFS
+    // registration and keeps all memvfs use on the installing thread.
+    unsafe { MemVfsUtil::get() }.map_err(MemVfsUtilError::MemVfs)
+}
 
 /// Sleeps synchronously using JavaScript `Atomics.wait` on a private shared buffer.
 ///
