@@ -174,10 +174,9 @@ impl VfsFile for MemChunksFile {
             let mut remaining_idx = offset % chunk_size;
             let mut offset = 0;
 
-            for idx in chunk_start_idx..=chunk_end_idx {
+            for chunk in &mut self.chunks[chunk_start_idx..=chunk_end_idx] {
                 let n = core::cmp::min(chunk_size - remaining_idx, size);
-                self.chunks[idx][remaining_idx..remaining_idx + n]
-                    .copy_from_slice(&buf[offset..offset + n]);
+                chunk[remaining_idx..remaining_idx + n].copy_from_slice(&buf[offset..offset + n]);
                 offset += n;
                 size -= n;
                 remaining_idx = 0;
