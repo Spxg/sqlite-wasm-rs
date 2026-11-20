@@ -64,9 +64,26 @@ cargo run -p rsqlite-vfs --example implement-a-vfs
 
 ## About multithreading
 
-Multithreading is not supported, SQLite is compiled with `-DSQLITE_THREADSAFE=0`.
+By default every SQLite call must stay on one thread.
 
 For shared-memory builds, set `CFLAGS_wasm32_unknown_unknown="-matomics -mbulk-memory"`.
+
+The `threadsafe` feature lets workers that share one module and its memory use SQLite concurrently. It needs a nightly shared-memory build:
+
+```sh
+CFLAGS_wasm32_unknown_unknown="-matomics -mbulk-memory" \
+RUSTFLAGS="-Ctarget-feature=+atomics -Clink-args=--shared-memory -Clink-args=--import-memory \
+  -Clink-args=--max-memory=1073741824 -Clink-args=--export=__wasm_init_tls -Clink-args=--export=__tls_size \
+  -Clink-args=--export=__tls_align -Clink-args=--export=__tls_base -Clink-args=--export=__heap_base" \
+cargo +nightly build --target wasm32-unknown-unknown -Z build-std=panic_abort,std --features wasm-bindgen,threadsafe
+```
+
+* Browsers need `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` on the page to share memory with workers.
+* Make the first SQLite call on one thread before other workers use SQLite.
+* The browser main thread never waits, so mutexes spin there and `sqlite3_sleep` returns at once.
+* Files of the memory VFS must all be opened and used on one worker. `:memory:` databases do not use them.
+* An OPFS `sahpool` works only from the worker that installed it.
+* A worker terminated inside a SQLite call leaves its mutexes locked.
 
 ## Use without wasm-bindgen
 
