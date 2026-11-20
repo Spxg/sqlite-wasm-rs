@@ -1,10 +1,68 @@
-//! `wasm-bindgen` implementation of the C ABI host hooks.
+//! `wasm-bindgen` implementation of the C ABI host hooks, and safe memvfs access.
 
 use super::{Error, LocalTime, Result, OK};
+use core::fmt;
 use core::time::Duration;
-use js_sys::{Array, Atomics, Date, Function, Int32Array, Math, Number, Reflect, WebAssembly};
+use js_sys::{
+    Array, ArrayBuffer, Atomics, Date, Function, Int32Array, Math, Number, Reflect, WebAssembly,
+};
+use rsqlite_vfs::memvfs::{MemVfsError, MemVfsUtil};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::{JsCast, JsValue};
+
+/// Errors from [`memvfs_util`].
+#[derive(Debug)]
+pub enum MemVfsUtilError {
+    /// The module's memory is shared, so another thread may use memvfs.
+    SharedMemory,
+    /// memvfs is not installed, or another VFS is registered under its name.
+    MemVfs(MemVfsError),
+}
+
+impl fmt::Display for MemVfsUtilError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SharedMemory => f.write_str("module memory is shared between threads"),
+            Self::MemVfs(error) => error.fmt(f),
+        }
+    }
+}
+
+impl core::error::Error for MemVfsUtilError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::SharedMemory => None,
+            Self::MemVfs(error) => Some(error),
+        }
+    }
+}
+
+/// Returns a handle to the installed memvfs without `unsafe`.
+///
+/// Refuses when the module's memory is a `SharedArrayBuffer`, the only case in
+/// which another thread can reach this module's SQLite.
+///
+/// # Errors
+///
+/// Returns [`MemVfsUtilError::SharedMemory`] for a shared memory, and
+/// [`MemVfsUtilError::MemVfs`] when memvfs is not installed.
+pub fn memvfs_util() -> core::result::Result<MemVfsUtil, MemVfsUtilError> {
+    if module_memory_is_shared() {
+        return Err(MemVfsUtilError::SharedMemory);
+    }
+    // SAFETY: Only a shared memory can be posted to another agent, so this
+    // module and its SQLite run on this one thread. That serializes VFS
+    // registration and keeps all memvfs use on the installing thread.
+    unsafe { MemVfsUtil::get() }.map_err(MemVfsUtilError::MemVfs)
+}
+
+fn module_memory_is_shared() -> bool {
+    let memory = ::wasm_bindgen::memory().unchecked_into::<WebAssembly::Memory>();
+    // A `SharedArrayBuffer` is no `ArrayBuffer` instance. Testing for
+    // `ArrayBuffer` needs no `SharedArrayBuffer` global, which browsers omit
+    // without cross-origin isolation.
+    !memory.buffer().is_instance_of::<ArrayBuffer>()
+}
 
 /// Sleeps synchronously using JavaScript `Atomics.wait` on a private shared buffer.
 ///
@@ -19,31 +77,46 @@ pub extern "C" fn sleep(seconds: u64, nanoseconds: u32) {
     }
 
     // Fall back to a no-op if lookup, construction, or waiting fails.
-    let wait = || -> core::result::Result<(), JsValue> {
-        // Prefer the global SharedArrayBuffer constructor.
-        let constructor = Reflect::get(&js_sys::global(), &JsValue::from_str("SharedArrayBuffer"))
-            .and_then(|value| value.dyn_into::<Function>())
-            .or_else(|_| {
-                // If unavailable, obtain the constructor from the module's buffer.
-                // <https://html.spec.whatwg.org/multipage/webappapis.html#creating-a-new-javascript-realm>
-                //
-                // Unshared memory yields an ArrayBuffer constructor; Atomics.wait
-                // will then return Err, leaving sleep as a no-op.
-                let memory = wasm_bindgen::memory().unchecked_into::<WebAssembly::Memory>();
+    let milliseconds = duration.as_secs_f64() * 1000.0;
+    let _ = shared_word().and_then(|word| Atomics::wait_with_timeout(&word, 0, 0, milliseconds));
+}
 
-                Reflect::get(&memory.buffer(), &JsValue::from_str("constructor"))?
-                    .dyn_into::<Function>()
-            })?;
+/// Reports whether this thread may wait on the module's memory, for the mutexes of the `threadsafe` feature.
+#[cfg(all(feature = "threadsafe", target_feature = "atomics"))]
+#[export_name = "rust_sqlite_wasm_host_can_block"]
+pub extern "C" fn can_block() -> i32 {
+    // `Atomics.wait` throws on unshared memory and where the thread may not block, and a zero timeout returns at once.
+    let memory = wasm_bindgen::memory().unchecked_into::<WebAssembly::Memory>();
+    let words = Int32Array::new(&memory.buffer());
+    i32::from(Atomics::wait_with_timeout(&words, 0, 0, 0.0).is_ok())
+}
 
-        let buffer = Reflect::construct(&constructor, &Array::of1(&JsValue::from_f64(4.0)))?;
-        let word = Int32Array::new(&buffer);
+/// Reports whether the module's memory is shared, for the `threadsafe` feature when `cfg` lacks `atomics`.
+#[cfg(all(feature = "threadsafe", not(target_feature = "atomics")))]
+#[export_name = "rust_sqlite_wasm_host_memory_is_shared"]
+pub extern "C" fn memory_is_shared() -> i32 {
+    i32::from(module_memory_is_shared())
+}
 
-        Atomics::wait_with_timeout(&word, 0, 0, duration.as_secs_f64() * 1000.0)?;
+/// A private one-word shared buffer for `Atomics.wait`.
+fn shared_word() -> core::result::Result<Int32Array, JsValue> {
+    // Prefer the global SharedArrayBuffer constructor.
+    let constructor = Reflect::get(&js_sys::global(), &JsValue::from_str("SharedArrayBuffer"))
+        .and_then(|value| value.dyn_into::<Function>())
+        .or_else(|_| {
+            // If unavailable, obtain the constructor from the module's buffer.
+            // <https://html.spec.whatwg.org/multipage/webappapis.html#creating-a-new-javascript-realm>
+            //
+            // Unshared memory yields an ArrayBuffer constructor; Atomics.wait
+            // will then return Err, leaving sleep as a no-op.
+            let memory = wasm_bindgen::memory().unchecked_into::<WebAssembly::Memory>();
 
-        Ok(())
-    };
+            Reflect::get(&memory.buffer(), &JsValue::from_str("constructor"))?
+                .dyn_into::<Function>()
+        })?;
 
-    let _ = wait();
+    let buffer = Reflect::construct(&constructor, &Array::of1(&JsValue::from_f64(4.0)))?;
+    Ok(Int32Array::new(&buffer))
 }
 
 /// Fills a buffer using Web Crypto, falling back to non-cryptographic randomness.

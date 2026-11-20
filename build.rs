@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-// SQLite compile flags tuned for WASM: no threads/dlopen, keep common extensions.
+// SQLite compile flags tuned for WASM: no dlopen, keep common extensions.
 const FULL_FEATURED: &[&str] = &[
     "-DSQLITE_OS_OTHER",
     "-DSQLITE_USE_URI",
@@ -38,6 +38,8 @@ struct Backend {
     header_name: &'static str,
     flags: &'static [&'static str],
     extra_flags: Vec<String>,
+    /// Threading flags when the `threadsafe` feature is off.
+    single_thread: &'static [&'static str],
     compile: Option<fn(cc::Build, &Path)>,
 }
 
@@ -46,9 +48,19 @@ impl Backend {
     fn sqlite_flags(&self) -> impl Iterator<Item = &str> + '_ {
         FULL_FEATURED
             .iter()
+            .chain(self.threading())
+            .chain(self.flags)
             .copied()
-            .chain(self.flags.iter().copied())
             .chain(self.extra_flags.iter().map(String::as_str))
+    }
+
+    fn threading(&self) -> &'static [&'static str] {
+        if cfg!(feature = "threadsafe") {
+            // The mutex comes from src/mutex.rs through shim/threadsafe.h.
+            &["-DSQLITE_THREADSAFE=1"]
+        } else {
+            self.single_thread
+        }
     }
 }
 
@@ -72,11 +84,10 @@ fn backend(extra_flags: Vec<String>) -> Backend {
                 "-DSQLCIPHER_OMIT_LOG_DEVICE=1",
                 "-DSQLCIPHER_OMIT_DEFAULT_LOGGING=1",
                 "-DOMIT_MEMLOCK=1",
-                // SQLCipher requires THREADSAFE=1 or 2, but calls stay single-threaded.
-                "-DSQLITE_THREADSAFE=1",
-                "-DSQLITE_MUTEX_NOOP=1",
             ],
             extra_flags,
+            // SQLCipher requires THREADSAFE=1 or 2, but calls stay single-threaded.
+            single_thread: &["-DSQLITE_THREADSAFE=1", "-DSQLITE_MUTEX_NOOP=1"],
             compile: Some(compile_sqlcipher),
         }
     }
@@ -87,8 +98,9 @@ fn backend(extra_flags: Vec<String>) -> Backend {
             source_dir: sqlite3mc_src::source_dir().to_path_buf(),
             source_name: sqlite3mc_src::SOURCE_FILE,
             header_name: sqlite3mc_src::HEADER_FILE,
-            flags: &["-DSQLITE_THREADSAFE=0", "-D__WASM__", "-DARGON2_NO_THREADS"],
+            flags: &["-D__WASM__", "-DARGON2_NO_THREADS"],
             extra_flags,
+            single_thread: &["-DSQLITE_THREADSAFE=0"],
             compile: None,
         }
     }
@@ -99,8 +111,9 @@ fn backend(extra_flags: Vec<String>) -> Backend {
             source_dir: PathBuf::from("sqlite3"),
             source_name: "sqlite3.c",
             header_name: "sqlite3.h",
-            flags: &["-DSQLITE_THREADSAFE=0"],
+            flags: &[],
             extra_flags,
+            single_thread: &["-DSQLITE_THREADSAFE=0"],
             compile: None,
         }
     }
@@ -369,6 +382,9 @@ fn compile(backend: &Backend, source: &Path, source_dir: &Path) {
         .files(C_SOURCE.map(|s| format!("shim/musl/{s}")))
         .include(source_dir)
         .flags(backend.sqlite_flags());
+
+    #[cfg(feature = "threadsafe")]
+    cc.flag("-include").flag("shim/threadsafe.h");
 
     match backend.compile {
         Some(compile) => compile(cc, source_dir),
